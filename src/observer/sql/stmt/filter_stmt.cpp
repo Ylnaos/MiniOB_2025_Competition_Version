@@ -18,6 +18,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/sys/rc.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
+#include "sql/parser/expression_binder.h"
+#include "sql/expr/expression_iterator.h"
 
 FilterStmt::~FilterStmt()
 {
@@ -78,6 +80,84 @@ RC get_table_and_field(Db *db, Table *default_table, unordered_map<string, Table
   return RC::SUCCESS;
 }
 
+// 辅助函数：递归绑定表达式中的UnboundFieldExpr
+static RC bind_expression_fields(unique_ptr<Expression> &expr, Db *db, Table *default_table,
+                                 unordered_map<string, Table *> *tables)
+{
+  if (!expr) {
+    return RC::SUCCESS;
+  }
+
+  RC rc = RC::SUCCESS;
+
+  // 如果是UnboundFieldExpr，将其转换为FieldExpr
+  if (expr->type() == ExprType::UNBOUND_FIELD) {
+    auto* unbound_expr = static_cast<UnboundFieldExpr*>(expr.get());
+
+    const char *table_name = unbound_expr->table_name();
+    const char *field_name = unbound_expr->field_name();
+
+    Table *table = nullptr;
+    if (table_name && strlen(table_name) > 0) {
+      if (tables) {
+        auto iter = tables->find(table_name);
+        if (iter != tables->end()) {
+          table = iter->second;
+        }
+      }
+      if (!table) {
+        table = db->find_table(table_name);
+      }
+    } else {
+      table = default_table;
+    }
+
+    if (!table) {
+      LOG_WARN("table not found: %s", table_name ? table_name : "<default>");
+      return RC::SCHEMA_TABLE_NOT_EXIST;
+    }
+
+    const FieldMeta *field_meta = table->table_meta().field(field_name);
+    if (!field_meta) {
+      LOG_WARN("field not found: %s.%s", table->name(), field_name);
+      return RC::SCHEMA_FIELD_MISSING;
+    }
+
+    Field field(table, field_meta);
+    auto field_expr = make_unique<FieldExpr>(field);
+    field_expr->set_name(expr->name());
+    expr = std::move(field_expr);
+  }
+  // 如果是算术表达式，递归处理子表达式
+  else if (expr->type() == ExprType::ARITHMETIC) {
+    auto* arith_expr = static_cast<ArithmeticExpr*>(expr.get());
+    rc = bind_expression_fields(arith_expr->left(), db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    if (arith_expr->right()) {
+      rc = bind_expression_fields(arith_expr->right(), db, default_table, tables);
+      if (rc != RC::SUCCESS) {
+        return rc;
+      }
+    }
+  }
+  // 如果是比较表达式，递归处理子表达式
+  else if (expr->type() == ExprType::COMPARISON) {
+    auto* comp_expr = static_cast<ComparisonExpr*>(expr.get());
+    rc = bind_expression_fields(comp_expr->left(), db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    rc = bind_expression_fields(comp_expr->right(), db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+  }
+
+  return RC::SUCCESS;
+}
+
 RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
     const ConditionSqlNode &condition, FilterUnit *&filter_unit)
 {
@@ -102,30 +182,16 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
 
   // 处理左侧操作数
   if (condition.left_is_attr == -1 && condition.left_expr) {
-    // 使用表达式
-    // 如果表达式是UnboundFieldExpr，将其转换为Field
-    if (condition.left_expr->type() == ExprType::UNBOUND_FIELD) {
-      auto* unbound_expr = static_cast<UnboundFieldExpr*>(condition.left_expr.get());
-      RelAttrSqlNode attr;
-      attr.relation_name = unbound_expr->table_name();
-      attr.attribute_name = unbound_expr->field_name();
-
-      Table           *table = nullptr;
-      const FieldMeta *field = nullptr;
-      rc = get_table_and_field(db, default_table, tables, attr, table, field);
-      if (rc != RC::SUCCESS) {
-        LOG_WARN("cannot find attr from UnboundFieldExpr: %s.%s",
-                 attr.relation_name.c_str(), attr.attribute_name.c_str());
-        return rc;
-      }
-      FilterObj filter_obj;
-      filter_obj.init_attr(Field(table, field));
-      filter_unit->set_left(std::move(filter_obj));
-    } else {
-      FilterObj filter_obj;
-      filter_obj.init_expr(std::move(const_cast<ConditionSqlNode&>(condition).left_expr));
-      filter_unit->set_left(std::move(filter_obj));
+    // 使用表达式，需要递归绑定其中的UnboundFieldExpr
+    auto expr_copy = condition.left_expr->copy();
+    rc = bind_expression_fields(expr_copy, db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to bind expression fields in left expression");
+      return rc;
     }
+    FilterObj filter_obj;
+    filter_obj.init_expr(std::move(expr_copy));
+    filter_unit->set_left(std::move(filter_obj));
   } else if (condition.left_is_attr == 1) {
     Table           *table = nullptr;
     const FieldMeta *field = nullptr;
@@ -145,30 +211,16 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
 
   // 处理右侧操作数
   if (condition.right_is_attr == -1 && condition.right_expr) {
-    // 使用表达式
-    // 如果表达式是UnboundFieldExpr，将其转换为Field
-    if (condition.right_expr->type() == ExprType::UNBOUND_FIELD) {
-      auto* unbound_expr = static_cast<UnboundFieldExpr*>(condition.right_expr.get());
-      RelAttrSqlNode attr;
-      attr.relation_name = unbound_expr->table_name();
-      attr.attribute_name = unbound_expr->field_name();
-
-      Table           *table = nullptr;
-      const FieldMeta *field = nullptr;
-      rc = get_table_and_field(db, default_table, tables, attr, table, field);
-      if (rc != RC::SUCCESS) {
-        LOG_WARN("cannot find attr from UnboundFieldExpr: %s.%s",
-                 attr.relation_name.c_str(), attr.attribute_name.c_str());
-        return rc;
-      }
-      FilterObj filter_obj;
-      filter_obj.init_attr(Field(table, field));
-      filter_unit->set_right(std::move(filter_obj));
-    } else {
-      FilterObj filter_obj;
-      filter_obj.init_expr(std::move(const_cast<ConditionSqlNode&>(condition).right_expr));
-      filter_unit->set_right(std::move(filter_obj));
+    // 使用表达式，需要递归绑定其中的UnboundFieldExpr
+    auto expr_copy = condition.right_expr->copy();
+    rc = bind_expression_fields(expr_copy, db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to bind expression fields in right expression");
+      return rc;
     }
+    FilterObj filter_obj;
+    filter_obj.init_expr(std::move(expr_copy));
+    filter_unit->set_right(std::move(filter_obj));
   } else if (condition.right_is_attr == 1) {
     Table           *table = nullptr;
     const FieldMeta *field = nullptr;

@@ -69,6 +69,19 @@ RC IntegerType::multiply(const Value &left, const Value &right, Value &result) c
   return RC::SUCCESS;
 }
 
+RC IntegerType::divide(const Value &left, const Value &right, Value &result) const
+{
+  int divisor = right.get_int();
+  if (divisor == 0) {
+    // 除以0时返回NULL
+    result.set_null();
+  } else {
+    // 整数除法
+    result.set_int(left.get_int() / divisor);
+  }
+  return RC::SUCCESS;
+}
+
 RC IntegerType::negative(const Value &val, Value &result) const
 {
   result.set_int(-val.get_int());

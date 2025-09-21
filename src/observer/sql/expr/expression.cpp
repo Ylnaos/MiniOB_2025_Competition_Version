@@ -417,8 +417,7 @@ AttrType ArithmeticExpr::value_type() const
   }
 
   if ((left_->value_type() == AttrType::INTS) &&
-   (right_->value_type() == AttrType::INTS) &&
-      arithmetic_type_ != Type::DIV) {
+   (right_->value_type() == AttrType::INTS)) {
     return AttrType::INTS;
   }
 
@@ -556,11 +555,15 @@ RC ArithmeticExpr::get_value(const Tuple &tuple, Value &value) const
     LOG_WARN("failed to get value of left expression. rc=%s", strrc(rc));
     return rc;
   }
-  rc = right_->get_value(tuple, right_value);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
-    return rc;
+
+  if (right_) {
+    rc = right_->get_value(tuple, right_value);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
+      return rc;
+    }
   }
+
   return calc_value(left_value, right_value, value);
 }
 
@@ -579,11 +582,15 @@ RC ArithmeticExpr::get_column(Chunk &chunk, Column &column)
     LOG_WARN("failed to get column of left expression. rc=%s", strrc(rc));
     return rc;
   }
-  rc = right_->get_column(chunk, right_column);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to get column of right expression. rc=%s", strrc(rc));
-    return rc;
+
+  if (right_) {
+    rc = right_->get_column(chunk, right_column);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to get column of right expression. rc=%s", strrc(rc));
+      return rc;
+    }
   }
+
   return calc_column(left_column, right_column, column);
 }
 
@@ -592,21 +599,29 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
   RC rc = RC::SUCCESS;
 
   const AttrType target_type = value_type();
-  column.init(target_type, left_column.attr_len(), max(left_column.count(), right_column.count()));
-  bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
-  bool right_const = right_column.column_type() == Column::Type::CONSTANT_COLUMN;
-  if (left_const && right_const) {
-    column.set_column_type(Column::Type::CONSTANT_COLUMN);
-    rc = execute_calc<true, true>(left_column, right_column, column, arithmetic_type_, target_type);
-  } else if (left_const && !right_const) {
-    column.set_column_type(Column::Type::NORMAL_COLUMN);
-    rc = execute_calc<true, false>(left_column, right_column, column, arithmetic_type_, target_type);
-  } else if (!left_const && right_const) {
-    column.set_column_type(Column::Type::NORMAL_COLUMN);
-    rc = execute_calc<false, true>(left_column, right_column, column, arithmetic_type_, target_type);
-  } else {
-    column.set_column_type(Column::Type::NORMAL_COLUMN);
+
+  if (arithmetic_type_ == Type::NEGATIVE) {
+    column.init(target_type, left_column.attr_len(), left_column.count());
+    bool left_const = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    column.set_column_type(left_const ? Column::Type::CONSTANT_COLUMN : Column::Type::NORMAL_COLUMN);
     rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
+  } else {
+    column.init(target_type, left_column.attr_len(), max(left_column.count(), right_column.count()));
+    bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    bool right_const = right_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    if (left_const && right_const) {
+      column.set_column_type(Column::Type::CONSTANT_COLUMN);
+      rc = execute_calc<true, true>(left_column, right_column, column, arithmetic_type_, target_type);
+    } else if (left_const && !right_const) {
+      column.set_column_type(Column::Type::NORMAL_COLUMN);
+      rc = execute_calc<true, false>(left_column, right_column, column, arithmetic_type_, target_type);
+    } else if (!left_const && right_const) {
+      column.set_column_type(Column::Type::NORMAL_COLUMN);
+      rc = execute_calc<false, true>(left_column, right_column, column, arithmetic_type_, target_type);
+    } else {
+      column.set_column_type(Column::Type::NORMAL_COLUMN);
+      rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
+    }
   }
   return rc;
 }
