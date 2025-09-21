@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(winpty docker run -it --name miniob-container ubuntu:20.04 /bin/bash)",
+      "Bash(cd:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
