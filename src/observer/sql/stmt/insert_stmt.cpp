@@ -17,16 +17,16 @@ See the Mulan PSL v2 for more details. */
 #include "storage/db/db.h"
 #include "storage/table/table.h"
 
-InsertStmt::InsertStmt(Table *table, const Value *values, int value_amount)
-    : table_(table), values_(values), value_amount_(value_amount)
+InsertStmt::InsertStmt(Table *table, vector<vector<Value>> values_rows)
+    : table_(table), values_rows_(std::move(values_rows))
 {}
 
 RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
 {
   const char *table_name = inserts.relation_name.c_str();
-  if (nullptr == db || nullptr == table_name || inserts.values.empty()) {
-    LOG_WARN("invalid argument. db=%p, table_name=%p, value_num=%d",
-        db, table_name, static_cast<int>(inserts.values.size()));
+  if (nullptr == db || nullptr == table_name || inserts.rows.empty()) {
+    LOG_WARN("invalid argument. db=%p, table_name=%p, row_num=%d",
+        db, table_name, static_cast<int>(inserts.rows.size()));
     return RC::INVALID_ARGUMENT;
   }
 
@@ -37,17 +37,18 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
     return RC::SCHEMA_TABLE_NOT_EXIST;
   }
 
-  // check the fields number
-  const Value     *values     = inserts.values.data();
-  const int        value_num  = static_cast<int>(inserts.values.size());
+  // check the fields number for each row
   const TableMeta &table_meta = table->table_meta();
   const int        field_num  = table_meta.field_num() - table_meta.sys_field_num();
-  if (field_num != value_num) {
-    LOG_WARN("schema mismatch. value num=%d, field num in schema=%d", value_num, field_num);
-    return RC::SCHEMA_FIELD_MISSING;
+  for (size_t i = 0; i < inserts.rows.size(); i++) {
+    const int value_num = static_cast<int>(inserts.rows[i].size());
+    if (field_num != value_num) {
+      LOG_WARN("schema mismatch at row %d. value num=%d, field num in schema=%d", (int)i, value_num, field_num);
+      return RC::SCHEMA_FIELD_MISSING;
+    }
   }
 
   // everything alright
-  stmt = new InsertStmt(table, values, value_num);
+  stmt = new InsertStmt(table, inserts.rows);
   return RC::SUCCESS;
 }
