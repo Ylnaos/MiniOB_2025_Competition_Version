@@ -42,11 +42,30 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     return RC::INTERNAL;
   }
 
-  if (parsed_sql_result.sql_nodes().size() > 1) {
+  // 统计有效(非错误)语句数量，并记录第一条有效语句位置
+  int valid_count = 0;
+  int first_valid_idx = -1;
+  for (int i = 0; i < static_cast<int>(parsed_sql_result.sql_nodes().size()); i++) {
+    auto &node_up = parsed_sql_result.sql_nodes()[i];
+    if (node_up && node_up->flag != SCF_ERROR) {
+      if (first_valid_idx < 0) first_valid_idx = i;
+      ++valid_count;
+    }
+  }
+
+  // 优先取第一条非错误节点；若全是错误节点，仍按原始第一个返回
+  unique_ptr<ParsedSqlNode> sql_node;
+  if (first_valid_idx >= 0) {
+    sql_node = std::move(parsed_sql_result.sql_nodes()[first_valid_idx]);
+  } else {
+    sql_node = std::move(parsed_sql_result.sql_nodes().front());
+  }
+
+  // 如确有多条有效语句，仅处理第一条并提示
+  if (valid_count > 1) {
     LOG_WARN("got multi sql commands but only 1 will be handled");
   }
 
-  unique_ptr<ParsedSqlNode> sql_node = std::move(parsed_sql_result.sql_nodes().front());
   if (sql_node->flag == SCF_ERROR) {
     // set error information to event
     rc = RC::SQL_SYNTAX;

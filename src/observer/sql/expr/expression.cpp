@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "common/type/attr_type.h"
 #include "sql/expr/tuple.h"
+#include "sql/expr/expression_iterator.h"
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -280,14 +281,44 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
   if (left_->type() == ExprType::SUBQUERY || right_->type() == ExprType::SUBQUERY) {
     const bool left_is_subq  = left_->type() == ExprType::SUBQUERY;
     const bool right_is_subq = right_->type() == ExprType::SUBQUERY;
-    if (left_is_subq && right_is_subq) {
-      LOG_WARN("comparison between two subqueries is not supported");
-      return RC::INVALID_ARGUMENT;
-    }
 
     RC rc = RC::SUCCESS;
+
+    // 两侧均为子查询：按标量比较执行
+    if (left_is_subq && right_is_subq) {
+      auto *lsubq = static_cast<SubqueryExpr *>(left_.get());
+      auto *rsubq = static_cast<SubqueryExpr *>(right_.get());
+
+      rc = lsubq->execute_with_context(&tuple);
+      if (OB_FAIL(rc)) return rc;
+      rc = rsubq->execute_with_context(&tuple);
+      if (OB_FAIL(rc)) return rc;
+
+      const auto &lvals = lsubq->results();
+      const auto &rvals = rsubq->results();
+
+      if (lvals.empty() || rvals.empty()) {
+        // 空集合视为不可比较，返回 false（简化的 NULL 比较行为）
+        value.set_boolean(false);
+        return RC::SUCCESS;
+      }
+      if (lvals.size() > 1 || rvals.size() > 1) {
+        LOG_WARN("scalar subquery returned more than one row: L=%zu R=%zu", lvals.size(), rvals.size());
+        sql_debug("scalar subquery returned more than one row: L=%zu R=%zu", lvals.size(), rvals.size());
+        return RC::INVALID_ARGUMENT;
+      }
+
+      bool bool_value = false;
+      rc              = compare_value(lvals[0], rvals[0], bool_value);
+      if (OB_SUCC(rc)) {
+        value.set_boolean(bool_value);
+      }
+      return rc;
+    }
+
+    // 只有一侧为子查询：按原逻辑处理
     SubqueryExpr *subq = static_cast<SubqueryExpr *>(left_is_subq ? left_.get() : right_.get());
-    rc                 = subq->execute_once();
+    rc                 = subq->execute_with_context(&tuple);
     if (OB_FAIL(rc)) {
       return rc;
     }
@@ -318,7 +349,7 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
       return rc;
     }
 
-    // 多行：不允许用于标量比较（题目要求：不能把多行标量子查询当成多个值比较）
+    // 多行：不允许用于标量比较
     LOG_WARN("scalar subquery returned more than one row: %zu", vals.size());
     sql_debug("scalar subquery returned more than one row: %zu", vals.size());
     return RC::INVALID_ARGUMENT;
@@ -853,9 +884,11 @@ RC SubqueryExpr::execute_once() const
     return RC::INTERNAL;
   }
 
-  // 创建 SelectStmt
+  // 创建 SelectStmt（注意：必须对 ParsedSqlNode 做深拷贝，避免在绑定阶段移动/修改原 AST，
+  // 影响后续(可能的)再次执行或相关子查询替换时的深拷贝）。
   Stmt *stmt = nullptr;
-  RC rc = Stmt::create_stmt(db, *subquery_node_, stmt);
+  std::unique_ptr<ParsedSqlNode> sub_node_copy = deep_copy_parsed_node(*subquery_node_);
+  RC rc = Stmt::create_stmt(db, *sub_node_copy, stmt);
   if (rc != RC::SUCCESS) {
     LOG_WARN("failed to create stmt for subquery. rc=%s", strrc(rc));
     return rc;
@@ -977,6 +1010,110 @@ RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
   return RC::SUCCESS;
 }
 
+RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
+{
+  // 无上下文：沿用懒执行 + 缓存
+  if (outer_tuple == nullptr) {
+    return execute_once();
+  }
+
+  if (!subquery_node_ || subquery_node_->flag != SCF_SELECT) {
+    LOG_WARN("subquery node invalid or not select");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 构造带常量替换的新 AST
+  bool did_substitute = false;
+  std::unique_ptr<ParsedSqlNode> copied = deep_copy_parsed_node_with_ctx(*subquery_node_, *outer_tuple, did_substitute);
+  if (!copied) {
+    LOG_WARN("failed to copy subquery node with ctx");
+    return RC::INTERNAL;
+  }
+
+  // 若不存在相关引用，落回一次性缓存路径
+  if (!did_substitute) {
+    return execute_once();
+  }
+
+  // 相关子查询：每次重新执行，不写入 executed_ 缓存
+  Session *session = Session::current_session();
+  if (session == nullptr) {
+    LOG_WARN("no current session to execute subquery");
+    return RC::INTERNAL;
+  }
+  Db *db = session->get_current_db();
+  if (db == nullptr) {
+    LOG_WARN("no current db to execute subquery");
+    return RC::INTERNAL;
+  }
+
+  Stmt *stmt = nullptr;
+  RC rc = Stmt::create_stmt(db, *copied, stmt);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to create stmt for correlated subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+  std::unique_ptr<Stmt> stmt_guard(stmt);
+  auto *select_stmt = dynamic_cast<SelectStmt *>(stmt);
+  if (select_stmt == nullptr) {
+    LOG_WARN("correlated subquery is not select stmt");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  std::unique_ptr<LogicalOperator> logical_oper;
+  LogicalPlanGenerator              logical_gen;
+  rc = logical_gen.create(select_stmt, logical_oper);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create logical plan for correlated subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  std::unique_ptr<PhysicalOperator> physical_oper;
+  PhysicalPlanGenerator             physical_gen;
+  rc = physical_gen.create(*logical_oper, physical_oper, session);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create physical plan for correlated subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  rc = physical_oper->open(session->current_trx());
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to open physical operator for correlated subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  // 清空并收集结果
+  results_.clear();
+  result_type_ = AttrType::UNDEFINED;
+  result_len_  = -1;
+
+  Tuple *tuple = nullptr;
+  while (RC::SUCCESS == (rc = physical_oper->next())) {
+    tuple = physical_oper->current_tuple();
+    if (tuple == nullptr) {
+      rc = RC::INTERNAL;
+      break;
+    }
+    Value v;
+    // 读取首列
+    RC rc2 = tuple->cell_at(0, v);
+    if (rc2 != RC::SUCCESS) {
+      rc = rc2;
+      break;
+    }
+    results_.push_back(v);
+    if (result_type_ == AttrType::UNDEFINED) {
+      result_type_ = v.attr_type();
+      result_len_  = v.length();
+    }
+  }
+  if (rc == RC::RECORD_EOF) {
+    rc = RC::SUCCESS;
+  }
+  physical_oper->close();
+  return rc;
+}
+
 std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node(const ParsedSqlNode &node) const
 {
   auto copied = std::make_unique<ParsedSqlNode>(node.flag);
@@ -1032,6 +1169,156 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node(const ParsedS
   return copied;
 }
 
+std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
+    const ParsedSqlNode &node, const Tuple &outer_tuple, bool &did_substitute) const
+{
+  did_substitute = false;
+  auto copied    = std::make_unique<ParsedSqlNode>(node.flag);
+  if (node.flag != SCF_SELECT) {
+    return copied;
+  }
+  const SelectSqlNode &src = node.selection;
+  SelectSqlNode       &dst = copied->selection;
+
+  // relations
+  dst.relations = src.relations;
+
+  // expressions (SELECT 列表) 原样复制
+  for (const auto &expr_ptr : src.expressions) {
+    if (expr_ptr) {
+      dst.expressions.emplace_back(expr_ptr->copy());
+    }
+  }
+
+  // conditions（WHERE AND 链）递归复制并替换
+  dst.conditions.reserve(src.conditions.size());
+  for (const auto &cond : src.conditions) {
+    ConditionSqlNode new_cond;
+    new_cond.left_is_attr  = cond.left_is_attr;
+    new_cond.right_is_attr = cond.right_is_attr;
+    new_cond.left_value    = cond.left_value;
+    new_cond.right_value   = cond.right_value;
+    new_cond.left_attr     = cond.left_attr;
+    new_cond.right_attr    = cond.right_attr;
+    new_cond.comp          = cond.comp;
+
+    RC rc = RC::SUCCESS;
+    bool sub = false;
+    if (cond.left_expr) {
+      auto left_new = copy_and_substitute_outer_refs(*cond.left_expr, src.relations, outer_tuple, sub, rc);
+      if (!left_new || rc != RC::SUCCESS) return nullptr;
+      new_cond.left_expr.reset(left_new.release());
+      did_substitute = did_substitute || sub;
+    }
+    sub = false;
+    if (cond.right_expr) {
+      auto right_new = copy_and_substitute_outer_refs(*cond.right_expr, src.relations, outer_tuple, sub, rc);
+      if (!right_new || rc != RC::SUCCESS) return nullptr;
+      new_cond.right_expr.reset(right_new.release());
+      did_substitute = did_substitute || sub;
+    }
+    dst.conditions.emplace_back(std::move(new_cond));
+  }
+
+  // group by
+  for (const auto &grp : src.group_by) {
+    if (grp) {
+      dst.group_by.emplace_back(grp->copy());
+    }
+  }
+  // order by
+  for (const auto &ord : src.order_by) {
+    OrderBySqlNode item;
+    item.asc = ord.asc;
+    if (ord.expression) {
+      item.expression.reset(ord.expression->copy().release());
+    }
+    dst.order_by.emplace_back(std::move(item));
+  }
+  return copied;
+}
+
+std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
+    const Expression &expr,
+    const std::vector<std::string> &inner_relations,
+    const Tuple &outer_tuple,
+    bool &did_substitute,
+    RC &rc) const
+{
+  rc             = RC::SUCCESS;
+  did_substitute = false;
+
+  auto is_inner_table = [&](const char *tname) -> bool {
+    if (tname == nullptr || *tname == '\0') return false;
+    for (const auto &r : inner_relations) {
+      if (0 == strcasecmp(r.c_str(), tname)) return true;
+    }
+    return false;
+  };
+
+  if (expr.type() == ExprType::UNBOUND_FIELD) {
+    const auto &u = static_cast<const UnboundFieldExpr &>(expr);
+    const char *t = u.table_name();
+    const char *f = u.field_name();
+    if (t != nullptr && *t != '\0' && !is_inner_table(t)) {
+      // 外层表字段：从 outer_tuple 抽取成常量
+      Value v;
+      RC rc2 = outer_tuple.find_cell(TupleCellSpec(t, f), v);
+      if (rc2 != RC::SUCCESS) {
+        LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", t, f);
+        rc = rc2;
+        return nullptr;
+      }
+      did_substitute = true;
+      auto ve        = std::make_unique<ValueExpr>(v);
+      ve->set_name(string(t) + "." + string(f));
+      return ve;
+    }
+    // 内层表字段保持原样
+    return expr.copy();
+  }
+
+  if (expr.type() == ExprType::SUBQUERY) {
+    // 递归深入子查询，继续对更内层的相关引用做替换
+    const auto &sub_e = static_cast<const SubqueryExpr &>(expr);
+    if (sub_e.subquery_node_ == nullptr) {
+      // 已缓存结果的子查询，直接复制
+      return expr.copy();
+    }
+    bool inner_substituted = false;
+    auto copied_node       = deep_copy_parsed_node_with_ctx(*sub_e.subquery_node_, outer_tuple, inner_substituted);
+    if (!copied_node) {
+      rc = RC::INTERNAL;
+      return nullptr;
+    }
+    if (inner_substituted) {
+      did_substitute = true;
+    }
+    auto new_sub = std::make_unique<SubqueryExpr>(std::move(copied_node));
+    new_sub->set_name(expr.name());
+    return new_sub;
+  }
+
+  // 其它表达式：复制后递归处理子节点
+  auto copied = expr.copy();
+  RC   tmp_rc = ExpressionIterator::iterate_child_expr(*copied, [&](std::unique_ptr<Expression> &child) -> RC {
+    bool sub_flag = false;
+    RC   inner_rc = RC::SUCCESS;
+    auto new_ch   = copy_and_substitute_outer_refs(*child, inner_relations, outer_tuple, sub_flag, inner_rc);
+    if (!new_ch || inner_rc != RC::SUCCESS) {
+      return inner_rc;
+    }
+    if (sub_flag) did_substitute = true;
+    child.reset(new_ch.release());
+    return RC::SUCCESS;
+  });
+  if (tmp_rc != RC::SUCCESS) {
+    rc = tmp_rc;
+    return nullptr;
+  }
+  return copied;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // InExpr
 
@@ -1056,7 +1343,7 @@ RC InExpr::get_value(const Tuple &tuple, Value &value) const
     return RC::INVALID_ARGUMENT;
   }
   auto *subq = static_cast<SubqueryExpr *>(set_expr_.get());
-  rc = subq->execute_once();
+  rc = subq->execute_with_context(&tuple);
   if (OB_FAIL(rc)) {
     return rc;
   }

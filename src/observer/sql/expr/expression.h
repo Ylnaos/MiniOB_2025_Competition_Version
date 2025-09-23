@@ -568,12 +568,27 @@ public:
   // 执行子查询（懒执行，缓存结果），提取首列所有值
   RC execute_once() const;
 
+  // 带外层元组上下文执行子查询；如存在相关引用，每次调用都会重新执行
+  RC execute_with_context(const Tuple *outer_tuple) const;
+
   // 获取缓存的所有结果（首列）
   const std::vector<Value> &results() const { return results_; }
 
 private:
   // 深拷贝 ParsedSqlNode（当前仅支持 SELECT）
   std::unique_ptr<ParsedSqlNode> deep_copy_parsed_node(const ParsedSqlNode &node) const;
+
+  // 深拷贝并在需要时将对外层表的引用替换为常量
+  std::unique_ptr<ParsedSqlNode> deep_copy_parsed_node_with_ctx(
+      const ParsedSqlNode &node, const Tuple &outer_tuple, bool &did_substitute) const;
+
+  // 复制并替换表达式树中对外层表字段的引用
+  std::unique_ptr<Expression> copy_and_substitute_outer_refs(
+      const Expression &expr,
+      const std::vector<std::string> &inner_relations,
+      const Tuple &outer_tuple,
+      bool &did_substitute,
+      RC &rc) const;
 
 private:
   mutable bool                         executed_   = false;

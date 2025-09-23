@@ -98,6 +98,8 @@ Copyright (c) 2021 OceanBase and/or its affiliates.
 Learn more about OceanBase at https://github.com/oceanbase/oceanbase
 Learn more about MiniOB at https://github.com/oceanbase/miniob
 
+提示：请在本客户端中输入 SQL 语句（例如：select * from t;），
+不要直接在 shell 中执行 SQL，否则会被 bash 解析并报错(如: bash: syntax error near `from')。
 )";
 
 int main(int argc, char *argv[])

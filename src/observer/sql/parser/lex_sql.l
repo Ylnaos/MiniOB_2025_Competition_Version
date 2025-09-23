@@ -64,7 +64,7 @@ WHITE_SPACE      [\ \t\b\f]
 DIGIT            [0-9]+
 
 ID               [A-Za-z_]+[A-Za-z0-9_]*
-DOT              \.
+DOT              \. 
 QUOTE            [\'\"]
 %x STR
 
@@ -76,6 +76,9 @@ QUOTE            [\'\"]
 %%
 
 {WHITE_SPACE}                                        // ignore whitespace
+--[^\n]*                                             ; // single-line comment: -- ... (to EOL)
+#[^\n]*                                              ; // single-line comment: # ... (to EOL)
+\/\*([^*]|\*+[^*/])*\*+\/                          ; // multi-line comment: /* ... */
 \n                                                   ;
 
 {DIGIT}+                         yylval->number=atoi(yytext); RETURN_TOKEN(NUMBER);

@@ -23,6 +23,7 @@ See the Mulan PSL v2 for more details. */
 #include "event/session_event.h"
 #include "event/sql_event.h"
 #include "sql/operator/logical_operator.h"
+#include "sql/expr/expression_iterator.h"
 #include "sql/stmt/stmt.h"
 #include "sql/optimizer/cascade/optimizer.h"
 #include "sql/optimizer/optimizer_utils.h"
@@ -89,7 +90,49 @@ RC OptimizeStage::generate_physical_plan(
     unique_ptr<LogicalOperator> &logical_operator, unique_ptr<PhysicalOperator> &physical_operator, Session *session)
 {
   RC rc = RC::SUCCESS;
-  if (session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR && LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
+  // 当查询中出现子查询(尤其是聚合子查询)时，向量化通道当前不支持，会在谓词评估时触发未实现或异常。
+  // 这里检测逻辑计划中的表达式是否包含子查询，如包含则强制回退到行迭代执行计划，避免崩溃/断连。
+  std::function<bool(Expression &)> contains_subquery_expr = [&](Expression &expr) -> bool {
+    if (expr.type() == ExprType::SUBQUERY) {
+      return true;
+    }
+    bool found = false;
+    (void)ExpressionIterator::iterate_child_expr(expr, [&](std::unique_ptr<Expression> &child) -> RC {
+      if (child) {
+        if (child->type() == ExprType::SUBQUERY) {
+          found = true;
+          return RC::SUCCESS;
+        }
+        if (contains_subquery_expr(*child)) {
+          found = true;
+          return RC::SUCCESS;
+        }
+      }
+      return RC::SUCCESS;
+    });
+    return found;
+  };
+
+  std::function<bool(LogicalOperator &)> contains_subquery_in_plan = [&](LogicalOperator &op) -> bool {
+    // 检查该算子自身挂载的表达式
+    for (auto &expr_up : op.expressions()) {
+      if (expr_up && contains_subquery_expr(*expr_up)) {
+        return true;
+      }
+    }
+    // 递归检查子算子
+    for (auto &child : op.children()) {
+      if (child && contains_subquery_in_plan(*child)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const bool plan_has_subquery = contains_subquery_in_plan(*logical_operator);
+
+  if (!plan_has_subquery && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+      LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);
     rc    = physical_plan_generator_.create_vec(*logical_operator, physical_operator, session);
