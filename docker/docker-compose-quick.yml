@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  miniob-dev:
+    # 使用官方镜像，避免长时间构建
+    image: oceanbase/miniob:latest
+    container_name: miniob-dev
+    hostname: miniob
+    environment:
+      - TZ=Asia/Shanghai
+      - DEBIAN_FRONTEND=noninteractive
+    ports:
+      - "10000:22"      # SSH
+      - "6789:6789"     # MiniOB server port
+    volumes:
+      # 挂载源代码目录用于开发
+      - ../src:/workspace/src:cached
+      - ../test:/workspace/test:cached
+      - ../etc:/workspace/etc:cached
+      - ../docs:/workspace/docs:cached
+      # 挂载构建目录
+      - ../build:/workspace/build:delegated
+      # 数据持久化
+      - miniob-data:/data
+    working_dir: /workspace
+    networks:
+      - miniob-network
+    privileged: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-d", "/workspace"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    # 自动运行初始化脚本
+    command: >
+      bash -c "
+        echo '开始初始化MiniOB开发环境...' &&
+        cd /workspace &&
+        if [ ! -d 'build' ]; then mkdir -p build; fi &&
+        echo '环境初始化完成！' &&
+        echo '使用方法：' &&
+        echo '1. 进入容器: docker exec -it miniob-dev /bin/bash' &&
+        echo '2. 编译项目: cd /workspace && ./build.sh debug --make' &&
+        echo '3. 运行测试: cd /workspace/test && python3 miniob_test.py' &&
+        tail -f /dev/null
+      "
+
+volumes:
+  miniob-data:
+    driver: local
+
+networks:
+  miniob-network:
+    driver: bridge

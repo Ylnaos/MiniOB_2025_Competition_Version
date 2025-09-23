@@ -1,0 +1,76 @@
+# Build directories
+build*/
+build
+cmake-build-*/
+
+# IDE directories
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.gitmodules
+
+# Documentation
+docs/
+*.md
+LICENSE
+NOTICE
+
+# Test files
+test/
+unittest/
+benchmark/
+*.test
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.cache
+*.pid
+
+# Object files and binaries
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.exe
+*.out
+
+# Core dumps
+core
+core.*
+*.core
+
+# Dependencies
+deps/3rd/*/build/
+
+# Coverage files
+*.gcov
+*.gcda
+*.gcno
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archives
+*.tar
+*.tar.gz
+*.zip
+*.rar
+*.7z
+
+# Editor backup files
+*.orig
+*.rej
