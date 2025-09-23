@@ -32,7 +32,8 @@ public:
     if (type == AttrType::DATES) {
       return 0;
     } else if (type == AttrType::CHARS) {
-      return 1;
+      // 将日期转为字符串的代价略高，便于比较时优先把字符串转为日期
+      return 2;
     }
     return INT32_MAX;
   }

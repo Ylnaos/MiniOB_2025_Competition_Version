@@ -53,6 +53,10 @@ int CharType::cast_cost(AttrType type)
   if (type == AttrType::CHARS) {
     return 0;
   }
+  if (type == AttrType::DATES) {
+    // 支持从字符串到日期的隐式转换
+    return 1;
+  }
   return INT32_MAX;
 }
 
@@ -63,4 +67,3 @@ RC CharType::to_string(const Value &val, string &result) const
   result = ss.str();
   return RC::SUCCESS;
 }
-

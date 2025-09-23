@@ -116,16 +116,31 @@ RC DateType::to_string(const Value &val, string &result) const
 
 bool DateType::is_valid_date(int year, int month, int day)
 {
-  if (year < 1 || year > 9999) {
-    return false;
-  }
-
+  // 基本合法性
   if (month < 1 || month > 12) {
     return false;
   }
-
   if (day < 1 || day > days_in_month(year, month)) {
     return false;
+  }
+
+  // 范围限制：1970-01-01 ~ 2038-01-19（含）
+  // 由于题目保证不超过 2038 年且不小于 1970 年，这里显式裁剪
+  const int min_y = 1970, min_m = 1, min_d = 1;
+  const int max_y = 2038, max_m = 1, max_d = 19;
+
+  // 先快速拒绝年份越界
+  if (year < min_y || year > max_y) {
+    return false;
+  }
+
+  if (year == min_y) {
+    if (month < min_m) return false;
+    if (month == min_m && day < min_d) return false;
+  }
+  if (year == max_y) {
+    if (month > max_m) return false;
+    if (month == max_m && day > max_d) return false;
   }
 
   return true;
