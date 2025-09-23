@@ -1,0 +1,60 @@
+-- LIKE 操作符测试用例
+-- 测试前请先创建测试表和插入测试数据
+
+-- 创建测试表
+CREATE TABLE test_like (id INT, name CHAR(50));
+
+-- 插入测试数据
+INSERT INTO test_like VALUES (1, 'John');
+INSERT INTO test_like VALUES (2, 'Johnson');
+INSERT INTO test_like VALUES (3, 'Jack');
+INSERT INTO test_like VALUES (4, 'Jackson');
+INSERT INTO test_like VALUES (5, 'Tom');
+INSERT INTO test_like VALUES (6, 'Tommy');
+INSERT INTO test_like VALUES (7, 'Thomas');
+INSERT INTO test_like VALUES (8, 'Jerry');
+INSERT INTO test_like VALUES (9, 'Mary');
+INSERT INTO test_like VALUES (10, 'Sarah');
+
+-- 测试用例1: % 匹配零个或多个字符 - 匹配以John开头的名字
+SELECT * FROM test_like WHERE name LIKE 'John%';
+-- 预期结果: John, Johnson
+
+-- 测试用例2: % 匹配零个或多个字符 - 匹配以son结尾的名字
+SELECT * FROM test_like WHERE name LIKE '%son';
+-- 预期结果: Johnson, Jackson
+
+-- 测试用例3: _ 匹配单个字符 - 匹配J_ck格式的名字
+SELECT * FROM test_like WHERE name LIKE 'J_ck';
+-- 预期结果: Jack
+
+-- 测试用例4: 组合使用 % 和 _ - 匹配T开头，第二个字符任意，后面是m的名字
+SELECT * FROM test_like WHERE name LIKE 'T_m%';
+-- 预期结果: Tom, Tommy, Thomas
+
+-- 测试用例5: 只用 % - 匹配所有包含字母a的名字
+SELECT * FROM test_like WHERE name LIKE '%a%';
+-- 预期结果: Jack, Jackson, Thomas, Mary, Sarah
+
+-- 测试用例6: 多个 % - 匹配J开头n结尾的名字
+SELECT * FROM test_like WHERE name LIKE 'J%n';
+-- 预期结果: Johnson, Jackson
+
+-- 测试用例7: 精确匹配（没有通配符）
+SELECT * FROM test_like WHERE name LIKE 'Tom';
+-- 预期结果: Tom
+
+-- 测试用例8: 匹配所有（只有%）
+SELECT * FROM test_like WHERE name LIKE '%';
+-- 预期结果: 所有记录
+
+-- 测试用例9: 多个_连续使用 - 匹配长度为4的名字
+SELECT * FROM test_like WHERE name LIKE '____';
+-- 预期结果: John, Jack
+
+-- 测试用例10: 测试大小写（MiniOB默认不区分大小写）
+SELECT * FROM test_like WHERE name LIKE 'john%';
+-- 预期结果: John, Johnson (如果不区分大小写)
+
+-- 清理测试数据（可选）
+-- DROP TABLE test_like;
