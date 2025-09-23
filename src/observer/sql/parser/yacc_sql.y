@@ -65,6 +65,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 //标识tokens
 %token  SEMICOLON
         BY
+        ORDER
         CREATE
         DROP
         GROUP
@@ -74,6 +75,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         CALC
         SELECT
         DESC
+        ASC
         SHOW
         SYNC
         INSERT
@@ -133,6 +135,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   AttrInfoSqlNode *                          attr_info;
   Expression *                               expression;
   vector<unique_ptr<Expression>> *           expression_list;
+  vector<OrderBySqlNode> *                   order_by_list;
+  OrderBySqlNode *                           order_by_item;
   vector<Value> *                            value_list;
   vector<ConditionSqlNode> *                 condition_list;
   vector<RelAttrSqlNode> *                   rel_attr_list;
@@ -185,6 +189,9 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <expression>          aggregate_expression
 %type <expression_list>     expression_list
 %type <expression_list>     group_by
+%type <order_by_list>       order_by
+%type <order_by_list>       order_by_condition_list
+%type <order_by_item>       order_by_condition
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
 %type <sql_node>            calc_stmt
@@ -542,7 +549,7 @@ update_list:
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by
+    SELECT expression_list FROM rel_list where group_by order_by
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -563,6 +570,11 @@ select_stmt:        /*  select 语句的语法解析树*/
       if ($6 != nullptr) {
         $$->selection.group_by.swap(*$6);
         delete $6;
+      }
+
+      if ($7 != nullptr) {
+        $$->selection.order_by.swap(*$7);
+        delete $7;
       }
     }
     ;
@@ -727,6 +739,53 @@ group_by:
       // group by 的表达式范围与select查询值的表达式范围是不同的，比如group by不支持 *
       // 但是这里没有处理。
       $$ = $3;
+    }
+    ;
+
+order_by:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | ORDER BY order_by_condition_list
+    {
+      $$ = $3;
+    }
+    ;
+
+order_by_condition_list:
+    order_by_condition
+    {
+      $$ = new vector<OrderBySqlNode>();
+      $$->emplace_back(std::move(*$1));
+      delete $1;
+    }
+    | order_by_condition COMMA order_by_condition_list
+    {
+      $$ = $3;
+      $$->emplace($$->begin(), std::move(*$1));
+      delete $1;
+    }
+    ;
+
+order_by_condition:
+    expression
+    {
+      $$ = new OrderBySqlNode();
+      $$->expression.reset($1);
+      $$->asc = true; // 默认升序
+    }
+    | expression ASC
+    {
+      $$ = new OrderBySqlNode();
+      $$->expression.reset($1);
+      $$->asc = true;
+    }
+    | expression DESC
+    {
+      $$ = new OrderBySqlNode();
+      $$->expression.reset($1);
+      $$->asc = false;
     }
     ;
 load_data_stmt:

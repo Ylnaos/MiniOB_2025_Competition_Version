@@ -35,3 +35,43 @@ public:
   RC accumulate(const Value &value) override;
   RC evaluate(Value &result) override;
 };
+
+class CountAggregator : public Aggregator
+{
+public:
+  CountAggregator() { value_.set_int(0); }
+  RC accumulate(const Value &value) override;
+  RC evaluate(Value &result) override;
+};
+
+class AvgAggregator : public Aggregator
+{
+public:
+  AvgAggregator() = default;
+  RC accumulate(const Value &value) override;
+  RC evaluate(Value &result) override;
+
+private:
+  int   count_ = 0;
+  Value sum_;  // 使用 Value 来累加，支持 INT 与 FLOAT
+};
+
+class MaxAggregator : public Aggregator
+{
+public:
+  RC accumulate(const Value &value) override;
+  RC evaluate(Value &result) override;
+
+private:
+  bool has_value_ = false;
+};
+
+class MinAggregator : public Aggregator
+{
+public:
+  RC accumulate(const Value &value) override;
+  RC evaluate(Value &result) override;
+
+private:
+  bool has_value_ = false;
+};

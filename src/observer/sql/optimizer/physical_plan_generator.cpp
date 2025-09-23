@@ -43,6 +43,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/group_by_physical_operator.h"
 #include "sql/operator/hash_group_by_physical_operator.h"
 #include "sql/operator/scalar_group_by_physical_operator.h"
+#include "sql/operator/order_by_logical_operator.h"
+#include "sql/operator/order_by_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
@@ -91,6 +93,27 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
 
     case LogicalOperatorType::GROUP_BY: {
       return create_plan(static_cast<GroupByLogicalOperator &>(logical_operator), oper, session);
+    } break;
+    case LogicalOperatorType::ORDER_BY: {
+      // create physical plan for order by
+      auto &order_logical = static_cast<OrderByLogicalOperator &>(logical_operator);
+      // 递归创建子计划
+      ASSERT(order_logical.children().size() == 1, "order by operator should have 1 child");
+      unique_ptr<PhysicalOperator> child_physical_oper;
+      RC rc = create(*order_logical.children().front(), child_physical_oper, session);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to create child physical operator of order by. rc=%s", strrc(rc));
+        return rc;
+      }
+      // 移动表达式到物理算子
+      vector<OrderByPhysicalOperator::OrderItem> items;
+      for (auto &p : order_logical.order_by_items()) {
+        items.emplace_back(std::move(p));
+      }
+      auto order_phy = make_unique<OrderByPhysicalOperator>(std::move(items));
+      order_phy->add_child(std::move(child_physical_oper));
+      oper = std::move(order_phy);
+      return RC::SUCCESS;
     } break;
 
     default: {

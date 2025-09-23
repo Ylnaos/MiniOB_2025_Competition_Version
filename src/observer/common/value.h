@@ -98,6 +98,12 @@ public:
 
   int compare(const Value &other) const;
 
+  // 兼容使用方式：将比较结果写入 result（-1/0/1）
+  static void compare(const Value &left, const Value &right, int &result)
+  {
+    result = left.compare(right);
+  }
+
   char *data() const;
 
   int      length() const { return length_; }

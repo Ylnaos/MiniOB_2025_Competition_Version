@@ -45,4 +45,3 @@ void LogicalOperator::generate_general_child()
     child->generate_general_child();
   }
 }
-
