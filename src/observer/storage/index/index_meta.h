@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/sys/rc.h"
 #include "common/lang/string.h"
+#include "common/lang/span.h"
 
 class TableMeta;
 class FieldMeta;
@@ -35,12 +36,14 @@ class IndexMeta
 public:
   IndexMeta() = default;
 
-  RC init(const char *name, const FieldMeta &field, bool unique = false);
+  RC init(const char *name, span<const FieldMeta> fields, bool unique = false);
 
 public:
-  const char *name() const;
-  const char *field() const;
-  bool        unique() const { return unique_; }
+  const char          *name() const;
+  // 返回第一个字段名（兼容旧接口）
+  const char          *field() const;
+  const vector<string> &fields() const { return fields_; }
+  bool                  unique() const { return unique_; }
 
   void desc(ostream &os) const;
 
@@ -49,7 +52,7 @@ public:
   static RC from_json(const TableMeta &table, const Json::Value &json_value, IndexMeta &index);
 
 protected:
-  string name_;   // index's name
-  string field_;  // field's name
-  bool   unique_ = false; // unique index flag
+  string         name_;    // index's name
+  vector<string> fields_;  // field names (ordered)
+  bool           unique_ = false; // unique index flag
 };

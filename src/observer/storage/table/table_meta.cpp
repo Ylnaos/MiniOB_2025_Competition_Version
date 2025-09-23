@@ -165,6 +165,7 @@ const IndexMeta *TableMeta::index(const char *name) const
 const IndexMeta *TableMeta::find_index_by_field(const char *field) const
 {
   for (const IndexMeta &index : indexes_) {
+    // 仅匹配复合索引的第一个字段
     if (0 == strcmp(index.field(), field)) {
       return &index;
     }

@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/index_scan_physical_operator.h"
 #include "storage/index/index.h"
 #include "storage/trx/trx.h"
+#include <limits>
 
 IndexScanPhysicalOperator::IndexScanPhysicalOperator(Table *table, Index *index, ReadWriteMode mode, const Value *left_value,
     bool left_inclusive, const Value *right_value, bool right_inclusive)
@@ -36,6 +37,113 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
 {
   if (nullptr == table_ || nullptr == index_) {
     return RC::INTERNAL;
+  }
+
+  // 如果是复合索引（多列），构造前缀范围 [first=val, last=val]，其余列取最小/最大，且使用可排序编码
+  if (index_->key_fields().size() > 1) {
+    const auto &fields = index_->key_fields();
+    int total_len = 0;
+    for (const auto &fm : fields) total_len += fm.len();
+    std::string left_bytes(total_len, '\0');
+    std::string right_bytes(total_len, '\0');
+
+    auto put_be32 = [](uint32_t v, char *out) {
+      out[0] = static_cast<char>((v >> 24) & 0xFF);
+      out[1] = static_cast<char>((v >> 16) & 0xFF);
+      out[2] = static_cast<char>((v >> 8) & 0xFF);
+      out[3] = static_cast<char>(v & 0xFF);
+    };
+
+    auto encode_int = [&](int32_t iv, char *out) {
+      uint32_t uv = static_cast<uint32_t>(iv) ^ 0x80000000u;
+      put_be32(uv, out);
+    };
+    auto encode_float = [&](float fv, char *out) {
+      uint32_t u; memcpy(&u, &fv, sizeof(u));
+      if (u & 0x80000000u) { u = ~u; } else { u ^= 0x80000000u; }
+      put_be32(u, out);
+    };
+
+    int off = 0;
+    // 第一列由谓词给定
+    const FieldMeta &f0 = fields[0];
+    switch (f0.type()) {
+      case AttrType::INTS:
+      case AttrType::DATES: {
+        int32_t v = left_value_.get_int();
+        encode_int(v, &left_bytes[off]);
+        encode_int(v, &right_bytes[off]);
+        off += sizeof(int32_t);
+      } break;
+      case AttrType::FLOATS: {
+        float v = left_value_.get_float();
+        encode_float(v, &left_bytes[off]);
+        encode_float(v, &right_bytes[off]);
+        off += sizeof(float);
+      } break;
+      case AttrType::CHARS: {
+        // 拷贝并填充（固定长度）
+        auto s = left_value_.get_string();
+        int cpy = std::min<int>(f0.len(), (int)s.size());
+        memcpy(&left_bytes[off], s.data(), cpy);
+        memcpy(&right_bytes[off], s.data(), cpy);
+        off += f0.len();
+      } break;
+      case AttrType::BOOLEANS: {
+        int32_t v = left_value_.get_boolean() ? 1 : 0;
+        encode_int(v, &left_bytes[off]);
+        encode_int(v, &right_bytes[off]);
+        off += sizeof(int32_t);
+      } break;
+      default: {
+        // 原样拷贝
+        memcpy(&left_bytes[off], left_value_.data(), f0.len());
+        memcpy(&right_bytes[off], left_value_.data(), f0.len());
+        off += f0.len();
+      } break;
+    }
+
+    // 其余列 left 取最小，right 取最大
+    for (size_t i = 1; i < fields.size(); i++) {
+      const FieldMeta &fm = fields[i];
+      switch (fm.type()) {
+        case AttrType::INTS:
+        case AttrType::DATES: {
+          encode_int(std::numeric_limits<int32_t>::min(), &left_bytes[off]);
+          encode_int(std::numeric_limits<int32_t>::max(), &right_bytes[off]);
+          off += sizeof(int32_t);
+        } break;
+        case AttrType::FLOATS: {
+          encode_float(-std::numeric_limits<float>::max(), &left_bytes[off]);
+          encode_float(std::numeric_limits<float>::max(), &right_bytes[off]);
+          off += sizeof(float);
+        } break;
+        case AttrType::CHARS: {
+          // left 已是 0, right 填 0xFF
+          memset(&right_bytes[off], 0xFF, fm.len());
+          off += fm.len();
+        } break;
+        case AttrType::BOOLEANS: {
+          encode_int(0, &left_bytes[off]);
+          encode_int(1, &right_bytes[off]);
+          off += sizeof(int32_t);
+        } break;
+        default: {
+          // 其他类型，不清楚编码，取全范围
+          memset(&left_bytes[off], 0x00, fm.len());
+          memset(&right_bytes[off], 0xFF, fm.len());
+          off += fm.len();
+        } break;
+      }
+    }
+
+    // 用 CHARS 包装原始字节传入扫描器（比较按字节序）
+    left_value_.set_type(AttrType::CHARS);
+    left_value_.set_data(left_bytes.data(), (int)left_bytes.size());
+    right_value_.set_type(AttrType::CHARS);
+    right_value_.set_data(right_bytes.data(), (int)right_bytes.size());
+    left_inclusive_  = true;
+    right_inclusive_ = true;
   }
 
   IndexScanner *index_scanner = index_->create_scanner(left_value_.data(),

@@ -19,6 +19,7 @@ See the Mulan PSL v2 for more details. */
 #include "session/session.h"
 #include "sql/stmt/create_index_stmt.h"
 #include "storage/table/table.h"
+#include <vector>
 
 RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
 {
@@ -32,5 +33,15 @@ RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
 
   Trx   *trx   = session->current_trx();
   Table *table = create_index_stmt->table();
-  return table->create_index(trx, create_index_stmt->field_meta(), create_index_stmt->index_name().c_str(), create_index_stmt->unique());
+  // 将字段指针列表拷贝为连续的 FieldMeta 数组，便于构造 span<const FieldMeta>
+  const auto &fms = create_index_stmt->field_metas();
+  std::vector<FieldMeta> field_metas;
+  field_metas.reserve(fms.size());
+  for (const FieldMeta *fm : fms) {
+    field_metas.push_back(*fm);
+  }
+  return table->create_index(trx,
+                             span<const FieldMeta>(field_metas.data(), field_metas.size()),
+                             create_index_stmt->index_name().c_str(),
+                             create_index_stmt->unique());
 }

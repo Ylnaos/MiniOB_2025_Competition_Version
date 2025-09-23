@@ -228,10 +228,10 @@ struct AnalyzeTableSqlNode
  */
 struct CreateIndexSqlNode
 {
-  string index_name;      ///< Index name
-  string relation_name;   ///< Relation name
-  string attribute_name;  ///< Attribute name
-  bool   unique = false;  ///< Whether the index is UNIQUE
+  string              index_name;     ///< Index name
+  string              relation_name;  ///< Relation name
+  vector<string>      attribute_names;///< Attribute names (support multi-column)
+  bool                unique = false; ///< Whether the index is UNIQUE
 };
 
 /**

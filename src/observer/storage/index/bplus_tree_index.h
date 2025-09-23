@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "storage/index/bplus_tree.h"
 #include "storage/index/index.h"
+#include "common/lang/span.h"
 
 /**
  * @brief B+树索引
@@ -27,8 +28,8 @@ public:
   BplusTreeIndex() = default;
   virtual ~BplusTreeIndex() noexcept;
 
-  RC create(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta) override;
-  RC open(Table *table, const char *file_name, const IndexMeta &index_meta, const FieldMeta &field_meta) override;
+  RC create(Table *table, const char *file_name, const IndexMeta &index_meta, span<const FieldMeta> field_metas) override;
+  RC open(Table *table, const char *file_name, const IndexMeta &index_meta, span<const FieldMeta> field_metas) override;
   RC close();
 
   RC insert_entry(const char *record, const RID *rid) override;
@@ -43,6 +44,9 @@ public:
   RC sync() override;
 
 private:
+  int  key_attr_length_sum() const;
+  void build_composite_key(const char *record, char *buf) const;
+
   bool             inited_ = false;
   Table           *table_  = nullptr;
   BplusTreeHandler index_handler_;
