@@ -121,7 +121,8 @@ public:
 
   RC sync();
 
-private:
+public:
+  // 提升为公共接口，供 UPDATE/INSERT 等路径统一安全落盘字段值
   RC set_value_to_record(char *record_data, const Value &value, const FieldMeta *field);
 
 private:

@@ -34,6 +34,11 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       result = val;
       return RC::SUCCESS;
     }
+    case AttrType::TEXTS: {
+      result = val;
+      result.set_type(AttrType::TEXTS);
+      return RC::SUCCESS;
+    }
     case AttrType::DATES: {
       // 从字符串转换为日期类型
       return DataType::type_instance(AttrType::DATES)->set_value_from_str(result, val.get_string());
@@ -58,3 +63,4 @@ RC CharType::to_string(const Value &val, string &result) const
   result = ss.str();
   return RC::SUCCESS;
 }
+

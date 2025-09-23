@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "common/global_context.h"
 #include "storage/table/table_meta.h"
+#include "common/type/attr_type.h"
 #include "storage/trx/trx.h"
 #include "json/json.h"
 
@@ -89,14 +90,18 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
   for (size_t i = 0; i < attributes.size(); i++) {
     const AttrInfoSqlNode &attr_info = attributes[i];
     // `i` is the col_id of fields[i]
+    int field_len = static_cast<int>(attr_info.length);
+    if (attr_info.type == AttrType::TEXTS) {
+      field_len = TEXT_MAX_LENGTH;
+    }
     rc = fields_[i + trx_field_num].init(
-      attr_info.name.c_str(), attr_info.type, field_offset, attr_info.length, true /*visible*/, static_cast<int>(i), attr_info.nullable);
+      attr_info.name.c_str(), attr_info.type, field_offset, field_len, true /*visible*/, static_cast<int>(i), attr_info.nullable);
     if (OB_FAIL(rc)) {
       LOG_ERROR("Failed to init field meta. table name=%s, field name: %s", name, attr_info.name.c_str());
       return rc;
     }
 
-    field_offset += attr_info.length;
+    field_offset += field_len;
   }
 
   primary_keys_ = primary_keys;

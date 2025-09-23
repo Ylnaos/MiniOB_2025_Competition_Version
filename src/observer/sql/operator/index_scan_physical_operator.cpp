@@ -81,7 +81,8 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
         encode_float(v, &right_bytes[off]);
         off += sizeof(float);
       } break;
-      case AttrType::CHARS: {
+      case AttrType::CHARS:
+      case AttrType::TEXTS: {
         // 拷贝并填充（固定长度）
         auto s = left_value_.get_string();
         int cpy = std::min<int>(f0.len(), (int)s.size());
@@ -118,7 +119,8 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
           encode_float(std::numeric_limits<float>::max(), &right_bytes[off]);
           off += sizeof(float);
         } break;
-        case AttrType::CHARS: {
+        case AttrType::CHARS:
+        case AttrType::TEXTS: {
           // left 已是 0, right 填 0xFF
           memset(&right_bytes[off], 0xFF, fm.len());
           off += fm.len();

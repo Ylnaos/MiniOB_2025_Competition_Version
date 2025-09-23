@@ -37,7 +37,10 @@ RC PlainCommunicator::read_event(SessionEvent *&event)
   int data_len = 0;
   int read_len = 0;
 
-  const int    max_packet_size = 8192;
+  // 放宽单次 SQL 最大长度限制，避免长文本导致连接被动断开
+  // 说明：TEXT 字段本身最大 4096 字节，但包含 SQL 关键字与其他语法字符后，
+  // 整条指令可能明显超过 8192。这里将上限提升到 4MB，足以覆盖常见长文本场景。
+  const int    max_packet_size = 4 * 1024 * 1024; // 4MB
   vector<char> buf(max_packet_size);
 
   // 持续接收消息，直到遇到'\0'。将'\0'遇到的后续数据直接丢弃没有处理，因为目前仅支持一收一发的模式
@@ -86,7 +89,12 @@ RC PlainCommunicator::read_event(SessionEvent *&event)
     return RC::IOERR_READ;
   }
 
-  LOG_INFO("receive command(size=%d): %s", data_len, buf.data());
+  // 避免日志打印超长 SQL 带来的 I/O 开销，仅打印前缀
+  if (data_len <= 1024) {
+    LOG_INFO("receive command(size=%d): %s", data_len, buf.data());
+  } else {
+    LOG_INFO("receive command(size=%d): %.1024s...", data_len, buf.data());
+  }
   event = new SessionEvent(this);
   event->set_query(string(buf.data()));
   return rc;

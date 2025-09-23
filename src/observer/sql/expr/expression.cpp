@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/expr/expression.h"
+#include "common/type/attr_type.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
 
@@ -151,9 +152,9 @@ RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &re
   }
 
   if (comp_ == LIKE_OP) {
-    // LIKE operation only works with strings
-    if (left.attr_type() != AttrType::CHARS || right.attr_type() != AttrType::CHARS) {
-      LOG_WARN("LIKE operator only supports CHAR type");
+    // LIKE 仅支持字符串类型（包含 CHAR/TEXT）
+    if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
+      LOG_WARN("LIKE operator only supports string type");
       return RC::INVALID_ARGUMENT;
     }
     result = like_match(left.get_string().c_str(), right.get_string().c_str());
@@ -312,7 +313,7 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     rc = compare_column<int>(left_column, right_column, select);
   } else if (left_column.attr_type() == AttrType::FLOATS) {
     rc = compare_column<float>(left_column, right_column, select);
-  } else if (left_column.attr_type() == AttrType::CHARS) {
+  } else if (left_column.attr_type() == AttrType::CHARS || left_column.attr_type() == AttrType::TEXTS) {
     int rows = 0;
     if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
       rows = right_column.count();

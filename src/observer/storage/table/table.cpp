@@ -278,11 +278,52 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     src = &real_value;
   }
 
+  // 安全写入：计算该字段在记录缓冲区内的可写范围，避免越界
+  {
+    const size_t record_size   = table_meta_.record_size();
+    const size_t field_offset  = static_cast<size_t>(field->offset());
+    const size_t field_len     = static_cast<size_t>(field->len());
+    const size_t avail_in_rec  = (field_offset < record_size) ? (record_size - field_offset) : 0;
+    const size_t writable_size = std::min(field_len, avail_in_rec);
+
+    const size_t data_len = src->length();
+    size_t       copy_len = 0;
+
+    if (writable_size > 0) {
+      // 先将可写区域清零
+      memset(record_data + field_offset, 0, writable_size);
+    } else {
+      return RC::SUCCESS;
+    }
+
+    if (field->type() == AttrType::CHARS) {
+      // CHARS：尽量包含末尾'\0'
+      copy_len = std::min(writable_size, data_len + 1);
+    } else if (field->type() == AttrType::TEXTS) {
+      // TEXT：仅按长度截断，不强制添加'\0'
+      copy_len = std::min(writable_size, data_len);
+    } else {
+      // 其他类型：保守处理
+      copy_len = std::min(writable_size, data_len);
+    }
+
+    if (copy_len > 0) {
+      memcpy(record_data + field_offset, src->data(), copy_len);
+    }
+    return RC::SUCCESS;
+  }
+
   size_t       copy_len = field->len();
   const size_t data_len = src->length();
   if (field->type() == AttrType::CHARS) {
     if (copy_len > data_len) {
-      copy_len = data_len + 1;
+      copy_len = data_len + 1; // 预留结尾'\0'
+    }
+    memset(record_data + field->offset(), 0, field->len());
+  } else if (field->type() == AttrType::TEXTS) {
+    // TEXT: 截断到最多4096字节，不强制添加额外'\0'
+    if (copy_len > data_len) {
+      copy_len = data_len;
     }
     memset(record_data + field->offset(), 0, field->len());
   }

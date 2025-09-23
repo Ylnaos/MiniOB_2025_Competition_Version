@@ -182,7 +182,12 @@ RC UpdatePhysicalOperator::open(Trx *trx)
           }
           memset(new_record_data + field_meta->offset(), 0, field_meta->len());
         }
-        memcpy(new_record_data + field_meta->offset(), src->data(), copy_len);
+        rc = table_->set_value_to_record(new_record_data, value, field_meta);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("failed to set value to record. field=%s, rc=%s", field_meta->name(), strrc(rc));
+          free(new_record_data);
+          return rc;
+        }
       }
     }
 

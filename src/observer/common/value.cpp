@@ -37,7 +37,8 @@ Value::Value(const Value &other)
   this->length_    = other.length_;
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
 
@@ -67,7 +68,8 @@ Value &Value::operator=(const Value &other)
   this->length_    = other.length_;
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
 
@@ -97,6 +99,7 @@ void Value::reset()
 {
   switch (attr_type_) {
     case AttrType::CHARS:
+    case AttrType::TEXTS:
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
         value_.pointer_value_ = nullptr;
@@ -113,8 +116,12 @@ void Value::reset()
 void Value::set_data(char *data, int length)
 {
   switch (attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::TEXTS: {
+      // 保持原有类型（CHARS/TEXTS），避免 set_string 将类型强制为 CHARS
+      AttrType old_type = attr_type_;
       set_string(data, length);
+      attr_type_ = old_type;
     } break;
     case AttrType::INTS: {
       value_.int_value_ = *(int *)data;
@@ -239,7 +246,7 @@ void Value::set_value(const Value &value)
 
 void Value::set_string_from_other(const Value &other)
 {
-  ASSERT(attr_type_ == AttrType::CHARS, "attr type is not CHARS");
+  ASSERT(attr_type_ == AttrType::CHARS || attr_type_ == AttrType::TEXTS, "attr type is not string type");
   if (own_data_ && other.value_.pointer_value_ != nullptr && length_ != 0) {
     this->value_.pointer_value_ = new char[this->length_ + 1];
     memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
@@ -251,6 +258,9 @@ char *Value::data() const
 {
   switch (attr_type_) {
     case AttrType::CHARS: {
+      return value_.pointer_value_;
+    } break;
+    case AttrType::TEXTS: {
       return value_.pointer_value_;
     } break;
     default: {
@@ -275,7 +285,8 @@ int Value::compare(const Value &other) const { return DataType::type_instance(th
 int Value::get_int() const
 {
   switch (attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::TEXTS: {
       try {
         return (int)(stol(value_.pointer_value_));
       } catch (exception const &ex) {
@@ -306,7 +317,8 @@ int Value::get_int() const
 float Value::get_float() const
 {
   switch (attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::TEXTS: {
       try {
         return stof(value_.pointer_value_);
       } catch (exception const &ex) {
@@ -335,14 +347,15 @@ string Value::get_string() const { return this->to_string(); }
 
 string_t Value::get_string_t() const
 {
-  ASSERT(attr_type_ == AttrType::CHARS, "attr type is not CHARS");
+  ASSERT(attr_type_ == AttrType::CHARS || attr_type_ == AttrType::TEXTS, "attr type is not string type");
   return string_t(value_.pointer_value_, length_);
 }
 
 bool Value::get_boolean() const
 {
   switch (attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::TEXTS: {
       try {
         float val = stof(value_.pointer_value_);
         if (val >= EPSILON || val <= -EPSILON) {

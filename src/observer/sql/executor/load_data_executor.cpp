@@ -59,7 +59,7 @@ RC insert_record_from_file(
     const FieldMeta *field = table->table_meta().field(i + sys_field_num);
 
     string &file_value = file_values[i];
-    if (field->type() != AttrType::CHARS) {
+    if (!is_string_type(field->type())) {
       common::strip(file_value);
     }
     rc = DataType::type_instance(field->type())->set_value_from_str(record_values[i], file_value);

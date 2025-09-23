@@ -115,6 +115,7 @@ INT                                     RETURN_TOKEN(INT_T);
 CHAR                                    RETURN_TOKEN(STRING_T);
 FLOAT                                   RETURN_TOKEN(FLOAT_T);
 DATE                                    RETURN_TOKEN(DATE_T);
+TEXT                                    RETURN_TOKEN(TEXT_T);
 VECTOR                                  RETURN_TOKEN(VECTOR_T);
 LIKE                                    RETURN_TOKEN(LIKE);
 LOAD                                    RETURN_TOKEN(LOAD);
