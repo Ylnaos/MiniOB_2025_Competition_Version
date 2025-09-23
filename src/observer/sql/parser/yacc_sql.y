@@ -704,6 +704,18 @@ aggregate_expression:
     ID LBRACE expression RBRACE {
       $$ = create_aggregate_expression($1, $3, sql_string, &@$);
     }
+    | ID LBRACE expression COMMA expression_list RBRACE {
+      // 语法上允许多参数，以便进入语义阶段做更友好的错误（避免语法错误）
+      // 仅保留第一个参数表达式，其余仅用于记录实参个数
+      UnboundAggregateExpr *agg = create_aggregate_expression($1, $3, sql_string, &@$);
+      if ($5 != nullptr) {
+        agg->set_arg_count(1 + (int)$5->size());
+        delete $5;
+      } else {
+        agg->set_arg_count(2); // 至少 2 个
+      }
+      $$ = agg;
+    }
     ;
 
 rel_attr:

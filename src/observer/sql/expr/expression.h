@@ -461,7 +461,9 @@ public:
 
   unique_ptr<Expression> copy() const override
   {
-    return make_unique<UnboundAggregateExpr>(aggregate_name_.c_str(), child_->copy());
+    auto ptr = make_unique<UnboundAggregateExpr>(aggregate_name_.c_str(), child_->copy());
+    ptr->set_arg_count(arg_count_);
+    return ptr;
   }
 
   const char *aggregate_name() const { return aggregate_name_.c_str(); }
@@ -471,9 +473,14 @@ public:
   RC       get_value(const Tuple &tuple, Value &value) const override { return RC::INTERNAL; }
   AttrType value_type() const override { return child_->value_type(); }
 
+  // 记录聚合实参个数（用于在 binder 中做校验）。默认 1
+  void set_arg_count(int n) { arg_count_ = n; }
+  int  arg_count() const { return arg_count_; }
+
 private:
   string                 aggregate_name_;
   unique_ptr<Expression> child_;
+  int                    arg_count_ {1};
 };
 
 class AggregateExpr : public Expression

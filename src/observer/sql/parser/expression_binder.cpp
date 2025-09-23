@@ -433,6 +433,11 @@ RC ExpressionBinder::bind_aggregate_expression(
   }
 
   auto unbound_aggregate_expr = static_cast<UnboundAggregateExpr *>(expr.get());
+  // 多参数聚合（如 count(*, num)）在语义阶段报错为 INVALID_ARGUMENT，而非语法错误
+  if (unbound_aggregate_expr->arg_count() != 1) {
+    LOG_WARN("invalid argument count for aggregate expression: %d", unbound_aggregate_expr->arg_count());
+    return RC::INVALID_ARGUMENT;
+  }
   const char *aggregate_name = unbound_aggregate_expr->aggregate_name();
   AggregateExpr::Type aggregate_type;
   RC rc = AggregateExpr::type_from_string(aggregate_name, aggregate_type);
