@@ -90,6 +90,29 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       ASSERT(false, "shouldn't be here");
     } break;
 
+    case ExprType::SUBQUERY: {
+      // 子查询不依赖于外层表（本题约束为非关联子查询），无需在当前上下文再次绑定
+      return bind_field_expression(expr, bound_expressions);
+    } break;
+
+    case ExprType::IN_LIST: {
+      // IN 表达式的两个子表达式分别进行绑定
+      auto *in_expr = static_cast<InExpr *>(expr.get());
+      vector<unique_ptr<Expression>> tmp;
+      RC rc = bind_expression(in_expr->test_expr(), tmp);
+      if (OB_FAIL(rc)) return rc;
+      if (tmp.size() == 1 && tmp[0].get() != in_expr->test_expr().get()) {
+        in_expr->test_expr().reset(tmp[0].release());
+      }
+      tmp.clear();
+      rc = bind_expression(in_expr->set_expr(), tmp);
+      if (OB_FAIL(rc)) return rc;
+      if (tmp.size() == 1 && tmp[0].get() != in_expr->set_expr().get()) {
+        in_expr->set_expr().reset(tmp[0].release());
+      }
+      return bind_field_expression(expr, bound_expressions);
+    } break;
+
     default: {
       LOG_WARN("unknown expression type: %d", static_cast<int>(expr->type()));
       return RC::INTERNAL;

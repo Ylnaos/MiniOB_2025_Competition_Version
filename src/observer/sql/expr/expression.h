@@ -23,6 +23,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/common/chunk.h"
 
 class Tuple;
+class ParsedSqlNode;
 
 /**
  * @defgroup Expression
@@ -47,6 +48,8 @@ enum class ExprType
   CONJUNCTION,  ///< 多个表达式使用同一种关系(AND或OR)来联结
   ARITHMETIC,   ///< 算术运算
   AGGREGATION,  ///< 聚合运算
+  SUBQUERY,     ///< 子查询表达式（返回单列结果）
+  IN_LIST,      ///< IN/NOT IN 表达式（右侧可以为子查询）
 };
 
 /**
@@ -535,4 +538,79 @@ public:
 private:
   Type                   aggregate_type_;
   unique_ptr<Expression> child_;
+};
+
+/**
+ * @brief 子查询表达式，表示形如 (select ...) 的结果
+ * @details 当前仅支持返回单列结果。对于标量上下文，要求返回至多一行；
+ *          对于 IN 上下文，允许返回多行（单列）用于集合判断。
+ */
+class SubqueryExpr : public Expression
+{
+public:
+  // 使用解析好的子查询节点构造
+  explicit SubqueryExpr(std::unique_ptr<ParsedSqlNode> subquery_node);
+  // 仅使用已执行结果构造（用于 copy）
+  SubqueryExpr(const std::vector<Value> &cached_results, AttrType result_type, int result_len);
+  virtual ~SubqueryExpr() = default;
+
+  unique_ptr<Expression> copy() const override;
+
+  ExprType type() const override { return ExprType::SUBQUERY; }
+  AttrType value_type() const override { return result_type_; }
+  int      value_length() const override { return result_len_; }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+
+  // 子查询不支持列式向量化，必要时可扩展
+  RC get_column(Chunk &chunk, Column &column) override { return RC::UNIMPLEMENTED; }
+
+  // 执行子查询（懒执行，缓存结果），提取首列所有值
+  RC execute_once() const;
+
+  // 获取缓存的所有结果（首列）
+  const std::vector<Value> &results() const { return results_; }
+
+private:
+  // 深拷贝 ParsedSqlNode（当前仅支持 SELECT）
+  std::unique_ptr<ParsedSqlNode> deep_copy_parsed_node(const ParsedSqlNode &node) const;
+
+private:
+  mutable bool                         executed_   = false;
+  mutable std::vector<Value>           results_;      ///< 首列所有结果
+  mutable AttrType                     result_type_ = AttrType::UNDEFINED;
+  mutable int                          result_len_  = -1;
+  std::unique_ptr<ParsedSqlNode>       subquery_node_;
+};
+
+/**
+ * @brief IN/NOT IN 表达式
+ */
+class InExpr : public Expression
+{
+public:
+  InExpr(std::unique_ptr<Expression> test_expr, std::unique_ptr<Expression> set_expr, bool not_in)
+      : test_expr_(std::move(test_expr)), set_expr_(std::move(set_expr)), not_in_(not_in)
+  {}
+
+  virtual ~InExpr() = default;
+
+  unique_ptr<Expression> copy() const override
+  {
+    return make_unique<InExpr>(test_expr_->copy(), set_expr_->copy(), not_in_);
+  }
+
+  ExprType type() const override { return ExprType::IN_LIST; }
+  AttrType value_type() const override { return AttrType::BOOLEANS; }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+
+  unique_ptr<Expression> &test_expr() { return test_expr_; }
+  unique_ptr<Expression> &set_expr() { return set_expr_; }
+  bool not_in() const { return not_in_; }
+
+private:
+  std::unique_ptr<Expression> test_expr_;
+  std::unique_ptr<Expression> set_expr_;  // 期望为 SubqueryExpr
+  bool                         not_in_ = false;
 };

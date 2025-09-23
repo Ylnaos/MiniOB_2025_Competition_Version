@@ -52,6 +52,8 @@ enum CompOp
   GREAT_EQUAL,  ///< ">="
   GREAT_THAN,   ///< ">"
   LIKE_OP,      ///< "LIKE"
+  IN_OP,        ///< "IN (subquery)"
+  NOT_IN_OP,    ///< "NOT IN (subquery)"
   NO_OP
 };
 

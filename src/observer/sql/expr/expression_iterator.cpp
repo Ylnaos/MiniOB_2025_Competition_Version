@@ -63,6 +63,20 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       rc = callback(aggregate_expr.child());
     } break;
 
+    case ExprType::SUBQUERY: {
+      // 作为叶子节点，无需递归
+    } break;
+
+    case ExprType::IN_LIST: {
+      auto &in_expr = static_cast<InExpr &>(expr);
+      if (OB_SUCC(rc)) {
+        rc = callback(in_expr.test_expr());
+      }
+      if (OB_SUCC(rc)) {
+        rc = callback(in_expr.set_expr());
+      }
+    } break;
+
     case ExprType::NONE:
     case ExprType::STAR:
     case ExprType::UNBOUND_FIELD:

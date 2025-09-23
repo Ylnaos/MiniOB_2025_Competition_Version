@@ -154,6 +154,19 @@ static RC bind_expression_fields(unique_ptr<Expression> &expr, Db *db, Table *de
       return rc;
     }
   }
+  // IN 表达式：只绑定左侧（测试值），右侧子查询单独在其上下文解析
+  else if (expr->type() == ExprType::IN_LIST) {
+    auto *in_expr = static_cast<InExpr *>(expr.get());
+    rc = bind_expression_fields(in_expr->test_expr(), db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    // right 是 SubqueryExpr，不在此绑定
+  }
+  // 子查询作为叶子节点，不在此绑定
+  else if (expr->type() == ExprType::SUBQUERY) {
+    return RC::SUCCESS;
+  }
 
   return RC::SUCCESS;
 }

@@ -112,6 +112,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         FORMAT
         PRIMARY
         KEY
+        IN
+        NOT
         ANALYZE
         FIELDS
         TERMINATED
@@ -686,6 +688,16 @@ expression:
     | aggregate_expression {
       $$ = $1;
     }
+    | LBRACE select_stmt RBRACE {
+      // 子查询表达式：将select子句作为一个表达式节点
+      if ($2 == nullptr || $2->flag != SCF_SELECT) {
+        $$ = nullptr;
+      } else {
+        // 使用表达式来持有子查询
+        $$ = new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($2));
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    }
     ;
 
 aggregate_expression:
@@ -761,6 +773,25 @@ condition:
       $$->comp = $2;
       $$->left_is_attr = -1;  // 标记使用表达式
       $$->right_is_attr = -1; // 标记使用表达式
+    }
+    | expression IN LBRACE select_stmt RBRACE
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_expr.reset($1);
+      // 将子查询封装为表达式
+      $$->right_expr.reset(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($4)));
+      $$->comp = IN_OP;
+      $$->left_is_attr = -1;
+      $$->right_is_attr = -1;
+    }
+    | expression NOT IN LBRACE select_stmt RBRACE
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_expr.reset($1);
+      $$->right_expr.reset(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($5)));
+      $$->comp = NOT_IN_OP;
+      $$->left_is_attr = -1;
+      $$->right_is_attr = -1;
     }
     ;
 

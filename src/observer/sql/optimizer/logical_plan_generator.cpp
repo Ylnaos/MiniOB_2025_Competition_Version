@@ -200,7 +200,9 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
       right = make_unique<ValueExpr>(filter_obj_right.value);
     }
 
-    if (left->value_type() != right->value_type()) {
+    if (filter_unit->comp() != IN_OP && filter_unit->comp() != NOT_IN_OP &&
+        left->type() != ExprType::SUBQUERY && right->type() != ExprType::SUBQUERY &&
+        left->value_type() != right->value_type()) {
       auto left_to_right_cost = implicit_cast_cost(left->value_type(), right->value_type());
       auto right_to_left_cost = implicit_cast_cost(right->value_type(), left->value_type());
       if (left_to_right_cost <= right_to_left_cost && left_to_right_cost != INT32_MAX) {
@@ -239,8 +241,14 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
       }
     }
 
-    ComparisonExpr *cmp_expr = new ComparisonExpr(filter_unit->comp(), std::move(left), std::move(right));
-    cmp_exprs.emplace_back(cmp_expr);
+    if (filter_unit->comp() == IN_OP || filter_unit->comp() == NOT_IN_OP) {
+      bool not_in = (filter_unit->comp() == NOT_IN_OP);
+      InExpr *in_expr = new InExpr(std::move(left), std::move(right), not_in);
+      cmp_exprs.emplace_back(in_expr);
+    } else {
+      ComparisonExpr *cmp_expr = new ComparisonExpr(filter_unit->comp(), std::move(left), std::move(right));
+      cmp_exprs.emplace_back(cmp_expr);
+    }
   }
 
   unique_ptr<PredicateLogicalOperator> predicate_oper;

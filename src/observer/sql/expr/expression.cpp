@@ -16,6 +16,13 @@ See the Mulan PSL v2 for more details. */
 #include "common/type/attr_type.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include "event/sql_debug.h"
+#include "sql/parser/parse_defs.h"
+#include "sql/stmt/select_stmt.h"
+#include "sql/stmt/stmt.h"
+#include "sql/optimizer/logical_plan_generator.h"
+#include "sql/optimizer/physical_plan_generator.h"
+#include "session/session.h"
 
 using namespace std;
 
@@ -266,6 +273,58 @@ RC ComparisonExpr::try_get_value(Value &cell) const
 
 RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
 {
+  // 特化处理：当一侧为子查询时，支持：
+  // 1) 标量子查询（0或1行）直接比较；
+  // 2) 多行单列 + EQUAL/NOT_EQUAL：按 IN/NOT IN 语义比较；
+  // 其它比较符号 + 多行：报错。
+  if (left_->type() == ExprType::SUBQUERY || right_->type() == ExprType::SUBQUERY) {
+    const bool left_is_subq  = left_->type() == ExprType::SUBQUERY;
+    const bool right_is_subq = right_->type() == ExprType::SUBQUERY;
+    if (left_is_subq && right_is_subq) {
+      LOG_WARN("comparison between two subqueries is not supported");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    RC rc = RC::SUCCESS;
+    SubqueryExpr *subq = static_cast<SubqueryExpr *>(left_is_subq ? left_.get() : right_.get());
+    rc                 = subq->execute_once();
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    const auto &vals = subq->results();
+
+    // 获取另一侧值
+    Value other_val;
+    rc = (left_is_subq ? right_->get_value(tuple, other_val) : left_->get_value(tuple, other_val));
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to get value of non-subquery expression. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    // 空集合：比较结果恒为 false
+    if (vals.empty()) {
+      value.set_boolean(false);
+      return RC::SUCCESS;
+    }
+
+    // 单行：标量比较
+    if (vals.size() == 1) {
+      bool bool_value = false;
+      rc              = left_is_subq ? compare_value(vals[0], other_val, bool_value)
+                                     : compare_value(other_val, vals[0], bool_value);
+      if (OB_SUCC(rc)) {
+        value.set_boolean(bool_value);
+      }
+      return rc;
+    }
+
+    // 多行：不允许用于标量比较（题目要求：不能把多行标量子查询当成多个值比较）
+    LOG_WARN("scalar subquery returned more than one row: %zu", vals.size());
+    sql_debug("scalar subquery returned more than one row: %zu", vals.size());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 非子查询路径：按标量比较
   Value left_value;
   Value right_value;
 
@@ -744,4 +803,277 @@ RC AggregateExpr::type_from_string(const char *type_str, AggregateExpr::Type &ty
     rc = RC::INVALID_ARGUMENT;
   }
   return rc;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// SubqueryExpr
+
+SubqueryExpr::SubqueryExpr(std::unique_ptr<ParsedSqlNode> subquery_node)
+    : subquery_node_(std::move(subquery_node))
+{
+}
+
+SubqueryExpr::SubqueryExpr(const std::vector<Value> &cached_results, AttrType result_type, int result_len)
+    : executed_(true), results_(cached_results), result_type_(result_type), result_len_(result_len)
+{
+}
+
+unique_ptr<Expression> SubqueryExpr::copy() const
+{
+  if (executed_) {
+    return make_unique<SubqueryExpr>(results_, result_type_, result_len_);
+  }
+  // 深拷贝解析节点
+  std::unique_ptr<ParsedSqlNode> copied;
+  if (subquery_node_) {
+    copied = deep_copy_parsed_node(*subquery_node_);
+  }
+  return make_unique<SubqueryExpr>(std::move(copied));
+}
+
+RC SubqueryExpr::execute_once() const
+{
+  if (executed_) {
+    return RC::SUCCESS;
+  }
+  if (!subquery_node_ || subquery_node_->flag != SCF_SELECT) {
+    LOG_WARN("subquery node invalid or not select");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Session *session = Session::current_session();
+  if (session == nullptr) {
+    LOG_WARN("no current session to execute subquery");
+    return RC::INTERNAL;
+  }
+
+  Db *db = session->get_current_db();
+  if (db == nullptr) {
+    LOG_WARN("no current db to execute subquery");
+    return RC::INTERNAL;
+  }
+
+  // 创建 SelectStmt
+  Stmt *stmt = nullptr;
+  RC rc = Stmt::create_stmt(db, *subquery_node_, stmt);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to create stmt for subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  std::unique_ptr<Stmt> stmt_guard(stmt);
+  auto *select_stmt = dynamic_cast<SelectStmt *>(stmt);
+  if (select_stmt == nullptr) {
+    LOG_WARN("subquery is not select stmt");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 生成逻辑/物理计划
+  std::unique_ptr<LogicalOperator> logical_oper;
+  LogicalPlanGenerator              logical_gen;
+  rc = logical_gen.create(select_stmt, logical_oper);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create logical plan for subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  std::unique_ptr<PhysicalOperator> physical_oper;
+  PhysicalPlanGenerator             physical_gen;
+  rc = physical_gen.create(*logical_oper, physical_oper, session);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to create physical plan for subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  // 打开并执行
+  rc = physical_oper->open(session->current_trx());
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to open physical operator for subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  // 校验仅一列输出
+  TupleSchema schema;
+  rc = physical_oper->tuple_schema(schema);
+  if (OB_FAIL(rc)) {
+    // 有些物理算子可能未实现 tuple_schema，这种情况下通过首行推断
+    LOG_TRACE("tuple_schema not provided, will infer from first row");
+  }
+
+  bool schema_checked = false;
+  if (rc == RC::SUCCESS && schema.cell_num() > 0) {
+    if (schema.cell_num() != 1) {
+      physical_oper->close();
+      LOG_WARN("subquery must return exactly one column");
+      sql_debug("subquery must return exactly one column");
+      return RC::INVALID_ARGUMENT;
+    }
+    schema_checked = true;
+  }
+
+  results_.clear();
+
+  while ((rc = physical_oper->next()) == RC::SUCCESS) {
+    Tuple *tuple = physical_oper->current_tuple();
+    if (tuple == nullptr) {
+      rc = RC::INTERNAL;
+      LOG_WARN("null tuple from subquery operator");
+      break;
+    }
+    if (!schema_checked && tuple->cell_num() != 1) {
+      LOG_WARN("subquery must return exactly one column");
+      sql_debug("subquery must return exactly one column");
+      rc = RC::INVALID_ARGUMENT;
+      break;
+    }
+
+    Value cell;
+    rc = tuple->cell_at(0, cell);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to get cell from subquery tuple. rc=%s", strrc(rc));
+      break;
+    }
+    results_.push_back(cell);
+  }
+
+  if (rc == RC::RECORD_EOF) {
+    rc = RC::SUCCESS;
+  }
+
+  physical_oper->close();
+
+  // 记录结果类型
+  if (!results_.empty()) {
+    result_type_ = results_.front().attr_type();
+    result_len_  = results_.front().length();
+  } else {
+    // 没有结果，默认类型沿用 UNDEFINED
+    result_type_ = AttrType::UNDEFINED;
+    result_len_  = -1;
+  }
+
+  executed_ = true;
+  return rc;
+}
+
+RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  RC rc = execute_once();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  if (results_.size() == 0) {
+    // 标量上下文中，空结果当做 NULL
+    value.set_null();
+    return RC::SUCCESS;
+  }
+  if (results_.size() > 1) {
+    LOG_WARN("scalar subquery returned more than one row: %zu", results_.size());
+    sql_debug("scalar subquery returned more than one row: %zu", results_.size());
+    return RC::INVALID_ARGUMENT;
+  }
+  value = results_[0];
+  return RC::SUCCESS;
+}
+
+std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node(const ParsedSqlNode &node) const
+{
+  auto copied = std::make_unique<ParsedSqlNode>(node.flag);
+  if (node.flag == SCF_SELECT) {
+    // 深拷贝 SelectSqlNode
+    const SelectSqlNode &src = node.selection;
+    SelectSqlNode       &dst = copied->selection;
+
+    // expressions
+    for (const auto &expr_ptr : src.expressions) {
+      if (expr_ptr) {
+        dst.expressions.emplace_back(expr_ptr->copy());
+      }
+    }
+    // relations
+    dst.relations = src.relations;
+    // conditions
+    dst.conditions.reserve(src.conditions.size());
+    for (const auto &cond : src.conditions) {
+      ConditionSqlNode new_cond;
+      new_cond.left_is_attr  = cond.left_is_attr;
+      new_cond.right_is_attr = cond.right_is_attr;
+      new_cond.left_value    = cond.left_value;
+      new_cond.right_value   = cond.right_value;
+      new_cond.left_attr     = cond.left_attr;
+      new_cond.right_attr    = cond.right_attr;
+      new_cond.comp          = cond.comp;
+
+      if (cond.left_expr) {
+        new_cond.left_expr.reset(cond.left_expr->copy().release());
+      }
+      if (cond.right_expr) {
+        new_cond.right_expr.reset(cond.right_expr->copy().release());
+      }
+      dst.conditions.emplace_back(std::move(new_cond));
+    }
+    // group by
+    for (const auto &grp : src.group_by) {
+      if (grp) {
+        dst.group_by.emplace_back(grp->copy());
+      }
+    }
+    // order by
+    for (const auto &ord : src.order_by) {
+      OrderBySqlNode item;
+      item.asc = ord.asc;
+      if (ord.expression) {
+        item.expression.reset(ord.expression->copy().release());
+      }
+      dst.order_by.emplace_back(std::move(item));
+    }
+  }
+  return copied;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// InExpr
+
+RC InExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  // 求左值
+  Value left_val;
+  RC rc = test_expr_->get_value(tuple, left_val);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  if (left_val.is_null()) {
+    // 简化处理：NULL 与集合比较为 false（与标准 SQL 的三值逻辑可能不同）
+    value.set_boolean(false);
+    return RC::SUCCESS;
+  }
+
+  // 右值应为子查询表达式
+  if (set_expr_->type() != ExprType::SUBQUERY) {
+    LOG_WARN("IN operator's right expr should be a subquery");
+    return RC::INVALID_ARGUMENT;
+  }
+  auto *subq = static_cast<SubqueryExpr *>(set_expr_.get());
+  rc = subq->execute_once();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  bool found = false;
+  const auto &vals = subq->results();
+  for (const auto &rv : vals) {
+    if (rv.is_null()) {
+      continue; // 忽略 NULL
+    }
+    if (left_val.compare(rv) == 0) {
+      found = true;
+      break;
+    }
+  }
+
+  bool result = not_in_ ? !found : found;
+  value.set_boolean(result);
+  return RC::SUCCESS;
 }
