@@ -201,7 +201,7 @@ RC HeapTableEngine::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadW
   return rc;
 }
 
-RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name)
+RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name, bool unique)
 {
   if (common::is_blank(index_name) || nullptr == field_meta) {
     LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or attribute_name is blank", table_meta_->name());
@@ -210,7 +210,7 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
 
   IndexMeta new_index_meta;
 
-  RC rc = new_index_meta.init(index_name, *field_meta);
+  RC rc = new_index_meta.init(index_name, *field_meta, unique);
   if (rc != RC::SUCCESS) {
     LOG_INFO("Failed to init IndexMeta in table:%s, index_name:%s, field_name:%s", 
              table_meta_->name(), index_name, field_meta->name());
@@ -243,6 +243,14 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
     if (rc != RC::SUCCESS) {
       LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
                table_meta_->name(), index_name, strrc(rc));
+      // cleanup index resources before return
+      scanner->close_scan();
+      delete scanner;
+      index->close();
+      delete index;
+      // best-effort: remove the index file to avoid orphan
+      string index_file_rm = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+      ::remove(index_file_rm.c_str());
       return rc;
     }
   }

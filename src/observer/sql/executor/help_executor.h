@@ -36,6 +36,7 @@ public:
         "desc `table name`;",
         "create table `table name` (`column name` `column type`, ...);",
         "create index `index name` on `table` (`column`);",
+        "create unique index `index name` on `table` (`column`);",
         "insert into `table` values(`value1`,`value2`);",
         "update `table` set column=value [where `column`=`value`];",
         "delete from `table` [where `column`=`value`];",
