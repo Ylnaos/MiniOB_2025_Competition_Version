@@ -114,6 +114,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         KEY
         IN
         NOT
+        IS
         ANALYZE
         FIELDS
         TERMINATED
@@ -798,6 +799,27 @@ condition:
       $$->comp = $2;
       $$->left_is_attr = -1;  // 标记使用表达式
       $$->right_is_attr = -1; // 标记使用表达式
+    }
+    | expression IS NULL_T
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_expr.reset($1);
+      // 右侧使用一个 NULL 常量占位，便于后续统一处理
+      Value __v; __v.set_null();
+      $$->right_expr.reset(new ValueExpr(__v));
+      $$->comp = IS_NULL;
+      $$->left_is_attr  = -1;
+      $$->right_is_attr = -1;
+    }
+    | expression IS NOT NULL_T
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_expr.reset($1);
+      Value __v; __v.set_null();
+      $$->right_expr.reset(new ValueExpr(__v));
+      $$->comp = IS_NOT_NULL;
+      $$->left_is_attr  = -1;
+      $$->right_is_attr = -1;
     }
     | expression IN LBRACE select_stmt RBRACE
     {

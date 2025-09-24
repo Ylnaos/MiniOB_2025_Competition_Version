@@ -207,6 +207,7 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
     }
 
     if (filter_unit->comp() != IN_OP && filter_unit->comp() != NOT_IN_OP &&
+        filter_unit->comp() != IS_NULL && filter_unit->comp() != IS_NOT_NULL &&
         left->type() != ExprType::SUBQUERY && right->type() != ExprType::SUBQUERY &&
         left->value_type() != right->value_type()) {
       auto left_to_right_cost = implicit_cast_cost(left->value_type(), right->value_type());

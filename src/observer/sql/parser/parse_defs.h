@@ -54,6 +54,8 @@ enum CompOp
   LIKE_OP,      ///< "LIKE"
   IN_OP,        ///< "IN (subquery)"
   NOT_IN_OP,    ///< "NOT IN (subquery)"
+  IS_NULL,      ///< "IS NULL"
+  IS_NOT_NULL,  ///< "IS NOT NULL"
   NO_OP
 };
 

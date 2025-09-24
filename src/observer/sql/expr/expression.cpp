@@ -152,6 +152,16 @@ RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &re
   RC  rc         = RC::SUCCESS;
   result         = false;
 
+  // IS NULL / IS NOT NULL: 仅依据左值是否为 NULL 判断
+  if (comp_ == IS_NULL) {
+    result = left.is_null();
+    return RC::SUCCESS;
+  }
+  if (comp_ == IS_NOT_NULL) {
+    result = !left.is_null();
+    return RC::SUCCESS;
+  }
+
   // 澶勭悊NULL鍊兼瘮杈冿細NULL涓庝换浣曞€兼瘮杈冮兘杩斿洖false锛堝寘鎷琋ULL = NULL锛?
 if (left.is_null() || right.is_null()) {
     result = false;
@@ -273,6 +283,19 @@ RC ComparisonExpr::try_get_value(Value &cell) const
 
 RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
 {
+  // IS NULL / IS NOT NULL：无需读取右操作数
+  if (comp_ == IS_NULL || comp_ == IS_NOT_NULL) {
+    Value left_value;
+    RC rc = left_->get_value(tuple, left_value);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to get value of left expression. rc=%s", strrc(rc));
+      return rc;
+    }
+    bool bool_value = (comp_ == IS_NULL) ? left_value.is_null() : !left_value.is_null();
+    value.set_boolean(bool_value);
+    return RC::SUCCESS;
+  }
+
   // 鐗瑰寲澶勭悊锛氬綋涓€渚т负瀛愭煡璇㈡椂锛屾敮鎸侊細
   // 1) 鏍囬噺瀛愭煡璇紙0鎴?琛岋級鐩存帴姣旇緝锛?  // 2) 澶氳鍗曞垪 + EQUAL/NOT_EQUAL锛氭寜 IN/NOT IN 璇箟姣旇緝锛?  // 鍏跺畠姣旇緝绗﹀彿 + 澶氳锛氭姤閿欍€?
 if (left_->type() == ExprType::SUBQUERY || right_->type() == ExprType::SUBQUERY) {
@@ -387,6 +410,18 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     LOG_WARN("failed to get value of left expression. rc=%s", strrc(rc));
     return rc;
   }
+
+  // IS NULL / IS NOT NULL：仅基于左列的空值位进行判断
+  if (comp_ == IS_NULL || comp_ == IS_NOT_NULL) {
+    int rows = (left_column.column_type() == Column::Type::CONSTANT_COLUMN) ? select.size() : left_column.count();
+    for (int i = 0; i < rows; ++i) {
+      Value lval = left_column.get_value(i);
+      bool res = (comp_ == IS_NULL) ? lval.is_null() : !lval.is_null();
+      select[i] &= res ? 1 : 0;
+    }
+    return RC::SUCCESS;
+  }
+
   rc = right_->get_column(chunk, right_column);
   if (rc != RC::SUCCESS) {
     LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
