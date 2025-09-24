@@ -66,7 +66,17 @@ public:
 
   int operator()(const char *v1, const char *v2) const
   {
-    // TODO: optimized the comparison
+    // 对索引键使用稳定的二进制比较，避免 CHARS 类型下 strncmp 遇到'\0'提前终止导致比较错误
+    // 说明：B+树内部将所有索引键按定长字节序进行比较(包含复合键的 order-preserving 编码)，
+    // 这里使用 memcmp 可确保键值的全字节参与比较，保障 UNIQUE 检查与范围扫描的正确性。
+    if (attr_type_ == AttrType::CHARS) {
+      int cmp = memcmp(v1, v2, attr_length_);
+      if (cmp < 0) return -1;
+      if (cmp > 0) return 1;
+      return 0;
+    }
+
+    // 其它类型保持原有语义
     Value left;
     left.set_type(attr_type_);
     left.set_data(v1, attr_length_);

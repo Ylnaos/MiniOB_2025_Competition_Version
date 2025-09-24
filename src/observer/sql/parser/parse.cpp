@@ -15,6 +15,183 @@ See the Mulan PSL v2 for more details. */
 #include "sql/parser/parse.h"
 #include "common/log/log.h"
 #include "sql/expr/expression.h"
+#include <string>
+#include <algorithm>
+#include <cctype>
+#include <vector>
+
+using std::string;
+
+// 简单工具: 全部转小写的拷贝
+static inline string to_lower_copy(const string &s)
+{
+  string t = s;
+  std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) { return std::tolower(c); });
+  return t;
+}
+
+// 去左右空白
+static inline string trim(const string &s)
+{
+  size_t l = 0, r = s.size();
+  while (l < r && std::isspace(static_cast<unsigned char>(s[l]))) l++;
+  while (r > l && std::isspace(static_cast<unsigned char>(s[r - 1]))) r--;
+  return s.substr(l, r - l);
+}
+
+// 从 pos 开始，跳过空白
+static inline void skip_spaces(const string &s, size_t &pos)
+{
+  while (pos < s.size() && std::isspace(static_cast<unsigned char>(s[pos]))) pos++;
+}
+
+// 读取一个简单的标识符(表名.列名 也一并当作标识符)，由字母/数字/下划线/点构成
+static inline string read_identifier(const string &s, size_t &pos)
+{
+  skip_spaces(s, pos);
+  size_t start = pos;
+  while (pos < s.size()) {
+    char c = s[pos];
+    if (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.') {
+      pos++;
+    } else {
+      break;
+    }
+  }
+  return trim(s.substr(start, pos - start));
+}
+
+// 在 FROM ... 子句范围内，将 INNER JOIN / JOIN 语法改写为 逗号分隔 + WHERE 条件
+// 仅做轻量、保守的改写，满足比赛用例(多表、多 ON 条件，AND 连接)。
+static string rewrite_join_to_where(const string &sql)
+{
+  string lower = to_lower_copy(sql);
+
+  // 查找 FROM 位置
+  size_t from_kw = lower.find(" from ");
+  if (from_kw == string::npos) {
+    return sql; // 非 SELECT 或无 FROM，原样返回
+  }
+
+  size_t from_pos = from_kw + 6; // 跳过 " from "
+
+  // 定位 FROM 子句结束(WHERE/GROUP/ORDER/; 之一)
+  size_t end_pos = lower.size();
+  for (const char *kw : {" where ", " group ", " order ", ";"}) {
+    size_t p = lower.find(kw, from_pos);
+    if (p != string::npos) end_pos = std::min(end_pos, p);
+  }
+
+  string head = sql.substr(0, from_kw + 6);           // 含 "FROM "
+  string from_section = sql.substr(from_pos, end_pos - from_pos);
+  string tail = sql.substr(end_pos);                   // 余下部分(可能含 WHERE/GROUP/ORDER)
+
+  string from_lower = to_lower_copy(from_section);
+
+  // 快速判断是否包含 join
+  if (from_lower.find(" join ") == string::npos) {
+    return sql; // 无 JOIN，原样返回
+  }
+
+  // 解析 FROM 段，收集表名与 ON 条件
+  std::vector<string> tables;
+  std::vector<string> join_conds;
+
+  size_t pos = 0;
+  // 可能已有逗号分隔的表
+  while (pos < from_section.size()) {
+    string tbl = read_identifier(from_section, pos);
+    if (!tbl.empty()) tables.push_back(tbl);
+    skip_spaces(from_section, pos);
+    if (pos >= from_section.size()) break;
+
+    // 检测是否为逗号继续的表
+    if (from_section[pos] == ',') {
+      pos++;
+      continue;
+    }
+
+    // 尝试解析 [INNER] JOIN
+    string rest_lower = to_lower_copy(from_section.substr(pos));
+    size_t inner_pos = string::npos;
+
+    inner_pos = rest_lower.find("inner ");
+    if (inner_pos == 0) {
+      // 有 INNER 关键字
+      size_t after_inner = pos + 6; // skip "inner "
+      string rest2_lower = to_lower_copy(from_section.substr(after_inner));
+      if (rest2_lower.find("join ") == 0) {
+        // 匹配 INNER JOIN
+        pos = after_inner + 5; // 跳过 "join "
+      } else {
+        break; // 非 join 语法，停止改写
+      }
+    } else if (rest_lower.find("join ") == 0) {
+      pos += 5; // 跳过 "join "
+    } else {
+      // 不是 join，退出循环
+      break;
+    }
+
+    // 读取被 join 的表名
+    string right_tbl = read_identifier(from_section, pos);
+    if (!right_tbl.empty()) tables.push_back(right_tbl);
+
+    // 期望 ON
+    string after_tbl_lower = to_lower_copy(from_section.substr(pos));
+    if (after_tbl_lower.find(" on ") != 0) {
+      // 没有 ON，停止改写
+      break;
+    }
+    pos += 4; // 跳过 " on "
+
+    // 提取 ON 条件，直到下一个 JOIN 或 FROM 结束
+    size_t next_join_rel = string::npos;
+    string remain_lower = to_lower_copy(from_section.substr(pos));
+    size_t j1 = remain_lower.find(" join ");
+    size_t j2 = remain_lower.find(" inner "); // 可能后面跟 join
+    if (j1 != string::npos) next_join_rel = j1;
+    if (j2 != string::npos) next_join_rel = (next_join_rel == string::npos) ? j2 : std::min(next_join_rel, j2);
+
+    size_t cond_end_in_from = (next_join_rel == string::npos) ? from_section.size() : (pos + next_join_rel);
+    string cond = trim(from_section.substr(pos, cond_end_in_from - pos));
+    if (!cond.empty()) join_conds.push_back(cond);
+    pos = cond_end_in_from; // 继续后续 join 解析
+  }
+
+  if (join_conds.empty()) {
+    // 没有成功改写的 join 条件，保守起见返回原 SQL
+    return sql;
+  }
+
+  // 组装新的 FROM 子句(逗号分隔)
+  string new_from;
+  for (size_t i = 0; i < tables.size(); i++) {
+    if (i > 0) new_from += ", ";
+    new_from += tables[i];
+  }
+
+  // 将 join 条件合并进 WHERE
+  string cond_all;
+  for (size_t i = 0; i < join_conds.size(); i++) {
+    if (i > 0) cond_all += " AND ";
+    cond_all += join_conds[i];
+  }
+
+  string tail_lower = to_lower_copy(tail);
+  string result;
+  size_t where_in_tail = tail_lower.find(" where ");
+  if (where_in_tail != string::npos) {
+    // 在既有 WHERE 后拼接 AND (join_conds) ，尽量简洁拼接
+    size_t where_real = where_in_tail + 7; // 跳过 " where "
+    result = head + new_from + tail.substr(0, where_real) + "(" + cond_all + ") AND " + tail.substr(where_real);
+  } else {
+    // 无 WHERE，直接追加
+    result = head + new_from + " WHERE " + cond_all + tail;
+  }
+
+  return result;
+}
 
 RC parse(char *st, ParsedSqlNode *sqln);
 
@@ -33,6 +210,10 @@ int sql_parse(const char *st, ParsedSqlResult *sql_result);
 
 RC parse(const char *st, ParsedSqlResult *sql_result)
 {
-  sql_parse(st, sql_result);
+  // 在进入 yacc/flex 解析前，将 INNER JOIN / JOIN 改写为 逗号+WHERE 以复用已有语法树与执行路径
+  // 仅在检测到 JOIN 关键词时进行改写，其余 SQL 原样转发。
+  string sql_text(st);
+  string sql_rewritten = rewrite_join_to_where(sql_text);
+  sql_parse(sql_rewritten.c_str(), sql_result);
   return RC::SUCCESS;
 }
