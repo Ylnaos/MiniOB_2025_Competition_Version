@@ -40,8 +40,7 @@ RC HeapTableEngine::insert_record(Record &record)
 {
   RC rc = RC::SUCCESS;
 
-  // 1) 先基�?UNIQUE 索引做重复检查，避免写入后回�?
-if (!indexes_.empty()) {
+  // 1) 先基�?UNIQUE 索引做重复检查，避免写入后回�?  if (!indexes_.empty()) {
     auto build_user_key = [&](const Index *index, vector<char> &out_key) {
       int total_len = 0;
       for (const FieldMeta &fm : index->key_fields()) {
@@ -100,16 +99,19 @@ if (!indexes_.empty()) {
       IndexScanner *scanner = index->create_scanner(user_key.data(), static_cast<int>(user_key.size()), true,
                                                     user_key.data(), static_cast<int>(user_key.size()), true);
       if (scanner == nullptr) {
-        // 扫描器打开失败（可能是空树/瞬时锁），保守放行，由索引层再次兜底检查�?
-LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
+        // 扫描器打开失败（可能是空树/瞬时锁），保守放行，由索引层再次兜底检查�?        LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
                   table_meta_->name(), index->index_meta().name());
         continue;
       }
       RID exist;
       rc = scanner->next_entry(&exist);
       scanner->destroy();
-      // do not short-circuit here; let index enforce uniqueness precisely
-      rc = RC::SUCCESS;
+      if (rc == RC::SUCCESS) {
+        return RC::RECORD_DUPLICATE_KEY;
+      }
+      if (rc != RC::RECORD_EOF && rc != RC::SUCCESS) {
+        // 其他返回码（�?LOCKED_NEED_WAIT），不当作错误，交给后续索引层兜底�?        rc = RC::SUCCESS;
+      }
     }
   }
 
@@ -122,8 +124,7 @@ LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
 
   // 3) 维护索引
   rc = insert_entry_of_indexes(record.data(), record.rid());
-  if (rc != RC::SUCCESS) {  // 可能出现了键值重�?
-RC rc2 = delete_entry_of_indexes(record.data(), record.rid(), false /*error_on_not_exists*/);
+  if (rc != RC::SUCCESS) {  // 可能出现了键值重�?    RC rc2 = delete_entry_of_indexes(record.data(), record.rid(), false /*error_on_not_exists*/);
     if (rc2 != RC::SUCCESS) {
       LOG_ERROR("Failed to rollback index data when insert index entries failed. table name=%s, rc=%d:%s",
                 table_meta_->name(), rc2, strrc(rc2));
@@ -183,14 +184,12 @@ RC HeapTableEngine::update_record_with_trx(const Record &old_record, const Recor
 {
   RC rc = RC::SUCCESS;
 
-  // 首先删除旧的索引�?
-for (Index *index : indexes_) {
+  // 首先删除旧的索引�?  for (Index *index : indexes_) {
     rc = index->delete_entry(old_record.data(), &old_record.rid());
     if (rc != RC::SUCCESS && rc != RC::RECORD_NOT_EXIST) {
       LOG_ERROR("failed to delete old entry from index. table name=%s, index name=%s, rid=%s, rc=%s",
                 table_meta_->name(), index->index_meta().name(), old_record.rid().to_string().c_str(), strrc(rc));
-      // 回滚已经删除的索�?
-for (Index *rollback_index : indexes_) {
+      // 回滚已经删除的索�?      for (Index *rollback_index : indexes_) {
         if (rollback_index == index) {
           break;
         }
@@ -220,8 +219,7 @@ for (Index *rollback_index : indexes_) {
     return rc;
   }
 
-  // 插入新的索引�?
-for (Index *index : indexes_) {
+  // 插入新的索引�?  for (Index *index : indexes_) {
     rc = index->insert_entry(new_record.data(), &new_record.rid());
     if (rc != RC::SUCCESS) {
       LOG_ERROR("failed to insert new entry to index. table name=%s, index name=%s, rid=%s, rc=%s",
@@ -351,8 +349,7 @@ RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, co
     return rc;
   }
 
-  /// 内存中有一份元数据，磁盘文件也有一份元数据。修改磁盘文件时，先创建一个临时文件，写入完成后再rename为正式文�?  /// 这样可以防止文件内容不完�?  // 创建元数据临时文�?
-string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
+  /// 内存中有一份元数据，磁盘文件也有一份元数据。修改磁盘文件时，先创建一个临时文件，写入完成后再rename为正式文�?  /// 这样可以防止文件内容不完�?  // 创建元数据临时文�?  string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
   fstream fs;
   fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
   if (!fs.is_open()) {
@@ -365,8 +362,7 @@ string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + "
   }
   fs.close();
 
-  // 覆盖原始元数据文�?
-string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
+  // 覆盖原始元数据文�?  string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
 
   int ret = rename(tmp_file.c_str(), meta_file.c_str());
   if (ret != 0) {
