@@ -1841,13 +1841,48 @@ RC BplusTreeScanner::open(const char *left_user_key, int left_len, bool left_inc
   LatchMemo &latch_memo = mtr_.latch_memo();
 
   // 校验输入的键值是否是合法范围
+  // 注意：这里传入的 user_key 可能不是按 attr_length 固定长度的缓冲区（如字符串按实际长度给出），
+  // 直接用 attr_comparator 做 memcmp(attr_length) 会越界。需要先将两端 user_key 规整为索引键长度。
   if (left_user_key && right_user_key) {
     const auto &attr_comparator = tree_handler_.key_comparator_.attr_comparator();
-    const int   result          = attr_comparator(left_user_key, right_user_key);
-    if (result > 0 ||  // left < right
-                       // left == right but is (left,right)/[left,right) or (left,right]
-        (result == 0 && (left_inclusive == false || right_inclusive == false))) {
-      return RC::INVALID_ARGUMENT;
+
+    if (tree_handler_.file_header_.attr_type == AttrType::CHARS) {
+      // 为字符串边界构造与后续扫描一致的定长键，并同步包含性修正，再做比较
+      char *fixed_left  = const_cast<char *>(left_user_key);
+      char *fixed_right = const_cast<char *>(right_user_key);
+      bool  left_inc_fix  = false;
+      bool  right_inc_fix = false;
+
+      RC rc_fix = fix_user_key(left_user_key, left_len, true /*want_greater*/, &fixed_left, &left_inc_fix);
+      if (OB_FAIL(rc_fix)) {
+        LOG_WARN("failed to fix left user key for range check. rc=%s", strrc(rc_fix));
+        return rc_fix;
+      }
+      rc_fix = fix_user_key(right_user_key, right_len, false /*want_greater*/, &fixed_right, &right_inc_fix);
+      if (OB_FAIL(rc_fix)) {
+        if (fixed_left != left_user_key) delete[] fixed_left;
+        LOG_WARN("failed to fix right user key for range check. rc=%s", strrc(rc_fix));
+        return rc_fix;
+      }
+
+      bool real_left_inclusive  = left_inclusive  || left_inc_fix;
+      bool real_right_inclusive = right_inclusive || right_inc_fix;
+
+      const int result = attr_comparator(fixed_left, fixed_right);
+
+      if (fixed_left != left_user_key)  delete[] fixed_left;
+      if (fixed_right != right_user_key) delete[] fixed_right;
+
+      if (result > 0 ||
+          (result == 0 && (!real_left_inclusive || !real_right_inclusive))) {
+        return RC::INVALID_ARGUMENT;
+      }
+    } else {
+      const int result = attr_comparator(left_user_key, right_user_key);
+      if (result > 0 ||
+          (result == 0 && (left_inclusive == false || right_inclusive == false))) {
+        return RC::INVALID_ARGUMENT;
+      }
     }
   }
 
