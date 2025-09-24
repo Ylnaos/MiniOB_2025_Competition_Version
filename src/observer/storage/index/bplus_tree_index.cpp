@@ -157,14 +157,25 @@ RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
     build_composite_key(record, key.get());
     std::list<RID> rids;
     RC rc = index_handler_.get_entry(key.get(), key_len, rids);
-    if (rc != RC::SUCCESS) {
-      // if open scanner failed, propagate error (except RECORD_EOF which is treated as empty)
-      if (rc != RC::SUCCESS) {
-        // do nothing
-      }
+    if (rc != RC::SUCCESS && rc != RC::EMPTY) {
+      // 扫描器打开失败(非空树)等异常，保守放行，由真正插入路径再兜底
+      // 这里不直接返回错误，避免将偶发扫描失败当作唯一键冲突
     }
     if (!rids.empty()) {
-      return RC::RECORD_DUPLICATE_KEY;
+      // 为防止边界修正等误差带来的“伪冲突”，对命中的 RID 做二次精准校验：
+      // 逐条取出对应记录，重新编码索引键，与当前待插入键逐字节比较。
+      for (const RID &exist_rid : rids) {
+        Record exist_rec;
+        RC     grc = table_->get_record(exist_rid, exist_rec);
+        if (OB_FAIL(grc)) {
+          continue; // 读取失败则忽略该条，交由后续真正插入时再做一致性校验
+        }
+        std::unique_ptr<char[]> exist_key(new char[key_len]);
+        build_composite_key(exist_rec.data(), exist_key.get());
+        if (memcmp(exist_key.get(), key.get(), key_len) == 0) {
+          return RC::RECORD_DUPLICATE_KEY;
+        }
+      }
     }
   }
   const int key_len = key_attr_length_sum();
