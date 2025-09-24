@@ -66,7 +66,17 @@ public:
 
   int operator()(const char *v1, const char *v2) const
   {
-    // TODO: optimized the comparison
+    // 对于索引内部，CHARS 类型用于承载“序保持编码”的二进制键（包括复合键）。
+    // 这些键可能包含'\0'，不能使用按 C 字符串语义的比较。
+    // 直接按照字节序比较固定长度即可，避免 Value::set_data 对 CHARS 使用 strnlen 的截断行为。
+    if (attr_type_ == AttrType::CHARS) {
+      int r = memcmp(v1, v2, static_cast<size_t>(attr_length_));
+      if (r < 0) return -1;
+      if (r > 0) return 1;
+      return 0;
+    }
+
+    // 其他类型仍然走各自的数据类型比较逻辑
     Value left;
     left.set_type(attr_type_);
     left.set_data(v1, attr_length_);

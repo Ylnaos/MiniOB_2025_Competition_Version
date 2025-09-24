@@ -1548,7 +1548,18 @@ RC BplusTreeHandler::get_entry(const char *user_key, int key_len, list<RID> &rid
   // 针对 CHARS 类型的索引键，user_key 可能是二进制安全的（例如复合键或数值经序保持编码），
   // 不应依赖 C 风格字符串长度。这里严格按照 key_len 作为边界，构造等值范围扫描。
   BplusTreeScanner scanner(*this);
-  RC rc = scanner.open(user_key, key_len, true /*left_inclusive*/, user_key, key_len, true /*right_inclusive*/);
+  // 规范化 user_key 到固定长度，避免边界修正带来的偶发误判
+  const int attr_len = file_header_.attr_length;
+  std::unique_ptr<char[]> fixed(new (std::nothrow) char[attr_len]);
+  if (fixed == nullptr) {
+    return RC::NOMEM;
+  }
+  const int copy_len = (attr_len < key_len ? attr_len : key_len);
+  memcpy(fixed.get(), user_key, copy_len);
+  if (copy_len < attr_len) {
+    memset(fixed.get() + copy_len, 0, attr_len - copy_len);
+  }
+  RC rc = scanner.open(fixed.get(), attr_len, true /*left_inclusive*/, fixed.get(), attr_len, true /*right_inclusive*/);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to open scanner. rc=%s", strrc(rc));
     return rc;

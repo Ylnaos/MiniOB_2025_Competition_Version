@@ -174,52 +174,26 @@ RC MvccTrx::delete_record(Table *table, Record &record)
 
 RC MvccTrx::update_record(Table *table, Record &old_record, Record &new_record)
 {
-  // 更新操作在MVCC中实际上是delete + insert的组合
-  // 首先检查旧记录是否可见并可以被更新
-  Field begin_field;
-  Field end_field;
-  trx_fields(table, begin_field, end_field);
+  // 在MVCC下，更新 = 删除旧版本 + 插入新版本
+  // 直接复用本类的 delete_record/insert_record 逻辑，确保：
+  // - 正确设置 begin_xid/end_xid（负号表示未提交）
+  // - 记录 WAL 日志（插入/删除）
+  // - 将操作加入 operations_，以便提交/回滚统一处理
 
-  RC update_result = RC::SUCCESS;
-
-  // 访问旧记录，检查是否可以更新
-  RC rc = table->visit_record(old_record.rid(), [this, table, &update_result](Record &inplace_record) -> bool {
-    RC rc = this->visit_record(table, inplace_record, ReadWriteMode::READ_WRITE);
-    if (OB_FAIL(rc)) {
-      update_result = rc;
-      return false;
-    }
-    return false; // 不在这里修改，只是检查权限
-  });
-
+  // 先标记旧记录删除（end_xid = -trx_id_）
+  RC rc = delete_record(table, old_record);
   if (OB_FAIL(rc)) {
-    LOG_WARN("failed to visit record. rc=%s", strrc(rc));
-    return rc;
-  }
-
-  if (OB_FAIL(update_result)) {
-    LOG_TRACE("record is not visible for update. rid=%s, rc=%s", old_record.rid().to_string().c_str(), strrc(update_result));
-    return update_result;
-  }
-
-  // 设置新记录的RID与旧记录相同
-  new_record.set_rid(old_record.rid());
-
-  // 更新记录：通过table的update_record_with_trx来处理实际的更新
-  rc = table->update_record_with_trx(old_record, new_record, this);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to update record. table=%s, rid=%s, rc=%s",
+    LOG_WARN("failed to mark old record deleted for update. table=%s, rid=%s, rc=%s",
              table->name(), old_record.rid().to_string().c_str(), strrc(rc));
     return rc;
   }
 
-  // 记录更新操作日志
-  rc = log_handler_.update_record(trx_id_, table, old_record.rid());
-  ASSERT(rc == RC::SUCCESS, "failed to append update record log. trx id=%d, table id=%d, rid=%s, rc=%s",
-         trx_id_, table->table_id(), old_record.rid().to_string().c_str(), strrc(rc));
-
-  // 将更新操作添加到操作列表
-  operations_.push_back(Operation(Operation::Type::UPDATE, table, old_record.rid()));
+  // 再插入新版本（begin_xid = -trx_id_，end_xid = +INF）
+  rc = insert_record(table, new_record);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to insert new version for update. table=%s, rc=%s", table->name(), strrc(rc));
+    return rc;
+  }
 
   return RC::SUCCESS;
 }
