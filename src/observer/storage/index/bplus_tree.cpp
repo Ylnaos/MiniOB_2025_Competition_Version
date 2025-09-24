@@ -1545,6 +1545,8 @@ RC BplusTreeHandler::insert_entry(const char *user_key, const RID *rid)
 
 RC BplusTreeHandler::get_entry(const char *user_key, int key_len, list<RID> &rids)
 {
+  // 针对 CHARS 类型的索引键，user_key 可能是二进制安全的（例如复合键或数值经序保持编码），
+  // 不应依赖 C 风格字符串长度。这里严格按照 key_len 作为边界，构造等值范围扫描。
   BplusTreeScanner scanner(*this);
   RC rc = scanner.open(user_key, key_len, true /*left_inclusive*/, user_key, key_len, true /*right_inclusive*/);
   if (OB_FAIL(rc)) {

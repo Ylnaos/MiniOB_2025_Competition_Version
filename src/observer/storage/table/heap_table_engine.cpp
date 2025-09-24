@@ -39,12 +39,93 @@ HeapTableEngine::~HeapTableEngine()
 RC HeapTableEngine::insert_record(Record &record)
 {
   RC rc = RC::SUCCESS;
-  rc    = record_handler_->insert_record(record.data(), table_meta_->record_size(), &record.rid());
+
+  // 1) 先基于 UNIQUE 索引做重复检查，避免写入后回滚
+  if (!indexes_.empty()) {
+    auto build_user_key = [&](const Index *index, vector<char> &out_key) {
+      int total_len = 0;
+      for (const FieldMeta &fm : index->key_fields()) {
+        total_len += fm.len();
+      }
+      out_key.resize(total_len);
+
+      auto put_be32 = [](uint32_t v, char *out) {
+        out[0] = static_cast<char>((v >> 24) & 0xFF);
+        out[1] = static_cast<char>((v >> 16) & 0xFF);
+        out[2] = static_cast<char>((v >> 8) & 0xFF);
+        out[3] = static_cast<char>(v & 0xFF);
+      };
+
+      int         offset = 0;
+      const char *rec    = record.data();
+      for (const FieldMeta &fm : index->key_fields()) {
+        switch (fm.type()) {
+          case AttrType::INTS:
+          case AttrType::DATES: {
+            int32_t iv = 0;
+            memcpy(&iv, rec + fm.offset(), sizeof(int32_t));
+            uint32_t uv = static_cast<uint32_t>(iv) ^ 0x80000000u;
+            put_be32(uv, out_key.data() + offset);
+            offset += sizeof(int32_t);
+          } break;
+          case AttrType::FLOATS: {
+            uint32_t u = 0;
+            memcpy(&u, rec + fm.offset(), sizeof(uint32_t));
+            if (u & 0x80000000u) { u = ~u; } else { u ^= 0x80000000u; }
+            put_be32(u, out_key.data() + offset);
+            offset += sizeof(uint32_t);
+          } break;
+          case AttrType::BOOLEANS: {
+            int32_t iv = 0;
+            memcpy(&iv, rec + fm.offset(), sizeof(int32_t));
+            uint32_t uv = static_cast<uint32_t>(iv) ^ 0x80000000u;
+            put_be32(uv, out_key.data() + offset);
+            offset += sizeof(int32_t);
+          } break;
+          case AttrType::CHARS:
+          default: {
+            memcpy(out_key.data() + offset, rec + fm.offset(), fm.len());
+            offset += fm.len();
+          } break;
+        }
+      }
+    };
+
+    for (Index *index : indexes_) {
+      if (!index->index_meta().unique()) {
+        continue;
+      }
+      vector<char> user_key;
+      build_user_key(index, user_key);
+      IndexScanner *scanner = index->create_scanner(user_key.data(), static_cast<int>(user_key.size()), true,
+                                                    user_key.data(), static_cast<int>(user_key.size()), true);
+      if (scanner == nullptr) {
+        // 扫描器打开失败（可能是空树/瞬时锁），保守放行，由索引层再次兜底检查。
+        LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
+                  table_meta_->name(), index->index_meta().name());
+        continue;
+      }
+      RID exist;
+      rc = scanner->next_entry(&exist);
+      scanner->destroy();
+      if (rc == RC::SUCCESS) {
+        return RC::RECORD_DUPLICATE_KEY;
+      }
+      if (rc != RC::RECORD_EOF && rc != RC::SUCCESS) {
+        // 其他返回码（如 LOCKED_NEED_WAIT），不当作错误，交给后续索引层兜底。
+        rc = RC::SUCCESS;
+      }
+    }
+  }
+
+  // 2) 写入数据文件
+  rc = record_handler_->insert_record(record.data(), table_meta_->record_size(), &record.rid());
   if (rc != RC::SUCCESS) {
     LOG_ERROR("Insert record failed. table name=%s, rc=%s", table_meta_->name(), strrc(rc));
     return rc;
   }
 
+  // 3) 维护索引
   rc = insert_entry_of_indexes(record.data(), record.rid());
   if (rc != RC::SUCCESS) {  // 可能出现了键值重复
     RC rc2 = delete_entry_of_indexes(record.data(), record.rid(), false /*error_on_not_exists*/);
