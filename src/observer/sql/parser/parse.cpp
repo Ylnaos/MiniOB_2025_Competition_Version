@@ -98,65 +98,65 @@ static string rewrite_join_to_where(const string &sql)
   std::vector<string> join_conds;
 
   size_t pos = 0;
-  // 可能已有逗号分隔的表
+  // 支持逗号分隔的基础表 + 多个连续 join 片段
   while (pos < from_section.size()) {
+    // 若当前位置是 JOIN 片段，则直接解析 JOIN（不要把关键字当作表名）
+    skip_spaces(from_section, pos);
+    string rest_lower = to_lower_copy(from_section.substr(pos));
+    if (rest_lower.rfind("inner join ", 0) == 0 || rest_lower.rfind("join ", 0) == 0) {
+      // 跳过 join 关键字
+      if (rest_lower.rfind("inner join ", 0) == 0) {
+        pos += static_cast<size_t>(11);
+      } else {
+        pos += static_cast<size_t>(5);
+      }
+
+      // 读取被 join 的表名
+      string right_tbl = read_identifier(from_section, pos);
+      if (!right_tbl.empty()) tables.push_back(right_tbl);
+
+      // 期望 ON
+      skip_spaces(from_section, pos);
+      string after_tbl_lower = to_lower_copy(from_section.substr(pos));
+      if (!(after_tbl_lower.rfind("on ", 0) == 0)) {
+        // 没有 ON，停止改写
+        break;
+      }
+      pos += 3; // 跳过 "on "
+
+      // 提取 ON 条件，直到下一个 JOIN 或 FROM 结束
+      size_t next_join_rel = string::npos;
+      string remain_lower  = to_lower_copy(from_section.substr(pos));
+      size_t j1 = remain_lower.find(" join ");
+      size_t j2 = remain_lower.find(" inner ");
+      if (j1 != string::npos) next_join_rel = j1;
+      if (j2 != string::npos) next_join_rel = (next_join_rel == string::npos) ? j2 : std::min(next_join_rel, j2);
+
+      size_t cond_end_in_from = (next_join_rel == string::npos) ? from_section.size() : (pos + next_join_rel);
+      string cond = trim(from_section.substr(pos, cond_end_in_from - pos));
+      if (!cond.empty()) join_conds.push_back(cond);
+      pos = cond_end_in_from; // 继续后续 join 解析
+      continue;
+    }
+
+    // 否则解析基础表（可能有逗号分隔）
     string tbl = read_identifier(from_section, pos);
     if (!tbl.empty()) tables.push_back(tbl);
     skip_spaces(from_section, pos);
     if (pos >= from_section.size()) break;
-
-    // 检测是否为逗号继续的表
     if (from_section[pos] == ',') {
       pos++;
       continue;
     }
-
-    // 尝试解析 [INNER] JOIN
-    string rest_lower = to_lower_copy(from_section.substr(pos));
-    size_t inner_pos = string::npos;
-
-    inner_pos = rest_lower.find("inner ");
-    if (inner_pos == 0) {
-      // 有 INNER 关键字
-      size_t after_inner = pos + 6; // skip "inner "
-      string rest2_lower = to_lower_copy(from_section.substr(after_inner));
-      if (rest2_lower.find("join ") == 0) {
-        // 匹配 INNER JOIN
-        pos = after_inner + 5; // 跳过 "join "
-      } else {
-        break; // 非 join 语法，停止改写
+    // 若后续是 join 关键字，则回到循环开头按 join 处理
+    {
+      string lookahead = to_lower_copy(from_section.substr(pos));
+      if (lookahead.rfind("inner join ", 0) == 0 || lookahead.rfind("join ", 0) == 0) {
+        continue;
       }
-    } else if (rest_lower.find("join ") == 0) {
-      pos += 5; // 跳过 "join "
-    } else {
-      // 不是 join，退出循环
-      break;
     }
-
-    // 读取被 join 的表名
-    string right_tbl = read_identifier(from_section, pos);
-    if (!right_tbl.empty()) tables.push_back(right_tbl);
-
-    // 期望 ON
-    string after_tbl_lower = to_lower_copy(from_section.substr(pos));
-    if (after_tbl_lower.find(" on ") != 0) {
-      // 没有 ON，停止改写
-      break;
-    }
-    pos += 4; // 跳过 " on "
-
-    // 提取 ON 条件，直到下一个 JOIN 或 FROM 结束
-    size_t next_join_rel = string::npos;
-    string remain_lower = to_lower_copy(from_section.substr(pos));
-    size_t j1 = remain_lower.find(" join ");
-    size_t j2 = remain_lower.find(" inner "); // 可能后面跟 join
-    if (j1 != string::npos) next_join_rel = j1;
-    if (j2 != string::npos) next_join_rel = (next_join_rel == string::npos) ? j2 : std::min(next_join_rel, j2);
-
-    size_t cond_end_in_from = (next_join_rel == string::npos) ? from_section.size() : (pos + next_join_rel);
-    string cond = trim(from_section.substr(pos, cond_end_in_from - pos));
-    if (!cond.empty()) join_conds.push_back(cond);
-    pos = cond_end_in_from; // 继续后续 join 解析
+    // 否则结束解析
+    break;
   }
 
   if (join_conds.empty()) {
@@ -182,9 +182,9 @@ static string rewrite_join_to_where(const string &sql)
   string result;
   size_t where_in_tail = tail_lower.find(" where ");
   if (where_in_tail != string::npos) {
-    // 在既有 WHERE 后拼接 AND (join_conds) ，尽量简洁拼接
+    // 在既有 WHERE 后拼接 AND join_conds（不加括号，避免语法冲突）
     size_t where_real = where_in_tail + 7; // 跳过 " where "
-    result = head + new_from + tail.substr(0, where_real) + "(" + cond_all + ") AND " + tail.substr(where_real);
+    result = head + new_from + tail.substr(0, where_real) + cond_all + " AND " + tail.substr(where_real);
   } else {
     // 无 WHERE，直接追加
     result = head + new_from + " WHERE " + cond_all + tail;
