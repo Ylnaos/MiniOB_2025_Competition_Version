@@ -712,8 +712,12 @@ expression:
     ;
 
 aggregate_expression:
+    /* 允许空参数聚合在语法阶段通过，但记录为0个参数，
+       在语义阶段（binder）统一返回 INVALID_ARGUMENT，从而对外呈现为 FAILURE。 */
     ID LBRACE RBRACE {
-      $$ = create_aggregate_expression($1, new StarExpr(), sql_string, &@$);
+      UnboundAggregateExpr *agg = create_aggregate_expression($1, new ValueExpr(Value()), sql_string, &@$);
+      agg->set_arg_count(0);
+      $$ = agg;
     }
     | ID LBRACE expression RBRACE {
       $$ = create_aggregate_expression($1, $3, sql_string, &@$);
