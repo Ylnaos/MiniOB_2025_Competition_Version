@@ -427,6 +427,21 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
     return rc;
   }
+
+  // If either side is a NULL constant, any comparison (except IS [NOT] NULL handled above)
+  // should yield UNKNOWN -> treated as false for filtering. Do not report type error.
+  if (left_column.attr_type() == AttrType::NULLS || right_column.attr_type() == AttrType::NULLS) {
+    int rows = 0;
+    if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
+      rows = right_column.count();
+    } else {
+      rows = left_column.count();
+    }
+    for (int i = 0; i < rows; ++i) {
+      select[i] &= 0; // UNKNOWN in WHERE -> filtered out
+    }
+    return RC::SUCCESS;
+  }
   if (left_column.attr_type() != right_column.attr_type()) {
     LOG_WARN("cannot compare columns with different types");
     return RC::INTERNAL;
@@ -530,8 +545,23 @@ bool ArithmeticExpr::equal(const Expression &other) const
     return false;
   }
   auto &other_arith_expr = static_cast<const ArithmeticExpr &>(other);
-  return arithmetic_type_ == other_arith_expr.arithmetic_type() && left_->equal(*other_arith_expr.left_) &&
-         right_->equal(*other_arith_expr.right_);
+  // 比较左右子树时需要考虑一元运算（右子树为空）的情况
+  if (arithmetic_type_ != other_arith_expr.arithmetic_type()) {
+    return false;
+  }
+  if (!left_ || !other_arith_expr.left_) {
+    return left_ == nullptr && other_arith_expr.left_ == nullptr;
+  }
+  bool left_eq = left_->equal(*other_arith_expr.left_);
+  bool right_eq = true;
+  if (right_ || other_arith_expr.right_) {
+    if (!right_ || !other_arith_expr.right_) {
+      right_eq = false;
+    } else {
+      right_eq = right_->equal(*other_arith_expr.right_);
+    }
+  }
+  return left_eq && right_eq;
 }
 AttrType ArithmeticExpr::value_type() const
 {
@@ -610,6 +640,31 @@ RC ArithmeticExpr::execute_calc(
 {
   RC rc = RC::SUCCESS;
   switch (type) {
+    case Type::NEGATIVE: {
+      // 一元负号，仅使用左列
+      if (attr_type == AttrType::INTS) {
+        unary_operator<LEFT_CONSTANT, int, NegateOperator>((int *)left.data(), (int *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::FLOATS) {
+        // 保证输入视图为 float
+        std::vector<float> left_buf;
+        const float *      lptr = nullptr;
+        if (left.attr_type() == AttrType::FLOATS) {
+          lptr = reinterpret_cast<const float *>(left.data());
+        } else {
+          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
+          if (LEFT_CONSTANT) {
+            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(left.data());
+            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
+          }
+          lptr = left_buf.data();
+        }
+        unary_operator<LEFT_CONSTANT, float, NegateOperator>(const_cast<float *>(lptr), (float *)result.data(), result.capacity());
+      } else {
+        rc = RC::UNIMPLEMENTED;
+      }
+    } break;
     case Type::ADD: {
       if (attr_type == AttrType::INTS) {
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, AddOperator>(
@@ -770,34 +825,7 @@ RC ArithmeticExpr::execute_calc(
         rc = RC::UNIMPLEMENTED;
       }
       break;
-    case Type::NEGATIVE:
-      if (attr_type == AttrType::INTS) {
-        unary_operator<LEFT_CONSTANT, int, NegateOperator>((int *)left.data(), (int *)result.data(), result.capacity());
-      } else if (attr_type == AttrType::FLOATS) {
-        if (left.attr_type() == AttrType::FLOATS) {
-          unary_operator<LEFT_CONSTANT, float, NegateOperator>(
-              (float *)left.data(), (float *)result.data(), result.capacity());
-        } else {
-          // 将左列 INT 转换为 FLOAT 再取负
-          std::vector<float> left_buf;
-          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
-          if (LEFT_CONSTANT) {
-            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(left.data());
-            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
-          }
-          unary_operator<LEFT_CONSTANT, float, NegateOperator>(
-              left_buf.data(), (float *)result.data(), result.capacity());
-        }
-      } else {
-        rc = RC::UNIMPLEMENTED;
-      }
-      break;
     default: rc = RC::UNIMPLEMENTED; break;
-  }
-  if (rc == RC::SUCCESS) {
-    result.set_count(result.capacity());
   }
   return rc;
 }
@@ -860,14 +888,21 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
   const AttrType target_type = value_type();
 
   if (arithmetic_type_ == Type::NEGATIVE) {
+    const bool left_const = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
     column.init(target_type, left_column.attr_len(), left_column.count());
-    bool left_const = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
     column.set_column_type(left_const ? Column::Type::CONSTANT_COLUMN : Column::Type::NORMAL_COLUMN);
-    rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
+    if (left_const) {
+      rc = execute_calc<true, false>(left_column, right_column, column, arithmetic_type_, target_type);
+    } else {
+      rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
+    }
+    // 结果行数与左列一致
+    column.set_count(left_column.count());
   } else {
-    column.init(target_type, left_column.attr_len(), max(left_column.count(), right_column.count()));
-    bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
-    bool right_const = right_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    const bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    const bool right_const = right_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    const int  rows        = std::max(left_column.count(), right_column.count());
+    column.init(target_type, left_column.attr_len(), rows);
     if (left_const && right_const) {
       column.set_column_type(Column::Type::CONSTANT_COLUMN);
       rc = execute_calc<true, true>(left_column, right_column, column, arithmetic_type_, target_type);
@@ -880,6 +915,12 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
     } else {
       column.set_column_type(Column::Type::NORMAL_COLUMN);
       rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
+    }
+    // 设置结果行数
+    if (left_const && !right_const) {
+      column.set_count(right_column.count());
+    } else {
+      column.set_count(left_column.count());
     }
   }
   return rc;

@@ -49,12 +49,17 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       }
     } break;
 
-    case ExprType::ARITHMETIC: {
+  case ExprType::ARITHMETIC: {
 
       auto &arithmetic_expr = static_cast<ArithmeticExpr &>(expr);
+      // 左子树一定存在
       rc = callback(arithmetic_expr.left());
       if (OB_SUCC(rc)) {
-        rc = callback(arithmetic_expr.right());
+        // 一元负号时右子树为空，需判空再回调，避免解引用空指针导致崩溃
+        auto &right = arithmetic_expr.right();
+        if (right) {
+          rc = callback(right);
+        }
       }
     } break;
 
