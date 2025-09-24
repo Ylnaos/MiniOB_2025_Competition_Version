@@ -538,6 +538,16 @@ nullable_opt:
     {
       $$ = 1;
     }
+    | NULL_T
+    {
+      // 兼容列定义中的 "NULL" 写法，表示该列允许为 NULL
+      $$ = 1;
+    }
+    | NOT NULL_T
+    {
+      // 显式声明 NOT NULL（默认即 NOT NULL，这里仅作语法兼容）
+      $$ = 0;
+    }
     ;
 storage_format:
     /* empty */

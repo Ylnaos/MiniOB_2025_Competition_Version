@@ -1,4 +1,4 @@
-/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
+﻿/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
 miniob is licensed under Mulan PSL v2.
 You can use this software according to the terms and conditions of the Mulan PSL v2.
 You may obtain a copy of Mulan PSL v2 at:
@@ -44,8 +44,7 @@ bool FieldExpr::equal(const Expression &other) const
   return table_name() == other_field_expr.table_name() && field_name() == other_field_expr.field_name();
 }
 
-// TODO: 在进行表达式计算时，`chunk` 包含了所有列，因此可以通过 `field_id` 获取到对应列。
-// 后续可以优化成在 `FieldExpr` 中存储 `chunk` 中某列的位置信息。
+// TODO: 鍦ㄨ繘琛岃〃杈惧紡璁＄畻鏃讹紝`chunk` 鍖呭惈浜嗘墍鏈夊垪锛屽洜姝ゅ彲浠ラ€氳繃 `field_id` 鑾峰彇鍒板搴斿垪銆?// 鍚庣画鍙互浼樺寲鎴愬湪 `FieldExpr` 涓瓨鍌?`chunk` 涓煇鍒楃殑浣嶇疆淇℃伅銆?
 RC FieldExpr::get_column(Chunk &chunk, Column &column)
 {
   if (pos_ != -1) {
@@ -153,15 +152,15 @@ RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &re
   RC  rc         = RC::SUCCESS;
   result         = false;
 
-  // 处理NULL值比较：NULL与任何值比较都返回false（包括NULL = NULL）
-  if (left.is_null() || right.is_null()) {
+  // 澶勭悊NULL鍊兼瘮杈冿細NULL涓庝换浣曞€兼瘮杈冮兘杩斿洖false锛堝寘鎷琋ULL = NULL锛?
+if (left.is_null() || right.is_null()) {
     result = false;
     return RC::SUCCESS;
   }
 
   if (comp_ == LIKE_OP) {
-    // LIKE 仅支持字符串类型（包含 CHAR/TEXT）
-    if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
+    // LIKE 浠呮敮鎸佸瓧绗︿覆绫诲瀷锛堝寘鍚?CHAR/TEXT锛?
+if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
       LOG_WARN("LIKE operator only supports string type");
       return RC::INVALID_ARGUMENT;
     }
@@ -274,18 +273,16 @@ RC ComparisonExpr::try_get_value(Value &cell) const
 
 RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
 {
-  // 特化处理：当一侧为子查询时，支持：
-  // 1) 标量子查询（0或1行）直接比较；
-  // 2) 多行单列 + EQUAL/NOT_EQUAL：按 IN/NOT IN 语义比较；
-  // 其它比较符号 + 多行：报错。
-  if (left_->type() == ExprType::SUBQUERY || right_->type() == ExprType::SUBQUERY) {
+  // 鐗瑰寲澶勭悊锛氬綋涓€渚т负瀛愭煡璇㈡椂锛屾敮鎸侊細
+  // 1) 鏍囬噺瀛愭煡璇紙0鎴?琛岋級鐩存帴姣旇緝锛?  // 2) 澶氳鍗曞垪 + EQUAL/NOT_EQUAL锛氭寜 IN/NOT IN 璇箟姣旇緝锛?  // 鍏跺畠姣旇緝绗﹀彿 + 澶氳锛氭姤閿欍€?
+if (left_->type() == ExprType::SUBQUERY || right_->type() == ExprType::SUBQUERY) {
     const bool left_is_subq  = left_->type() == ExprType::SUBQUERY;
     const bool right_is_subq = right_->type() == ExprType::SUBQUERY;
 
     RC rc = RC::SUCCESS;
 
-    // 两侧均为子查询：按标量比较执行
-    if (left_is_subq && right_is_subq) {
+    // 涓や晶鍧囦负瀛愭煡璇細鎸夋爣閲忔瘮杈冩墽琛?
+if (left_is_subq && right_is_subq) {
       auto *lsubq = static_cast<SubqueryExpr *>(left_.get());
       auto *rsubq = static_cast<SubqueryExpr *>(right_.get());
 
@@ -298,8 +295,8 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
       const auto &rvals = rsubq->results();
 
       if (lvals.empty() || rvals.empty()) {
-        // 空集合视为不可比较，返回 false（简化的 NULL 比较行为）
-        value.set_boolean(false);
+        // 绌洪泦鍚堣涓轰笉鍙瘮杈冿紝杩斿洖 false锛堢畝鍖栫殑 NULL 姣旇緝琛屼负锛?
+value.set_boolean(false);
         return RC::SUCCESS;
       }
       if (lvals.size() > 1 || rvals.size() > 1) {
@@ -316,7 +313,7 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
       return rc;
     }
 
-    // 只有一侧为子查询：按原逻辑处理
+    // 鍙湁涓€渚т负瀛愭煡璇細鎸夊師閫昏緫澶勭悊
     SubqueryExpr *subq = static_cast<SubqueryExpr *>(left_is_subq ? left_.get() : right_.get());
     rc                 = subq->execute_with_context(&tuple);
     if (OB_FAIL(rc)) {
@@ -324,22 +321,22 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
     }
     const auto &vals = subq->results();
 
-    // 获取另一侧值
-    Value other_val;
+    // 鑾峰彇鍙︿竴渚у€?
+Value other_val;
     rc = (left_is_subq ? right_->get_value(tuple, other_val) : left_->get_value(tuple, other_val));
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to get value of non-subquery expression. rc=%s", strrc(rc));
       return rc;
     }
 
-    // 空集合：比较结果恒为 false
+    // 绌洪泦鍚堬細姣旇緝缁撴灉鎭掍负 false
     if (vals.empty()) {
       value.set_boolean(false);
       return RC::SUCCESS;
     }
 
-    // 单行：标量比较
-    if (vals.size() == 1) {
+    // 鍗曡锛氭爣閲忔瘮杈?
+if (vals.size() == 1) {
       bool bool_value = false;
       rc              = left_is_subq ? compare_value(vals[0], other_val, bool_value)
                                      : compare_value(other_val, vals[0], bool_value);
@@ -349,13 +346,13 @@ RC ComparisonExpr::get_value(const Tuple &tuple, Value &value) const
       return rc;
     }
 
-    // 多行：不允许用于标量比较
+    // 澶氳锛氫笉鍏佽鐢ㄤ簬鏍囬噺姣旇緝
     LOG_WARN("scalar subquery returned more than one row: %zu", vals.size());
     sql_debug("scalar subquery returned more than one row: %zu", vals.size());
     return RC::INVALID_ARGUMENT;
   }
 
-  // 非子查询路径：按标量比较
+  // 闈炲瓙鏌ヨ璺緞锛氭寜鏍囬噺姣旇緝
   Value left_value;
   Value right_value;
 
@@ -504,11 +501,17 @@ bool ArithmeticExpr::equal(const Expression &other) const
 AttrType ArithmeticExpr::value_type() const
 {
   if (!right_) {
+    // 一元负号：结果类型与子表达式一致
     return left_->value_type();
   }
 
-  if ((left_->value_type() == AttrType::INTS) &&
-   (right_->value_type() == AttrType::INTS)) {
+  // 除法：即使左右都是 INT，也返回 FLOATS，避免整数截断
+  if (arithmetic_type_ == Type::DIV) {
+    return AttrType::FLOATS;
+  }
+
+  // 其余运算：双 INT 产出 INT，否则 FLOAT
+  if ((left_->value_type() == AttrType::INTS) && (right_->value_type() == AttrType::INTS)) {
     return AttrType::INTS;
   }
 
@@ -519,13 +522,13 @@ RC ArithmeticExpr::calc_value(const Value &left_value, const Value &right_value,
 {
   RC rc = RC::SUCCESS;
 
-  // 处理NULL值传播
-  if (left_value.is_null() || (arithmetic_type_ != Type::NEGATIVE && right_value.is_null())) {
+  // 澶勭悊NULL鍊间紶鎾?
+if (left_value.is_null() || (arithmetic_type_ != Type::NEGATIVE && right_value.is_null())) {
     value.set_null();
     return RC::SUCCESS;
   }
 
-  // 特殊处理除零：返回NULL
+  // 鐗规畩澶勭悊闄ら浂锛氳繑鍥濶ULL
   if (arithmetic_type_ == Type::DIV) {
     float divisor = right_value.get_float();
     if (divisor > -0.000001 && divisor < 0.000001) {
@@ -577,8 +580,40 @@ RC ArithmeticExpr::execute_calc(
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, AddOperator>(
             (int *)left.data(), (int *)right.data(), (int *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
+        // 准备浮点视图：当输入列为 INT 时，先转成对应的 FLOAT 缓冲区
+        std::vector<float> left_buf;
+        std::vector<float> right_buf;
+        const float *      lptr = nullptr;
+        const float *      rptr = nullptr;
+
+        if (left.attr_type() == AttrType::FLOATS) {
+          lptr = reinterpret_cast<const float *>(left.data());
+        } else {
+          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
+          if (LEFT_CONSTANT) {
+            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(left.data());
+            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
+          }
+          lptr = left_buf.data();
+        }
+
+        if (right.attr_type() == AttrType::FLOATS) {
+          rptr = reinterpret_cast<const float *>(right.data());
+        } else {
+          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
+          if (RIGHT_CONSTANT) {
+            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(right.data());
+            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
+          }
+          rptr = right_buf.data();
+        }
+
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, AddOperator>(
-            (float *)left.data(), (float *)right.data(), (float *)result.data(), result.capacity());
+            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -588,8 +623,36 @@ RC ArithmeticExpr::execute_calc(
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, SubtractOperator>(
             (int *)left.data(), (int *)right.data(), (int *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
+        std::vector<float> left_buf;
+        std::vector<float> right_buf;
+        const float *      lptr = nullptr;
+        const float *      rptr = nullptr;
+        if (left.attr_type() == AttrType::FLOATS) {
+          lptr = reinterpret_cast<const float *>(left.data());
+        } else {
+          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
+          if (LEFT_CONSTANT) {
+            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(left.data());
+            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
+          }
+          lptr = left_buf.data();
+        }
+        if (right.attr_type() == AttrType::FLOATS) {
+          rptr = reinterpret_cast<const float *>(right.data());
+        } else {
+          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
+          if (RIGHT_CONSTANT) {
+            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(right.data());
+            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
+          }
+          rptr = right_buf.data();
+        }
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, SubtractOperator>(
-            (float *)left.data(), (float *)right.data(), (float *)result.data(), result.capacity());
+            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -599,8 +662,36 @@ RC ArithmeticExpr::execute_calc(
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, MultiplyOperator>(
             (int *)left.data(), (int *)right.data(), (int *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
+        std::vector<float> left_buf;
+        std::vector<float> right_buf;
+        const float *      lptr = nullptr;
+        const float *      rptr = nullptr;
+        if (left.attr_type() == AttrType::FLOATS) {
+          lptr = reinterpret_cast<const float *>(left.data());
+        } else {
+          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
+          if (LEFT_CONSTANT) {
+            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(left.data());
+            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
+          }
+          lptr = left_buf.data();
+        }
+        if (right.attr_type() == AttrType::FLOATS) {
+          rptr = reinterpret_cast<const float *>(right.data());
+        } else {
+          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
+          if (RIGHT_CONSTANT) {
+            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(right.data());
+            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
+          }
+          rptr = right_buf.data();
+        }
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, MultiplyOperator>(
-            (float *)left.data(), (float *)right.data(), (float *)result.data(), result.capacity());
+            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -610,8 +701,36 @@ RC ArithmeticExpr::execute_calc(
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, DivideOperator>(
             (int *)left.data(), (int *)right.data(), (int *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
+        std::vector<float> left_buf;
+        std::vector<float> right_buf;
+        const float *      lptr = nullptr;
+        const float *      rptr = nullptr;
+        if (left.attr_type() == AttrType::FLOATS) {
+          lptr = reinterpret_cast<const float *>(left.data());
+        } else {
+          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
+          if (LEFT_CONSTANT) {
+            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(left.data());
+            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
+          }
+          lptr = left_buf.data();
+        }
+        if (right.attr_type() == AttrType::FLOATS) {
+          rptr = reinterpret_cast<const float *>(right.data());
+        } else {
+          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
+          if (RIGHT_CONSTANT) {
+            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(right.data());
+            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
+          }
+          rptr = right_buf.data();
+        }
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, DivideOperator>(
-            (float *)left.data(), (float *)right.data(), (float *)result.data(), result.capacity());
+            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -620,8 +739,22 @@ RC ArithmeticExpr::execute_calc(
       if (attr_type == AttrType::INTS) {
         unary_operator<LEFT_CONSTANT, int, NegateOperator>((int *)left.data(), (int *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
-        unary_operator<LEFT_CONSTANT, float, NegateOperator>(
-            (float *)left.data(), (float *)result.data(), result.capacity());
+        if (left.attr_type() == AttrType::FLOATS) {
+          unary_operator<LEFT_CONSTANT, float, NegateOperator>(
+              (float *)left.data(), (float *)result.data(), result.capacity());
+        } else {
+          // 将左列 INT 转换为 FLOAT 再取负
+          std::vector<float> left_buf;
+          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
+          if (LEFT_CONSTANT) {
+            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
+          } else {
+            auto src = reinterpret_cast<const int *>(left.data());
+            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
+          }
+          unary_operator<LEFT_CONSTANT, float, NegateOperator>(
+              left_buf.data(), (float *)result.data(), result.capacity());
+        }
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -854,8 +987,8 @@ unique_ptr<Expression> SubqueryExpr::copy() const
   if (executed_) {
     return make_unique<SubqueryExpr>(results_, result_type_, result_len_);
   }
-  // 深拷贝解析节点
-  std::unique_ptr<ParsedSqlNode> copied;
+  // 娣辨嫹璐濊В鏋愯妭鐐?
+std::unique_ptr<ParsedSqlNode> copied;
   if (subquery_node_) {
     copied = deep_copy_parsed_node(*subquery_node_);
   }
@@ -884,9 +1017,8 @@ RC SubqueryExpr::execute_once() const
     return RC::INTERNAL;
   }
 
-  // 创建 SelectStmt（注意：必须对 ParsedSqlNode 做深拷贝，避免在绑定阶段移动/修改原 AST，
-  // 影响后续(可能的)再次执行或相关子查询替换时的深拷贝）。
-  Stmt *stmt = nullptr;
+  // 鍒涘缓 SelectStmt锛堟敞鎰忥細蹇呴』瀵?ParsedSqlNode 鍋氭繁鎷疯礉锛岄伩鍏嶅湪缁戝畾闃舵绉诲姩/淇敼鍘?AST锛?  // 褰卞搷鍚庣画(鍙兘鐨?鍐嶆鎵ц鎴栫浉鍏冲瓙鏌ヨ鏇挎崲鏃剁殑娣辨嫹璐濓級銆?
+Stmt *stmt = nullptr;
   std::unique_ptr<ParsedSqlNode> sub_node_copy = deep_copy_parsed_node(*subquery_node_);
   RC rc = Stmt::create_stmt(db, *sub_node_copy, stmt);
   if (rc != RC::SUCCESS) {
@@ -901,7 +1033,7 @@ RC SubqueryExpr::execute_once() const
     return RC::INVALID_ARGUMENT;
   }
 
-  // 生成逻辑/物理计划
+  // 鐢熸垚閫昏緫/鐗╃悊璁″垝
   std::unique_ptr<LogicalOperator> logical_oper;
   LogicalPlanGenerator              logical_gen;
   rc = logical_gen.create(select_stmt, logical_oper);
@@ -918,18 +1050,18 @@ RC SubqueryExpr::execute_once() const
     return rc;
   }
 
-  // 打开并执行
-  rc = physical_oper->open(session->current_trx());
+  // 鎵撳紑骞舵墽琛?
+rc = physical_oper->open(session->current_trx());
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to open physical operator for subquery. rc=%s", strrc(rc));
     return rc;
   }
 
-  // 校验仅一列输出
-  TupleSchema schema;
+  // 鏍￠獙浠呬竴鍒楄緭鍑?
+TupleSchema schema;
   rc = physical_oper->tuple_schema(schema);
   if (OB_FAIL(rc)) {
-    // 有些物理算子可能未实现 tuple_schema，这种情况下通过首行推断
+    // 鏈変簺鐗╃悊绠楀瓙鍙兘鏈疄鐜?tuple_schema锛岃繖绉嶆儏鍐典笅閫氳繃棣栬鎺ㄦ柇
     LOG_TRACE("tuple_schema not provided, will infer from first row");
   }
 
@@ -975,12 +1107,12 @@ RC SubqueryExpr::execute_once() const
 
   physical_oper->close();
 
-  // 记录结果类型
+  // 璁板綍缁撴灉绫诲瀷
   if (!results_.empty()) {
     result_type_ = results_.front().attr_type();
     result_len_  = results_.front().length();
   } else {
-    // 没有结果，默认类型沿用 UNDEFINED
+    // 娌℃湁缁撴灉锛岄粯璁ょ被鍨嬫部鐢?UNDEFINED
     result_type_ = AttrType::UNDEFINED;
     result_len_  = -1;
   }
@@ -997,7 +1129,7 @@ RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
   }
 
   if (results_.size() == 0) {
-    // 标量上下文中，空结果当做 NULL
+    // 鏍囬噺涓婁笅鏂囦腑锛岀┖缁撴灉褰撳仛 NULL
     value.set_null();
     return RC::SUCCESS;
   }
@@ -1012,7 +1144,7 @@ RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
 
 RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
 {
-  // 无上下文：沿用懒执行 + 缓存
+  // 鏃犱笂涓嬫枃锛氭部鐢ㄦ噿鎵ц + 缂撳瓨
   if (outer_tuple == nullptr) {
     return execute_once();
   }
@@ -1022,7 +1154,7 @@ RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
     return RC::INVALID_ARGUMENT;
   }
 
-  // 构造带常量替换的新 AST
+  // 鏋勯€犲甫甯搁噺鏇挎崲鐨勬柊 AST
   bool did_substitute = false;
   std::unique_ptr<ParsedSqlNode> copied = deep_copy_parsed_node_with_ctx(*subquery_node_, *outer_tuple, did_substitute);
   if (!copied) {
@@ -1030,12 +1162,12 @@ RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
     return RC::INTERNAL;
   }
 
-  // 若不存在相关引用，落回一次性缓存路径
-  if (!did_substitute) {
+  // 鑻ヤ笉瀛樺湪鐩稿叧寮曠敤锛岃惤鍥炰竴娆℃€х紦瀛樿矾寰?
+if (!did_substitute) {
     return execute_once();
   }
 
-  // 相关子查询：每次重新执行，不写入 executed_ 缓存
+  // 鐩稿叧瀛愭煡璇細姣忔閲嶆柊鎵ц锛屼笉鍐欏叆 executed_ 缂撳瓨
   Session *session = Session::current_session();
   if (session == nullptr) {
     LOG_WARN("no current session to execute subquery");
@@ -1082,8 +1214,8 @@ RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
     return rc;
   }
 
-  // 清空并收集结果
-  results_.clear();
+  // 娓呯┖骞舵敹闆嗙粨鏋?
+results_.clear();
   result_type_ = AttrType::UNDEFINED;
   result_len_  = -1;
 
@@ -1095,7 +1227,7 @@ RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
       break;
     }
     Value v;
-    // 读取首列
+    // 璇诲彇棣栧垪
     RC rc2 = tuple->cell_at(0, v);
     if (rc2 != RC::SUCCESS) {
       rc = rc2;
@@ -1118,7 +1250,7 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node(const ParsedS
 {
   auto copied = std::make_unique<ParsedSqlNode>(node.flag);
   if (node.flag == SCF_SELECT) {
-    // 深拷贝 SelectSqlNode
+    // 娣辨嫹璐?SelectSqlNode
     const SelectSqlNode &src = node.selection;
     SelectSqlNode       &dst = copied->selection;
 
@@ -1183,15 +1315,15 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
   // relations
   dst.relations = src.relations;
 
-  // expressions (SELECT 列表) 原样复制
+  // expressions (SELECT 鍒楄〃) 鍘熸牱澶嶅埗
   for (const auto &expr_ptr : src.expressions) {
     if (expr_ptr) {
       dst.expressions.emplace_back(expr_ptr->copy());
     }
   }
 
-  // conditions（WHERE AND 链）递归复制并替换
-  dst.conditions.reserve(src.conditions.size());
+  // conditions锛圵HERE AND 閾撅級閫掑綊澶嶅埗骞舵浛鎹?
+dst.conditions.reserve(src.conditions.size());
   for (const auto &cond : src.conditions) {
     ConditionSqlNode new_cond;
     new_cond.left_is_attr  = cond.left_is_attr;
@@ -1261,8 +1393,8 @@ std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
     const char *t = u.table_name();
     const char *f = u.field_name();
     if (t != nullptr && *t != '\0' && !is_inner_table(t)) {
-      // 外层表字段：从 outer_tuple 抽取成常量
-      Value v;
+      // 澶栧眰琛ㄥ瓧娈碉細浠?outer_tuple 鎶藉彇鎴愬父閲?
+Value v;
       RC rc2 = outer_tuple.find_cell(TupleCellSpec(t, f), v);
       if (rc2 != RC::SUCCESS) {
         LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", t, f);
@@ -1274,15 +1406,15 @@ std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
       ve->set_name(string(t) + "." + string(f));
       return ve;
     }
-    // 内层表字段保持原样
-    return expr.copy();
+    // 鍐呭眰琛ㄥ瓧娈典繚鎸佸師鏍?
+return expr.copy();
   }
 
   if (expr.type() == ExprType::SUBQUERY) {
-    // 递归深入子查询，继续对更内层的相关引用做替换
+    // 閫掑綊娣卞叆瀛愭煡璇紝缁х画瀵规洿鍐呭眰鐨勭浉鍏冲紩鐢ㄥ仛鏇挎崲
     const auto &sub_e = static_cast<const SubqueryExpr &>(expr);
     if (sub_e.subquery_node_ == nullptr) {
-      // 已缓存结果的子查询，直接复制
+      // 宸茬紦瀛樼粨鏋滅殑瀛愭煡璇紝鐩存帴澶嶅埗
       return expr.copy();
     }
     bool inner_substituted = false;
@@ -1299,8 +1431,8 @@ std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
     return new_sub;
   }
 
-  // 其它表达式：复制后递归处理子节点
-  auto copied = expr.copy();
+  // 鍏跺畠琛ㄨ揪寮忥細澶嶅埗鍚庨€掑綊澶勭悊瀛愯妭鐐?
+auto copied = expr.copy();
   RC   tmp_rc = ExpressionIterator::iterate_child_expr(*copied, [&](std::unique_ptr<Expression> &child) -> RC {
     bool sub_flag = false;
     RC   inner_rc = RC::SUCCESS;
@@ -1324,21 +1456,21 @@ std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
 
 RC InExpr::get_value(const Tuple &tuple, Value &value) const
 {
-  // 求左值
-  Value left_val;
+  // 姹傚乏鍊?
+Value left_val;
   RC rc = test_expr_->get_value(tuple, left_val);
   if (OB_FAIL(rc)) {
     return rc;
   }
 
   if (left_val.is_null()) {
-    // 简化处理：NULL 与集合比较为 false（与标准 SQL 的三值逻辑可能不同）
-    value.set_boolean(false);
+    // 绠€鍖栧鐞嗭細NULL 涓庨泦鍚堟瘮杈冧负 false锛堜笌鏍囧噯 SQL 鐨勪笁鍊奸€昏緫鍙兘涓嶅悓锛?
+value.set_boolean(false);
     return RC::SUCCESS;
   }
 
-  // 右值应为子查询表达式
-  if (set_expr_->type() != ExprType::SUBQUERY) {
+  // 鍙冲€煎簲涓哄瓙鏌ヨ琛ㄨ揪寮?
+if (set_expr_->type() != ExprType::SUBQUERY) {
     LOG_WARN("IN operator's right expr should be a subquery");
     return RC::INVALID_ARGUMENT;
   }
@@ -1352,7 +1484,7 @@ RC InExpr::get_value(const Tuple &tuple, Value &value) const
   const auto &vals = subq->results();
   for (const auto &rv : vals) {
     if (rv.is_null()) {
-      continue; // 忽略 NULL
+      continue; // 蹇界暐 NULL
     }
     if (left_val.compare(rv) == 0) {
       found = true;
@@ -1364,3 +1496,5 @@ RC InExpr::get_value(const Tuple &tuple, Value &value) const
   value.set_boolean(result);
   return RC::SUCCESS;
 }
+
+
