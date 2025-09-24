@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/stmt/select_stmt.h"
+#include <sstream>
 #include "common/lang/string.h"
 #include "common/log/log.h"
 #include "sql/stmt/filter_stmt.h"
@@ -44,8 +45,20 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   vector<Table *>                tables;
   unordered_map<string, Table *> table_map;
   for (size_t i = 0; i < select_sql.relations.size(); i++) {
-    const char *table_name = select_sql.relations[i].c_str();
-    if (nullptr == table_name) {
+    // 支持 FROM 表别名：relation 可能为 "table" 或 "table alias"
+    const std::string &relation_item = select_sql.relations[i];
+    std::string        base_table_name;
+    std::string        alias_name;
+    {
+      std::istringstream iss(relation_item);
+      iss >> base_table_name;
+      std::string maybe_alias;
+      if (iss >> maybe_alias) {
+        alias_name = maybe_alias; // 仅支持简单的 "table alias" 形式
+      }
+    }
+    const char *table_name = base_table_name.c_str();
+    if (base_table_name.empty()) {
       LOG_WARN("invalid argument. relation name is null. index=%d", i);
       return RC::INVALID_ARGUMENT;
     }
@@ -57,8 +70,14 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
 
     binder_context.add_table(table);
+    if (!alias_name.empty()) {
+      binder_context.add_table_alias(alias_name, table);
+    }
     tables.push_back(table);
-    table_map.insert({table_name, table});
+    table_map.insert({base_table_name, table});
+    if (!alias_name.empty()) {
+      table_map.insert({alias_name, table});
+    }
   }
 
   // collect query fields in `select` statement

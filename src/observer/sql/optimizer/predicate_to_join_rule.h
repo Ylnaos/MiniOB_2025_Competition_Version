@@ -14,8 +14,14 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/rewrite_rule.h"
 
 /**
- * @brief 将一些谓词表达式下推到join中
+ * @brief 将跨表谓词（典型ON条件）从全局谓词下推到JOIN算子
  * @ingroup Rewriter
  */
-class PredicateToJoinRewriter
-{};
+class PredicateToJoinRule : public RewriteRule
+{
+public:
+  PredicateToJoinRule()          = default;
+  virtual ~PredicateToJoinRule() = default;
+
+  RC rewrite(std::unique_ptr<LogicalOperator> &oper, bool &change_made) override;
+};

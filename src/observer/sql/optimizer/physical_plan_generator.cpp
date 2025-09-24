@@ -374,8 +374,24 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
 
       join_physical_oper->add_child(std::move(child_physical_oper));
     }
-
-    oper = std::move(join_physical_oper);
+    // 如果JOIN上挂载了跨表谓词（来自ON条件），在物理层加上一层谓词算子
+    auto &join_preds = join_oper.get_join_predicates();
+    if (!join_preds.empty()) {
+      unique_ptr<Expression> join_pred_expr;
+      if (join_preds.size() == 1) {
+        join_pred_expr = std::move(join_preds.front());
+      } else {
+        // 多个JOIN条件用AND合并（构造函数需要lvalue引用）
+        join_pred_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, join_preds));
+      }
+      auto pred_phy = make_unique<PredicatePhysicalOperator>(std::move(join_pred_expr));
+      pred_phy->add_child(std::move(join_physical_oper));
+      oper = std::move(pred_phy);
+      // 清空以避免后续误用
+      join_oper.clear_join_predicates();
+    } else {
+      oper = std::move(join_physical_oper);
+    }
   }
   return rc;
 }

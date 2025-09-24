@@ -17,7 +17,9 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_iterator.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include <sstream>
 #include "event/sql_debug.h"
+#include "storage/db/db.h"
 #include "sql/parser/parse_defs.h"
 #include "sql/stmt/select_stmt.h"
 #include "sql/stmt/stmt.h"
@@ -1456,10 +1458,36 @@ std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
   rc             = RC::SUCCESS;
   did_substitute = false;
 
-  auto is_inner_table = [&](const char *tname) -> bool {
+  auto is_inner_table = [&](const char *tname, const char *fname) -> bool {
     if (tname == nullptr || *tname == '\0') return false;
     for (const auto &r : inner_relations) {
-      if (0 == strcasecmp(r.c_str(), tname)) return true;
+      std::string base;
+      std::string al;
+      {
+        std::istringstream iss(r);
+        iss >> base;
+        iss >> al;
+      }
+      if (!base.empty() && 0 == strcasecmp(base.c_str(), tname)) return true;
+      if (!al.empty() && 0 == strcasecmp(al.c_str(), tname)) return true;
+    }
+    Session *session = Session::current_session();
+    Db      *db      = session ? session->get_current_db() : nullptr;
+    if (db != nullptr && fname != nullptr && *fname != '\0') {
+      int matched = 0;
+      for (const auto &r : inner_relations) {
+        std::string base;
+        {
+          std::istringstream iss(r);
+          iss >> base;
+        }
+        if (base.empty()) continue;
+        Table *t = db->find_table(base.c_str());
+        if (t != nullptr && t->table_meta().field(fname) != nullptr) {
+          matched++;
+        }
+      }
+      if (matched == 1) return true;
     }
     return false;
   };
@@ -1468,10 +1496,32 @@ std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
     const auto &u = static_cast<const UnboundFieldExpr &>(expr);
     const char *t = u.table_name();
     const char *f = u.field_name();
-    if (t != nullptr && *t != '\0' && !is_inner_table(t)) {
+    if (t != nullptr && *t != '\0' && !is_inner_table(t, f)) {
       // 澶栧眰琛ㄥ瓧娈碉細浠?outer_tuple 鎶藉彇鎴愬父閲?
 Value v;
       RC rc2 = outer_tuple.find_cell(TupleCellSpec(t, f), v);
+      if (rc2 == RC::NOTFOUND) {
+        // 兼容别名：按字段名在外层元组上查找唯一匹配
+        int           hits = 0;
+        Value         last_v;
+        TupleCellSpec spec;
+        const int     n = outer_tuple.cell_num();
+        for (int i = 0; i < n; ++i) {
+          if (outer_tuple.spec_at(i, spec) == RC::SUCCESS) {
+            if (0 == strcasecmp(spec.field_name(), f)) {
+              Value tmp;
+              if (outer_tuple.cell_at(i, tmp) == RC::SUCCESS) {
+                last_v = tmp;
+                hits++;
+              }
+            }
+          }
+        }
+        if (hits == 1) {
+          v  = last_v;
+          rc2 = RC::SUCCESS;
+        }
+      }
       if (rc2 != RC::SUCCESS) {
         LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", t, f);
         rc = rc2;

@@ -752,6 +752,15 @@ relation:
     ID {
       $$ = $1;
     }
+    | ID ID {
+      // 支持 FROM 表别名："table alias"
+      size_t len = strlen($1) + 1 + strlen($2) + 1;
+      char *buf = (char *)malloc(len);
+      if (buf) {
+        snprintf(buf, len, "%s %s", $1, $2);
+      }
+      $$ = buf ? buf : $1; // 退化为表名
+    }
     ;
 rel_list:
     relation {

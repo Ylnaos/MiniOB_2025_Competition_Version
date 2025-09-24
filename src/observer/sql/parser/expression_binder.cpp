@@ -22,6 +22,16 @@ using namespace common;
 
 Table *BinderContext::find_table(const char *table_name) const
 {
+  if (table_name == nullptr || *table_name == '\0') {
+    return nullptr;
+  }
+
+  // match alias first
+  auto it = alias_map_.find(table_name);
+  if (it != alias_map_.end()) {
+    return it->second;
+  }
+
   auto pred = [table_name](Table *table) { return 0 == strcasecmp(table_name, table->name()); };
   auto iter = ranges::find_if(query_tables_, pred);
   if (iter == query_tables_.end()) {
