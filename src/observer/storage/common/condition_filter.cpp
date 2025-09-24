@@ -108,10 +108,13 @@ RC DefaultConditionFilter::init(Table &table, const ConditionSqlNode &condition)
   //    // 不能比较的两个字段， 要把信息传给客户端
   //    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
   //  }
-  // NOTE：这里没有实现不同类型的数据比较，比如整数跟浮点数之间的对比
-  // 但是选手们还是要实现。这个功能在预选赛中会出现
+  // NOTE：原始实现要求左右类型严格一致。对于 NULL 参与的比较，应允许通过，
+  // 并在执行阶段返回 UNKNOWN（在 WHERE 中当作 false）。
+  // 仅当双方类型不同且均非 NULL 时，才判定为类型不匹配。
   if (type_left != type_right) {
-    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    if (type_left != AttrType::NULLS && type_right != AttrType::NULLS) {
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
   }
 
   return init(left, right, type_left, condition.comp);
@@ -136,6 +139,19 @@ bool DefaultConditionFilter::filter(const Record &rec) const
     right_value.set_value(right_.value);
   }
 
+  // 处理 IS NULL / IS NOT NULL
+  if (comp_op_ == IS_NULL) {
+    return left_value.is_null();
+  }
+  if (comp_op_ == IS_NOT_NULL) {
+    return !left_value.is_null();
+  }
+
+  // NULL 与任何值比较（除 IS [NOT] NULL）均返回 UNKNOWN -> 在 WHERE 中按 false 处理
+  if (left_value.is_null() || right_value.is_null()) {
+    return false;
+  }
+
   int cmp_result = left_value.compare(right_value);
 
   switch (comp_op_) {
@@ -150,7 +166,7 @@ bool DefaultConditionFilter::filter(const Record &rec) const
   }
 
   LOG_PANIC("Never should print this.");
-  return cmp_result;  // should not go here
+  return false;  // should not go here
 }
 
 CompositeConditionFilter::~CompositeConditionFilter()
