@@ -986,9 +986,142 @@ extern void scan_string(const char *str, yyscan_t scanner);
 int sql_parse(const char *s, ParsedSqlResult *sql_result) {
   yyscan_t scanner;
   std::vector<char *> allocated_strings;
-  yylex_init_extra(static_cast<void*>(&allocated_strings),&scanner);
-  scan_string(s, scanner);
-  int result = yyparse(s, sql_result, scanner);
+  yylex_init_extra(static_cast<void*>(&allocated_strings), &scanner);
+
+  // 预处理：将简单的 INNER JOIN/JOIN 语法改写为逗号连接 + WHERE 条件，
+  // 以复用现有的语法（relation_list 与 condition_list）。
+  // 仅支持基础形式：
+  //   SELECT ... FROM t1 [INNER] JOIN t2 ON cond [JOIN t3 ON cond] ... [WHERE ...] [GROUP BY ...] [ORDER BY ...]
+  // 改写为：
+  //   SELECT ... FROM t1, t2, t3 WHERE cond AND cond ... [GROUP BY ...] [ORDER BY ...]
+  std::string orig_sql = s ? std::string(s) : std::string();
+  std::string lower    = orig_sql;
+  for (auto &ch : lower) ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+
+  auto find_ci = [&](const std::string &pat, size_t pos) -> size_t {
+    std::string p = pat;
+    for (auto &c : p) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    return lower.find(p, pos);
+  };
+
+  auto trim = [](const std::string &str) -> std::string {
+    size_t i = 0, j = str.size();
+    while (i < j && isspace(static_cast<unsigned char>(str[i]))) i++;
+    while (j > i && isspace(static_cast<unsigned char>(str[j - 1]))) j--;
+    return str.substr(i, j - i);
+  };
+
+  std::string rewritten = orig_sql; // 默认不改写
+  size_t      from_pos  = find_ci(" from ", 0);
+  size_t      join_pos  = std::string::npos;
+  if (from_pos != std::string::npos) {
+    // 找到 FROM 子句的边界（在 WHERE/GROUP/ORDER 之前，或语句结尾）
+    size_t where_pos = find_ci(" where ", from_pos + 6);
+    size_t group_pos = find_ci(" group ", from_pos + 6);
+    size_t order_pos = find_ci(" order ", from_pos + 6);
+    size_t after_from_end = orig_sql.size();
+    if (where_pos != std::string::npos) after_from_end = std::min(after_from_end, where_pos);
+    if (group_pos != std::string::npos) after_from_end = std::min(after_from_end, group_pos);
+    if (order_pos != std::string::npos) after_from_end = std::min(after_from_end, order_pos);
+
+    // FROM 子句中是否存在 JOIN。优先匹配最早出现的 " inner join " 或 " join "
+    size_t first_inner = find_ci(" inner join ", from_pos + 6);
+    size_t first_join  = find_ci(" join ", from_pos + 6);
+    size_t earliest    = std::min(first_inner == std::string::npos ? SIZE_MAX : first_inner,
+                                  first_join  == std::string::npos ? SIZE_MAX : first_join);
+    join_pos = (earliest == SIZE_MAX) ? std::string::npos : earliest;
+
+    if (join_pos != std::string::npos && join_pos < after_from_end) {
+      // 解析基础表名（FROM 之后、JOIN 之前的部分）
+      size_t      base_start = from_pos + 6; // 跳过 " from "
+      std::string base_rel   = trim(orig_sql.substr(base_start, join_pos - base_start));
+      std::vector<std::string> relations;
+      std::vector<std::string> join_conds;
+      if (!base_rel.empty()) relations.push_back(base_rel);
+
+      // 迭代 FROM 子句中的所有 JOIN ... ON ...
+      size_t p = base_start + base_rel.size();
+      while (p < after_from_end) {
+        size_t inner_join_pos = find_ci(" inner join ", p);
+        size_t just_join_pos  = find_ci(" join ", p);
+        size_t this_join_pos  = std::min(inner_join_pos == std::string::npos ? SIZE_MAX : inner_join_pos,
+                                         just_join_pos  == std::string::npos ? SIZE_MAX : just_join_pos);
+        if (this_join_pos == SIZE_MAX || this_join_pos >= after_from_end) {
+          break;
+        }
+
+        // 跳过关键字
+        size_t after_kw = this_join_pos;
+        if (inner_join_pos != std::string::npos && inner_join_pos == this_join_pos) {
+          after_kw += std::string(" inner join ").size();
+        } else {
+          after_kw += std::string(" join ").size();
+        }
+
+        // 读取下一个关系名（直到 " on "）
+        size_t on_pos = find_ci(" on ", after_kw);
+        if (on_pos == std::string::npos || on_pos >= after_from_end) {
+          break; // 结构异常，放弃改写
+        }
+        std::string rel = trim(orig_sql.substr(after_kw, on_pos - after_kw));
+        if (!rel.empty()) relations.push_back(rel);
+
+        // 读取 ON 条件（直到下一个 JOIN 或 FROM 子句结束）
+        size_t next_inner = find_ci(" inner join ", on_pos + 4);
+        size_t next_join  = find_ci(" join ", on_pos + 4);
+        size_t next_pos   = std::min(next_inner == std::string::npos ? SIZE_MAX : next_inner,
+                                     next_join  == std::string::npos ? SIZE_MAX : next_join);
+        if (next_pos == SIZE_MAX || next_pos > after_from_end) {
+          next_pos = after_from_end;
+        }
+        std::string cond = trim(orig_sql.substr(on_pos + 4, next_pos - (on_pos + 4)));
+        if (!cond.empty()) join_conds.push_back(std::string("(") + cond + ")");
+
+        p = next_pos;
+      }
+
+      // 重新拼接 SQL：保留 FROM 之前的头部，FROM 后拼接逗号分隔的关系；
+      // WHERE 合并原有 WHERE 与各个 ON 条件（用 AND 连接）。
+      std::string head = orig_sql.substr(0, from_pos + 6);
+      std::string tail; // 保留原 SQL 中 WHERE/ GROUP / ORDER 及其之后的部分
+      std::string orig_where;
+      if (where_pos != std::string::npos) {
+        size_t where_end = orig_sql.size();
+        if (group_pos != std::string::npos) where_end = std::min(where_end, group_pos);
+        if (order_pos != std::string::npos) where_end = std::min(where_end, order_pos);
+        orig_where = trim(orig_sql.substr(where_pos + 7, where_end - (where_pos + 7)));
+        tail       = orig_sql.substr(where_end);
+      } else {
+        tail = orig_sql.substr(after_from_end);
+      }
+
+      std::string rels;
+      for (size_t i = 0; i < relations.size(); ++i) {
+        if (i > 0) rels += ", ";
+        rels += relations[i];
+      }
+
+      std::string new_where = orig_where; // 沿用原有 WHERE 条件
+      for (const auto &c : join_conds) {
+        if (!new_where.empty()) new_where += " AND ";
+        if (!c.empty() && c.front() == '(' && c.back() == ')') {
+          new_where += c.substr(1, c.size() - 2);
+        } else {
+          new_where += c;
+        }
+      }
+
+      rewritten = head + rels;
+      if (!new_where.empty()) {
+        rewritten += " WHERE ";
+        rewritten += new_where;
+      }
+      rewritten += tail;
+    }
+  }
+
+  scan_string(rewritten.c_str(), scanner);
+  int result = yyparse(rewritten.c_str(), sql_result, scanner);
 
   for (char *ptr : allocated_strings) {
     free(ptr);
