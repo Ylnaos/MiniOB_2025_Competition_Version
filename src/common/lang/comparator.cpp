@@ -61,18 +61,23 @@ int compare_float(void *arg1, void *arg2)
 
 int compare_string(void *arg1, int arg1_max_length, void *arg2, int arg2_max_length)
 {
-  const char *s1     = (const char *)arg1;
-  const char *s2     = (const char *)arg2;
-  int         maxlen = min(arg1_max_length, arg2_max_length);
-  int         result = strncmp(s1, s2, maxlen);
-  if (0 != result) {
-    return result < 0 ? -1 : 1;
+  // Use raw byte-wise comparison to handle embedded '\0'.
+  // This is required for index keys encoded as binary (order-preserving).
+  const unsigned char *s1 = static_cast<const unsigned char *>(arg1);
+  const unsigned char *s2 = static_cast<const unsigned char *>(arg2);
+  const int            maxlen = min(arg1_max_length, arg2_max_length);
+
+  if (maxlen > 0) {
+    int result = memcmp(s1, s2, maxlen);
+    if (result != 0) {
+      return result < 0 ? -1 : 1;
+    }
   }
 
+  // All common prefix bytes equal; fall back to length ordering.
   if (arg1_max_length > maxlen) {
     return 1;
   }
-
   if (arg2_max_length > maxlen) {
     return -1;
   }
