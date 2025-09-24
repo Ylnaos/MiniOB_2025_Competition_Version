@@ -299,7 +299,6 @@ int TableMeta::deserialize(istream &is)
   storage_engine_ = static_cast<StorageEngine>(storage_engine);
   name_.swap(table_name);
   fields_.swap(fields);
-  record_size_ = fields_.back().offset() + fields_.back().len() - fields_.begin()->offset();
 
   // reconstruct trx_fields_
   
@@ -317,6 +316,20 @@ int TableMeta::deserialize(istream &is)
     null_bitmap_offset_ = fields_[sys_num].offset() - null_bitmap_size_;
   } else {
     null_bitmap_offset_ = fields_.empty() ? 0 : fields_.back().offset() + fields_.back().len();
+  }
+
+  // Reconstruct record_size_ after null bitmap info ready.
+  if (!fields_.empty()) {
+    int start_offset = 0;
+    if (sys_num > 0) {
+      start_offset = fields_.front().offset();
+    } else {
+      start_offset = null_bitmap_offset_;
+    }
+    const int last_end = fields_.back().offset() + fields_.back().len();
+    record_size_      = last_end - start_offset;
+  } else {
+    record_size_ = 0;
   }
 
   const Json::Value &indexes_value = table_value[FIELD_INDEXES];
