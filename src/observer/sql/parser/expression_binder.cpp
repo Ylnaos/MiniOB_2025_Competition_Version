@@ -192,7 +192,18 @@ RC ExpressionBinder::bind_unbound_field_expression(
 
     Field      field(table, field_meta);
     FieldExpr *field_expr = new FieldExpr(field);
-    field_expr->set_name(field_name);
+    // 如果用户在 SQL 中使用了带表名限定的列名（如 t.col），
+    // 则输出表头时也应保留“表.列”的形式，并与测试期望一致（大写）。
+    if (!is_blank(table_name)) {
+      std::string t = table->name();
+      std::string f = field_name;
+      common::str_to_upper(t);
+      common::str_to_upper(f);
+      field_expr->set_name(t + "." + f);
+    } else {
+      // 未带表名限定时，保持列名本身，避免影响单表查询的表头
+      field_expr->set_name(field_name);
+    }
     bound_expressions.emplace_back(field_expr);
   }
 
