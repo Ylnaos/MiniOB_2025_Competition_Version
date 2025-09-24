@@ -76,7 +76,24 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
 
     // 保存表达式供后续使用
     if (i < update.value_expressions.size() && update.value_expressions[i] != nullptr) {
-      value_expressions.push_back(update.value_expressions[i]);
+      Expression *expr = update.value_expressions[i];
+      // 提前做一次常量表达式类型校验与折叠：如果是常量且类型不匹配，尝试转换；转换失败直接报错
+      Value const_val;
+      if (expr->try_get_value(const_val) == RC::SUCCESS) {
+        if (!const_val.is_null() && field_meta->type() != const_val.attr_type()) {
+          Value casted_val;
+          RC rc = Value::cast_to(const_val, field_meta->type(), casted_val);
+          if (rc != RC::SUCCESS) {
+            LOG_WARN("field type mismatch in constant assign. table=%s, field=%s, field type=%d, value type=%d",
+                     table_name, field_meta->name(), field_meta->type(), const_val.attr_type());
+            return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+          }
+          // 用转换后的常量替换原表达式，避免执行期再次转换
+          delete expr;
+          expr = new ValueExpr(casted_val);
+        }
+      }
+      value_expressions.push_back(expr);
       values.push_back(Value());  // 占位符，实际值在执行时计算
     } else if (i < update.values.size()) {
       // 兼容旧的值列表
@@ -100,9 +117,9 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
     }
   }
 
-  // 创建过滤条件
+  // 创建过滤条件（即使无 WHERE 条件也创建空 FilterStmt，便于后续计划生成统一处理）
   FilterStmt *filter_stmt = nullptr;
-  if (!update.conditions.empty()) {
+  {
     unordered_map<string, Table *> table_map;
     table_map[table->name()] = table;
     RC rc = FilterStmt::create(db, table, &table_map, update.conditions.data(),

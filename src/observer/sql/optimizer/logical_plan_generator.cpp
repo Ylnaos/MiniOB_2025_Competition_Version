@@ -170,6 +170,12 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
 
 RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  // 无 WHERE 条件时，filter_stmt 可能为 nullptr，此时直接返回空的谓词算子
+  logical_operator.reset();
+  if (filter_stmt == nullptr) {
+    return RC::SUCCESS;
+  }
+
   RC                                  rc = RC::SUCCESS;
   vector<unique_ptr<Expression>> cmp_exprs;
   const vector<FilterUnit *>    &filter_units = filter_stmt->filter_units();

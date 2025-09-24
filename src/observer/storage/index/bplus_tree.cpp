@@ -2052,8 +2052,9 @@ RC BplusTreeScanner::fix_user_key(
   }
 
   // 这里很粗暴，变长字段才需要做调整，其它默认都不需要做调整
+  // 索引层面统一按 CHARS(字节序) 比较，但 user_key 可能是二进制（例如经过数值编码），
+  // 不能使用 strlen 之类的字符串长度判断。
   assert(tree_handler_.file_header_.attr_type == AttrType::CHARS);
-  assert(strlen(user_key) >= static_cast<size_t>(key_len));
 
   *should_inclusive = false;
 

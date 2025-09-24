@@ -147,6 +147,73 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
     left_inclusive_  = true;
     right_inclusive_ = true;
   }
+  else if (index_->key_fields().size() == 1) {
+    const auto &fields = index_->key_fields();
+    const FieldMeta &fm = fields[0];
+
+    auto put_be32 = [](uint32_t v, char *out) {
+      out[0] = static_cast<char>((v >> 24) & 0xFF);
+      out[1] = static_cast<char>((v >> 16) & 0xFF);
+      out[2] = static_cast<char>((v >> 8) & 0xFF);
+      out[3] = static_cast<char>(v & 0xFF);
+    };
+    auto encode_int = [&](int32_t iv, char *out) {
+      uint32_t uv = static_cast<uint32_t>(iv) ^ 0x80000000u;
+      put_be32(uv, out);
+    };
+    auto encode_float = [&](float fv, char *out) {
+      uint32_t u; memcpy(&u, &fv, sizeof(u));
+      if (u & 0x80000000u) { u = ~u; } else { u ^= 0x80000000u; }
+      put_be32(u, out);
+    };
+
+    std::string left_bytes(fm.len(), '\0');
+    std::string right_bytes(fm.len(), '\0');
+
+    switch (fm.type()) {
+      case AttrType::INTS:
+      case AttrType::DATES: {
+        int32_t vL = left_value_.get_int();
+        int32_t vR = (right_value_.attr_type() == AttrType::UNDEFINED) ? vL : right_value_.get_int();
+        encode_int(vL, &left_bytes[0]);
+        encode_int(vR, &right_bytes[0]);
+      } break;
+      case AttrType::FLOATS: {
+        float vL = left_value_.get_float();
+        float vR = (right_value_.attr_type() == AttrType::UNDEFINED) ? vL : right_value_.get_float();
+        encode_float(vL, &left_bytes[0]);
+        encode_float(vR, &right_bytes[0]);
+      } break;
+      case AttrType::CHARS:
+      case AttrType::TEXTS: {
+        auto sL = left_value_.get_string();
+        auto sR = (right_value_.attr_type() == AttrType::UNDEFINED) ? sL : right_value_.get_string();
+        int  cL = std::min<int>(fm.len(), (int)sL.size());
+        int  cR = std::min<int>(fm.len(), (int)sR.size());
+        memcpy(&left_bytes[0], sL.data(), cL);
+        memcpy(&right_bytes[0], sR.data(), cR);
+      } break;
+      case AttrType::BOOLEANS: {
+        int32_t vL = left_value_.get_boolean() ? 1 : 0;
+        int32_t vR = (right_value_.attr_type() == AttrType::UNDEFINED ? vL : (right_value_.get_boolean() ? 1 : 0));
+        encode_int(vL, &left_bytes[0]);
+        encode_int(vR, &right_bytes[0]);
+      } break;
+      default: {
+        memcpy(&left_bytes[0], left_value_.data(), std::min(fm.len(), left_value_.length()));
+        if (right_value_.attr_type() == AttrType::UNDEFINED) {
+          memcpy(&right_bytes[0], left_value_.data(), std::min(fm.len(), left_value_.length()));
+        } else {
+          memcpy(&right_bytes[0], right_value_.data(), std::min(fm.len(), right_value_.length()));
+        }
+      } break;
+    }
+
+    left_value_.set_type(AttrType::CHARS);
+    left_value_.set_data(left_bytes.data(), (int)left_bytes.size());
+    right_value_.set_type(AttrType::CHARS);
+    right_value_.set_data(right_bytes.data(), (int)right_bytes.size());
+  }
 
   IndexScanner *index_scanner = index_->create_scanner(left_value_.data(),
       left_value_.length(),
