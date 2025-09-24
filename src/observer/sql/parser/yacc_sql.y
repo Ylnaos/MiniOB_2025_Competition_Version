@@ -711,7 +711,10 @@ expression:
     ;
 
 aggregate_expression:
-    ID LBRACE expression RBRACE {
+    ID LBRACE RBRACE {
+      $$ = create_aggregate_expression($1, new StarExpr(), sql_string, &@$);
+    }
+    | ID LBRACE expression RBRACE {
       $$ = create_aggregate_expression($1, $3, sql_string, &@$);
     }
     | ID LBRACE expression COMMA expression_list RBRACE {
