@@ -110,6 +110,7 @@ INTO                                    RETURN_TOKEN(INTO);
 VALUES                                  RETURN_TOKEN(VALUES);
 DELETE                                  RETURN_TOKEN(DELETE);
 UPDATE                                  RETURN_TOKEN(UPDATE);
+AS                                      RETURN_TOKEN(AS);
 SET                                     RETURN_TOKEN(SET);
 BEGIN                                   RETURN_TOKEN(TRX_BEGIN);
 COMMIT                                  RETURN_TOKEN(TRX_COMMIT);

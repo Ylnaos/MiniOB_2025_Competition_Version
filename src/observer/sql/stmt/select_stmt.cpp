@@ -44,7 +44,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   vector<Table *>                tables;
   unordered_map<string, Table *> table_map;
   for (size_t i = 0; i < select_sql.relations.size(); i++) {
-    const char *table_name = select_sql.relations[i].c_str();
+    const RelationSqlNode &rel = select_sql.relations[i];
+    const char *table_name = rel.relation_name.c_str();
     if (nullptr == table_name) {
       LOG_WARN("invalid argument. relation name is null. index=%d", i);
       return RC::INVALID_ARGUMENT;
@@ -59,6 +60,15 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     binder_context.add_table(table);
     tables.push_back(table);
     table_map.insert({table_name, table});
+    // 别名检查：同层不重复
+    if (!rel.alias.empty()) {
+      if (table_map.find(rel.alias) != table_map.end()) {
+        LOG_WARN("duplicate table alias in same scope: %s", rel.alias.c_str());
+        return RC::INVALID_ARGUMENT;
+      }
+      table_map.insert({rel.alias, table});
+      binder_context.add_alias(rel.alias, table);
+    }
   }
 
   // collect query fields in `select` statement

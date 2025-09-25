@@ -117,8 +117,11 @@ public:
   /**
    * @brief 表达式的名字，比如是字段名称，或者用户在执行SQL语句时输入的内容
    */
-  virtual const char *name() const { return name_.c_str(); }
+  virtual const char *name() const { return alias_.empty() ? name_.c_str() : alias_.c_str(); }
   virtual void        set_name(string name) { name_ = name; }
+  // 列别名：仅用于结果展示，不参与计算与比较
+  virtual void        set_alias(const string &alias) { alias_ = alias; }
+  virtual const char *alias() const { return alias_.empty() ? nullptr : alias_.c_str(); }
 
   /**
    * @brief 表达式在下层算子返回的 chunk 中的位置
@@ -142,6 +145,7 @@ protected:
 
 private:
   string name_;
+  string alias_;
 };
 
 class StarExpr : public Expression

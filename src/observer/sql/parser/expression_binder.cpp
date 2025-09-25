@@ -1,4 +1,4 @@
-/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
+﻿/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
 miniob is licensed under Mulan PSL v2.
 You can use this software according to the terms and conditions of the Mulan PSL v2.
 You may obtain a copy of Mulan PSL v2 at:
@@ -22,6 +22,13 @@ using namespace common;
 
 Table *BinderContext::find_table(const char *table_name) const
 {
+  // 先按别名匹配
+  if (table_name != nullptr && *table_name != '\0') {
+    auto it = alias_map_.find(string(table_name));
+    if (it != alias_map_.end()) {
+      return it->second;
+    }
+  }
   auto pred = [table_name](Table *table) { return 0 == strcasecmp(table_name, table->name()); };
   auto iter = ranges::find_if(query_tables_, pred);
   if (iter == query_tables_.end()) {
@@ -195,7 +202,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
     // 如果用户在 SQL 中使用了带表名限定的列名（如 t.col），
     // 则输出表头时也应保留“表.列”的形式，并与测试期望一致（大写）。
     if (!is_blank(table_name)) {
-      std::string t = table->name();
+      std::string t = table_name; // 保留别名/原名
       std::string f = field_name;
       common::str_to_upper(t);
       common::str_to_upper(f);

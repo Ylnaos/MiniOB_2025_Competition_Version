@@ -1412,15 +1412,21 @@ dst.conditions.reserve(src.conditions.size());
 
     RC rc = RC::SUCCESS;
     bool sub = false;
+    std::vector<std::string> inner_names;
+    inner_names.reserve(src.relations.size()*2);
+    for (const auto &r : src.relations) {
+      inner_names.push_back(r.relation_name);
+      if (!r.alias.empty()) inner_names.push_back(r.alias);
+    }
     if (cond.left_expr) {
-      auto left_new = copy_and_substitute_outer_refs(*cond.left_expr, src.relations, outer_tuple, sub, rc);
+      auto left_new = copy_and_substitute_outer_refs(*cond.left_expr, inner_names, outer_tuple, sub, rc);
       if (!left_new || rc != RC::SUCCESS) return nullptr;
       new_cond.left_expr.reset(left_new.release());
       did_substitute = did_substitute || sub;
     }
     sub = false;
     if (cond.right_expr) {
-      auto right_new = copy_and_substitute_outer_refs(*cond.right_expr, src.relations, outer_tuple, sub, rc);
+      auto right_new = copy_and_substitute_outer_refs(*cond.right_expr, inner_names, outer_tuple, sub, rc);
       if (!right_new || rc != RC::SUCCESS) return nullptr;
       new_cond.right_expr.reset(right_new.release());
       did_substitute = did_substitute || sub;

@@ -76,6 +76,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         CALC
         SELECT
         DESC
+        AS
         ASC
         SHOW
         SYNC
@@ -146,7 +147,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   vector<vector<Value>> *                    rows;
   vector<ConditionSqlNode> *                 condition_list;
   vector<RelAttrSqlNode> *                   rel_attr_list;
-  vector<string> *                           relation_list;
+  vector<RelationSqlNode> *                  relation_list;
+  RelationSqlNode *                          relation_node;
   vector<string> *                           key_list;
   vector<pair<string, Expression*>> *        update_list;
   char *                                     cstring;
@@ -179,7 +181,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <condition>           condition
 %type <value>               value
 %type <number>              number
-%type <cstring>             relation
+%type <relation_node>       relation
 %type <comp>                comp_op
 %type <rel_attr>            rel_attr
 %type <attr_infos>          attr_def_list
@@ -197,6 +199,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <expression>          expression
 %type <expression>          aggregate_expression
 %type <expression_list>     expression_list
+%type <expression>          select_item
 %type <expression_list>     group_by
 %type <order_by_list>       order_by
 %type <order_by_list>       order_by_condition_list
@@ -647,12 +650,12 @@ calc_stmt:
     ;
 
 expression_list:
-    expression
+    select_item
     {
       $$ = new vector<unique_ptr<Expression>>;
       $$->emplace_back($1);
     }
-    | expression COMMA expression_list
+    | select_item COMMA expression_list
     {
       if ($3 != nullptr) {
         $$ = $3;
@@ -711,6 +714,24 @@ expression:
     }
     ;
 
+
+select_item:
+    expression
+    {
+      $$ = $1;
+    }
+    | expression ID
+    {
+      $1->set_alias($2);
+      $$ = $1;
+    }
+    | expression AS ID
+    {
+      $1->set_alias($3);
+      $$ = $1;
+    }
+    ;
+
 aggregate_expression:
     /* 允许空参数聚合在语法阶段通过，但记录为0个参数，
        在语义阶段（binder）统一返回 INVALID_ARGUMENT，从而对外呈现为 FAILURE。 */
@@ -746,26 +767,39 @@ rel_attr:
       $$->relation_name  = $1;
       $$->attribute_name = $3;
     }
+    | ID DOT '*' {
+      $$ = new RelAttrSqlNode;
+      $$->relation_name  = $1;
+      $$->attribute_name = "*";
+    }
     ;
 
 relation:
     ID {
-      $$ = $1;
+      $$ = new RelationSqlNode{ $1, "" };
+    }
+    | ID ID {
+      $$ = new RelationSqlNode{ $1, $2 };
+    }
+    | ID AS ID {
+      $$ = new RelationSqlNode{ $1, $3 };
     }
     ;
+
 rel_list:
     relation {
-      $$ = new vector<string>();
-      $$->push_back($1);
+      $$ = new vector<RelationSqlNode>();
+      $$->push_back(*$1);
+      delete $1;
     }
     | relation COMMA rel_list {
       if ($3 != nullptr) {
         $$ = $3;
       } else {
-        $$ = new vector<string>;
+        $$ = new vector<RelationSqlNode>;
       }
-
-      $$->insert($$->begin(), $1);
+      $$->emplace($$->begin(), *$1);
+      delete $1;
     }
     ;
 

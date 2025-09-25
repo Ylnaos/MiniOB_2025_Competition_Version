@@ -40,6 +40,16 @@ struct RelAttrSqlNode
 };
 
 /**
+ * @brief FROM 子句中的表及其可选别名
+ */
+struct RelationSqlNode
+{
+  string relation_name;  ///< 真实表名
+  string alias;          ///< 可选表别名，未指定则为空
+};
+
+
+/**
  * @brief 描述比较运算符
  * @ingroup SQLParser
  */
@@ -123,7 +133,7 @@ struct OrderBySqlNode
 struct SelectSqlNode
 {
   vector<unique_ptr<Expression>> expressions;  ///< 查询的表达式
-  vector<string>                 relations;    ///< 查询的表
+  vector<RelationSqlNode>                 relations;    ///< 查询的表
   vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
   vector<OrderBySqlNode>         order_by;     ///< order by clause
