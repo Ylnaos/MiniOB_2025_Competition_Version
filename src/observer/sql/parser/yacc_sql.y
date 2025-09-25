@@ -67,6 +67,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         BY
         ORDER
         CREATE
+        VIEW
         DROP
         GROUP
         TABLE
@@ -212,6 +213,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <sql_node>            update_stmt
 %type <sql_node>            delete_stmt
 %type <sql_node>            create_table_stmt
+%type <sql_node>            create_view_stmt
 %type <sql_node>            drop_table_stmt
 %type <sql_node>            analyze_table_stmt
 %type <sql_node>            show_tables_stmt
@@ -250,6 +252,7 @@ command_wrapper:
   | update_stmt
   | delete_stmt
   | create_table_stmt
+  | create_view_stmt
   | drop_table_stmt
   | analyze_table_stmt
   | show_tables_stmt
@@ -307,6 +310,16 @@ drop_table_stmt:    /*drop table 语句的语法解析树*/
       $$ = new ParsedSqlNode(SCF_DROP_TABLE);
       $$->drop_table.relation_name = $3;
     };
+
+create_view_stmt:
+    CREATE VIEW ID AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_VIEW);
+      $$->create_view.view_name = $3;
+      $$->create_view.view_select_sql = token_name(sql_string, &@5);
+      $$->create_view.select_node.reset($5);
+    }
+    ;
 
 analyze_table_stmt:  /* analyze table 语法的语法解析树*/
     ANALYZE TABLE ID {

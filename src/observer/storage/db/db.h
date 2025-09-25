@@ -27,6 +27,7 @@ See the Mulan PSL v2 for more details. */
 #include "oblsm/include/ob_lsm.h"
 
 class Table;
+class View;
 class LogHandler;
 class BufferPoolManager;
 class TrxKit;
@@ -85,6 +86,13 @@ public:
    */
   Table *find_table(int32_t table_id) const;
 
+  /// @brief 创建视图
+  RC create_view(const char *view_name, const char *select_sql);
+  /// @brief 删除视图
+  RC drop_view(const char *view_name);
+  /// @brief 查找视图
+  View *find_view(const char *view_name) const;
+
   /// @brief 当前数据库的名称
   const char *name() const;
 
@@ -113,6 +121,7 @@ public:
 private:
   /// @brief 打开所有的表。在数据库初始化的时候会执行
   RC open_all_tables();
+  RC open_all_views();
   /// @brief 恢复数据。在数据库初始化的时候运行。
   RC recover();
 
@@ -143,6 +152,7 @@ private:
   string                         name_;                 ///< 数据库名称
   string                         path_;                 ///< 数据库文件存放的目录
   unordered_map<string, Table *> opened_tables_;        ///< 当前所有打开的表
+  unordered_map<string, View *>  opened_views_;         ///< 当前所有打开的视图
   unique_ptr<BufferPoolManager>  buffer_pool_manager_;  ///< 当前数据库的buffer pool管理器
   unique_ptr<LogHandler>         log_handler_;          ///< 当前数据库的日志处理器
   unique_ptr<TrxKit>             trx_kit_;              ///< 当前数据库的事务管理器

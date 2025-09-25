@@ -27,12 +27,17 @@ See the Mulan PSL v2 for more details. */
 #include "storage/trx/trx.h"
 #include "storage/clog/disk_log_handler.h"
 #include "storage/clog/integrated_log_replayer.h"
+#include "storage/view/view.h"
 
 using namespace common;
 
 Db::~Db()
 {
   for (auto &iter : opened_tables_) {
+    delete iter.second;
+  }
+
+  for (auto &iter : opened_views_) {
     delete iter.second;
   }
 
@@ -266,6 +271,12 @@ RC Db::open_all_tables()
   }
 
   LOG_INFO("All table have been opened. num=%d", opened_tables_.size());
+  // 打开所有视图
+  rc = open_all_views();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  LOG_INFO("All view have been opened. num=%d", opened_views_.size());
   return rc;
 }
 
@@ -450,3 +461,110 @@ RC Db::init_dblwr_buffer()
 LogHandler        &Db::log_handler() { return *log_handler_; }
 BufferPoolManager &Db::buffer_pool_manager() { return *buffer_pool_manager_; }
 TrxKit            &Db::trx_kit() { return *trx_kit_; }
+
+RC Db::open_all_views()
+{
+  vector<string> view_meta_files;
+
+  int ret = list_file(path_.c_str(), VIEW_META_FILE_PATTERN, view_meta_files);
+  if (ret < 0) {
+    LOG_ERROR("Failed to list view meta files under %s.", path_.c_str());
+    return RC::IOERR_READ;
+  }
+
+  for (const string &filename : view_meta_files) {
+    // 读取视图定义
+    string file_path = filesystem::path(path_) / filename;
+    FILE  *fp = fopen(file_path.c_str(), "rb");
+    if (fp == nullptr) {
+      LOG_WARN("open view meta file failed: %s", file_path.c_str());
+      return RC::IOERR_OPEN;
+    }
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    string content;
+    content.resize(sz > 0 ? sz : 0);
+    if (sz > 0) {
+      size_t n = fread(content.data(), 1, sz, fp);
+      (void)n;
+    }
+    fclose(fp);
+
+    // 文件名去掉后缀作为视图名
+    string view_name = filename;
+    size_t pos       = view_name.rfind(VIEW_META_SUFFIX);
+    if (pos != string::npos) {
+      view_name.erase(pos);
+    }
+
+    if (opened_tables_.count(view_name) > 0) {
+      LOG_ERROR("view name conflicts with table name: %s", view_name.c_str());
+      return RC::SCHEMA_TABLE_EXIST;
+    }
+
+    View *view = new View();
+    RC    rc   = view->init(view_name.c_str(), content.c_str());
+    if (OB_FAIL(rc)) {
+      delete view;
+      LOG_WARN("init view failed: %s", view_name.c_str());
+      return rc;
+    }
+    opened_views_[view_name] = view;
+    LOG_INFO("Open view: %s, file: %s", view_name.c_str(), filename.c_str());
+  }
+
+  return RC::SUCCESS;
+}
+
+RC Db::create_view(const char *view_name, const char *select_sql)
+{
+  if (is_blank(view_name) || is_blank(select_sql)) return RC::INVALID_ARGUMENT;
+  if (opened_tables_.count(view_name) > 0) return RC::SCHEMA_TABLE_EXIST;
+  if (opened_views_.count(view_name) > 0) return RC::EXIST;
+
+  string file_path = view_meta_file(path_.c_str(), view_name);
+  FILE  *fp       = fopen(file_path.c_str(), "wb");
+  if (fp == nullptr) {
+    LOG_WARN("create view: open meta file failed %s", file_path.c_str());
+    return RC::IOERR_OPEN;
+  }
+  size_t n = fwrite(select_sql, 1, strlen(select_sql), fp);
+  fclose(fp);
+  (void)n;
+
+  View *view = new View();
+  RC    rc   = view->init(view_name, select_sql);
+  if (OB_FAIL(rc)) {
+    delete view;
+    return rc;
+  }
+  opened_views_[view_name] = view;
+  LOG_INFO("Create view success. name=%s", view_name);
+  return RC::SUCCESS;
+}
+
+RC Db::drop_view(const char *view_name)
+{
+  if (is_blank(view_name)) return RC::INVALID_ARGUMENT;
+  auto it = opened_views_.find(view_name);
+  if (it == opened_views_.end()) return RC::NOT_EXIST;
+
+  delete it->second;
+  opened_views_.erase(it);
+
+  string file_path = view_meta_file(path_.c_str(), view_name);
+  if (unlink(file_path.c_str()) != 0) {
+    LOG_WARN("Failed to remove view meta file: %s", file_path.c_str());
+  }
+
+  LOG_INFO("Drop view success. name=%s", view_name);
+  return RC::SUCCESS;
+}
+
+View *Db::find_view(const char *view_name) const
+{
+  auto it = opened_views_.find(string(view_name));
+  if (it == opened_views_.end()) return nullptr;
+  return it->second;
+}

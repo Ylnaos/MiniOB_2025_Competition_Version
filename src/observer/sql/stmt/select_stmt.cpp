@@ -19,6 +19,8 @@ See the Mulan PSL v2 for more details. */
 #include "storage/db/db.h"
 #include "storage/table/table.h"
 #include "sql/parser/expression_binder.h"
+#include "sql/parser/parse.h"
+#include "storage/view/view.h"
 
 using namespace std;
 using namespace common;
@@ -36,6 +38,47 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   if (nullptr == db) {
     LOG_WARN("invalid argument. db is null");
     return RC::INVALID_ARGUMENT;
+  }
+
+  // 简单的视图展开：仅支持单视图、且外层为 `SELECT * FROM view` 无其它 WHERE/ORDER/GROUP 的场景
+  if (select_sql.relations.size() == 1) {
+    const RelationSqlNode &rel = select_sql.relations[0];
+    const char *rel_name = rel.relation_name.c_str();
+    if (db->find_table(rel_name) == nullptr) {
+      View *view = db->find_view(rel_name);
+      if (view != nullptr) {
+        bool only_star = (select_sql.expressions.size() == 1) &&
+                         (select_sql.expressions[0] != nullptr) &&
+                         (select_sql.expressions[0]->type() == ExprType::STAR);
+        bool no_outer_filters = select_sql.conditions.empty() &&
+                                select_sql.group_by.empty() &&
+                                select_sql.order_by.empty() &&
+                                rel.alias.empty();
+        if (!only_star || !no_outer_filters) {
+          LOG_WARN("current view usage is limited to: SELECT * FROM view_name");
+          return RC::UNSUPPORTED;
+        }
+
+        ParsedSqlResult parsed;
+        RC parse_rc = parse(view->select_sql(), &parsed);
+        if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+          LOG_WARN("parse view select failed. view=%s", view->name());
+          return RC::SQL_SYNTAX;
+        }
+        ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+        if (node->flag != SCF_SELECT) {
+          LOG_WARN("view definition is not a SELECT. view=%s", view->name());
+          return RC::SQL_SYNTAX;
+        }
+
+        // 用视图的SELECT定义替换外层SELECT
+        select_sql.expressions.swap(node->selection.expressions);
+        select_sql.relations.swap(node->selection.relations);
+        select_sql.conditions.swap(node->selection.conditions);
+        select_sql.group_by.swap(node->selection.group_by);
+        select_sql.order_by.swap(node->selection.order_by);
+      }
+    }
   }
 
   BinderContext binder_context;
