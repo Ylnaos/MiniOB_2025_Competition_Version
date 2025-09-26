@@ -38,6 +38,7 @@ Value::Value(const Value &other)
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
     case AttrType::CHARS:
+    case AttrType::VECTORS:
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
@@ -69,6 +70,7 @@ Value &Value::operator=(const Value &other)
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
     case AttrType::CHARS:
+    case AttrType::VECTORS:
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
@@ -99,6 +101,7 @@ void Value::reset()
 {
   switch (attr_type_) {
     case AttrType::CHARS:
+    case AttrType::VECTORS:
     case AttrType::TEXTS:
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
@@ -117,6 +120,7 @@ void Value::set_data(char *data, int length)
 {
   switch (attr_type_) {
     case AttrType::CHARS:
+    case AttrType::VECTORS:
     case AttrType::TEXTS: {
       // 保持原有类型（CHARS/TEXTS），避免 set_string 将类型强制为 CHARS
       AttrType old_type = attr_type_;
@@ -258,6 +262,9 @@ char *Value::data() const
 {
   switch (attr_type_) {
     case AttrType::CHARS: {
+      return value_.pointer_value_;
+    } break;
+    case AttrType::VECTORS: {
       return value_.pointer_value_;
     } break;
     case AttrType::TEXTS: {

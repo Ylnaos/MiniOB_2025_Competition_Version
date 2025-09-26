@@ -24,7 +24,16 @@ RC OrderByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
-  // 读取所有数据并物化
+  // 读取数据并物化；若存在 limit_，使用小顶堆/大顶堆保留前K
+  vector<ValueListTuple> all_rows;
+  struct Cmp {
+    const OrderByPhysicalOperator *self;
+    bool operator()(const ValueListTuple &a, const ValueListTuple &b) const {
+      return self->compare_rows(a, b) < 0; // a < b => true (小顶堆需要相反)
+    }
+  } cmp{this};
+  std::priority_queue<ValueListTuple, vector<ValueListTuple>, Cmp> heap(cmp);
+
   while (RC::SUCCESS == (rc = children_[0]->next())) {
     Tuple *child_tuple = children_[0]->current_tuple();
     if (child_tuple == nullptr) {
@@ -37,7 +46,19 @@ RC OrderByPhysicalOperator::open(Trx *trx)
       LOG_WARN("failed to materialize tuple. rc=%s", strrc(rc));
       return rc;
     }
-    rows_.emplace_back(std::move(row));
+    if (limit_ > 0) {
+      if ((int)heap.size() < limit_) {
+        heap.emplace(std::move(row));
+      } else {
+        // 若新行比堆顶更优（更小），则替换
+        if (compare_rows(row, heap.top()) < 0) {
+          heap.pop();
+          heap.emplace(std::move(row));
+        }
+      }
+    } else {
+      all_rows.emplace_back(std::move(row));
+    }
   }
 
   if (rc != RC::RECORD_EOF) {
@@ -45,11 +66,20 @@ RC OrderByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
-  // 排序
-  std::sort(rows_.begin(), rows_.end(), [this](const ValueListTuple &a, const ValueListTuple &b) {
-    int cmp = compare_rows(a, b);
-    return cmp < 0;
-  });
+  if (limit_ > 0) {
+    // 从堆中弹出，得到升序
+    rows_.resize(heap.size());
+    for (int i = static_cast<int>(heap.size()) - 1; i >= 0; --i) {
+      rows_[i] = std::move(const_cast<ValueListTuple &>(heap.top()));
+      heap.pop();
+    }
+  } else {
+    rows_.swap(all_rows);
+    std::sort(rows_.begin(), rows_.end(), [this](const ValueListTuple &a, const ValueListTuple &b) {
+      int cmp = compare_rows(a, b);
+      return cmp < 0;
+    });
+  }
 
   current_index_ = 0;
   opened_        = true;
@@ -135,4 +165,3 @@ RC OrderByPhysicalOperator::close()
   current_index_ = 0;
   return RC::SUCCESS;
 }
-

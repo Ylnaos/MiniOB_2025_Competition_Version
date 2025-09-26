@@ -18,7 +18,7 @@ enum class AttrType
 {
   UNDEFINED,
   CHARS,     ///< 定长字符串
-  TEXTS,     ///< TEXT 类型（按字符串处理），固定最大4096字节
+  TEXTS,     ///< TEXT 类型（跨页存储，最大65535字节，通过 LOB 文件持久化）
   INTS,      ///< 整数类型(4字节)
   FLOATS,    ///< 浮点数类型(4字节)
   DATES,     ///< 日期类型(4字字节)
@@ -28,11 +28,10 @@ enum class AttrType
   MAXTYPE,   ///< 新类型请加在 UNDEFINED 与 MAXTYPE 之间
 };
 
-// TEXT 固定最大长度
-static constexpr int TEXT_MAX_LENGTH = 4096;
+// TEXT 最大长度（参考 MySQL TEXT 上限）
+static constexpr int TEXT_MAX_LENGTH = 65535;
 
 const char *attr_type_to_string(AttrType type);
 AttrType    attr_type_from_string(const char *s);
 bool        is_numerical_type(AttrType type);
 bool        is_string_type(AttrType type);
-

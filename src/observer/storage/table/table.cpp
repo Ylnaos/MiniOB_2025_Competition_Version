@@ -121,6 +121,20 @@ RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, c
     return rc;
   }
 
+  // 创建并打开 LOB 文件（用于 TEXT/VECTORS 等大对象跨页存储）
+  {
+    string lob_file = table_lob_file(base_dir, name);
+    if (lob_handler_ == nullptr) lob_handler_ = new LobFileHandler();
+    RC lob_rc = lob_handler_->open_file(lob_file.c_str());
+    if (lob_rc != RC::SUCCESS) {
+      // 若不存在则创建后再打开
+      RC create_rc = lob_handler_->create_file(lob_file.c_str());
+      (void)create_rc;
+      lob_rc = lob_handler_->open_file(lob_file.c_str());
+    }
+    LOG_INFO("LOB file ready for table %s: %s", name, strrc(lob_rc));
+  }
+
   LOG_INFO("Successfully create table %s:%s", base_dir, name);
   return rc;
 }
@@ -167,6 +181,20 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   if (rc != RC::SUCCESS) {
     LOG_ERROR("Failed to open table %s due to engine open failed.", base_dir);
     return rc;
+  }
+
+  // 打开 LOB 文件
+  {
+    string lob_file = table_lob_file(db_->path().c_str(), table_meta_.name());
+    if (lob_handler_ == nullptr) lob_handler_ = new LobFileHandler();
+    RC lob_rc = lob_handler_->open_file(lob_file.c_str());
+    if (lob_rc != RC::SUCCESS) {
+      // 尝试创建后再打开
+      RC create_rc = lob_handler_->create_file(lob_file.c_str());
+      (void)create_rc;
+      lob_rc = lob_handler_->open_file(lob_file.c_str());
+    }
+    LOG_INFO("Open LOB file for table %s: %s", table_meta_.name(), strrc(lob_rc));
   }
 
   return rc;
@@ -300,8 +328,46 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
       // CHARS：尽量包含末尾'\0'
       copy_len = std::min(writable_size, data_len + 1);
     } else if (field->type() == AttrType::TEXTS) {
-      // TEXT：仅按长度截断，不强制添加'\0'
-      copy_len = std::min(writable_size, data_len);
+      // TEXT：使用 LOB 文件存储。记录内仅存放 [offset:int64][length:int32]
+      if (data_len > static_cast<size_t>(TEXT_MAX_LENGTH)) {
+        LOG_WARN("TEXT too long. field=%s, len=%zu > %d", field->name(), data_len, TEXT_MAX_LENGTH);
+        return RC::INVALID_ARGUMENT;
+      }
+      if (lob_handler_ == nullptr) {
+        LOG_WARN("LOB handler is null for table %s", table_meta_.name());
+        return RC::INTERNAL;
+      }
+      int64_t off = 0;
+      RC irc = lob_handler_->insert_data(off, static_cast<int64_t>(data_len), src->data());
+      if (OB_FAIL(irc)) {
+        LOG_WARN("failed to write LOB for TEXT. rc=%s", strrc(irc));
+        return irc;
+      }
+      // 写 LOB 定位器
+      if (writable_size >= sizeof(int64_t) + sizeof(int32_t)) {
+        memcpy(record_data + field_offset, &off, sizeof(int64_t));
+        int32_t l32 = static_cast<int32_t>(data_len);
+        memcpy(record_data + field_offset + sizeof(int64_t), &l32, sizeof(int32_t));
+      }
+      return RC::SUCCESS;
+    } else if (field->type() == AttrType::VECTORS) {
+      // VECTORS：外置 LOB（内容为 [int32 dim][float...], 已在 Value 中编码）
+      if (lob_handler_ == nullptr) {
+        LOG_WARN("LOB handler is null for table %s", table_meta_.name());
+        return RC::INTERNAL;
+      }
+      int64_t off = 0;
+      RC irc = lob_handler_->insert_data(off, static_cast<int64_t>(data_len), src->data());
+      if (OB_FAIL(irc)) {
+        LOG_WARN("failed to write LOB for VECTORS. rc=%s", strrc(irc));
+        return irc;
+      }
+      if (writable_size >= sizeof(int64_t) + sizeof(int32_t)) {
+        memcpy(record_data + field_offset, &off, sizeof(int64_t));
+        int32_t l32 = static_cast<int32_t>(data_len);
+        memcpy(record_data + field_offset + sizeof(int64_t), &l32, sizeof(int32_t));
+      }
+      return RC::SUCCESS;
     } else {
       // 其他类型：保守处理
       copy_len = std::min(writable_size, data_len);
@@ -320,13 +386,8 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
       copy_len = data_len + 1; // 预留结尾'\0'
     }
     memset(record_data + field->offset(), 0, field->len());
-  } else if (field->type() == AttrType::TEXTS) {
-    // TEXT: 截断到最多4096字节，不强制添加额外'\0'
-    if (copy_len > data_len) {
-      copy_len = data_len;
-    }
-    memset(record_data + field->offset(), 0, field->len());
   }
+  // TEXT/VECTORS 由上面的 LOB 分支写入并 return，这里无需处理
   memcpy(record_data + field->offset(), src->data(), copy_len);
   return RC::SUCCESS;
 }

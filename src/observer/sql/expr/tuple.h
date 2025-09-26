@@ -210,9 +210,34 @@ public:
         }
       }
     }
-    cell.set_type(field_meta->type());
-    cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
-    return RC::SUCCESS;
+    if (field_meta->type() == AttrType::TEXTS || field_meta->type() == AttrType::VECTORS) {
+      // 读取 LOB 定位器并从 LOB 文件取回文本
+      const char *p   = this->record_->data() + field_meta->offset();
+      int64_t     off = 0;
+      int32_t     len = 0;
+      memcpy(&off, p, sizeof(int64_t));
+      memcpy(&len, p + sizeof(int64_t), sizeof(int32_t));
+      if (len <= 0) {
+        cell.set_type(field_meta->type());
+        // Avoid overload ambiguity with nullptr between char* and const char*
+        cell.set_data(static_cast<const char *>(nullptr), 0);
+        return RC::SUCCESS;
+      }
+      char *buf = new char[len];
+      RC rc = table_->lob_handler()->get_data(off, len, buf);
+      if (OB_FAIL(rc)) {
+        delete[] buf;
+        LOG_WARN("failed to read LOB for LOB field. off=%ld len=%d rc=%s", off, len, strrc(rc));
+        return rc;
+      }
+      cell.set_type(field_meta->type());
+      cell.set_data(buf, len); // Value 持有并在 reset 时释放
+      return RC::SUCCESS;
+    } else {
+      cell.set_type(field_meta->type());
+      cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
+      return RC::SUCCESS;
+    }
   }
 
   RC spec_at(int index, TupleCellSpec &spec) const override

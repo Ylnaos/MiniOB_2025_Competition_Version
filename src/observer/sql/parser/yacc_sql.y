@@ -11,6 +11,7 @@
 #include "sql/parser/yacc_sql.hpp"
 #include "sql/parser/lex_sql.h"
 #include "sql/expr/expression.h"
+#include "sql/expr/vector_function_expr.h"
 
 using namespace std;
 
@@ -130,6 +131,9 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         LIKE
         NULL_T
         NULLABLE
+        L2_DISTANCE
+        COSINE_DISTANCE
+        INNER_PRODUCT
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -174,6 +178,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %token <floats> FLOAT
 %token <cstring> ID
 %token <cstring> SSS
+%token LIMIT
+%token <cstring> VEC_LIT
 //非终结符
 
 /** type 定义了各种解析后的结果输出的是什么类型。类型对应了 union 中的定义的成员变量名称 **/
@@ -213,6 +219,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <sql_node>            update_stmt
 %type <sql_node>            delete_stmt
 %type <sql_node>            create_table_stmt
+%type <sql_node>            create_table_as_select_stmt
 %type <sql_node>            create_view_stmt
 %type <sql_node>            drop_table_stmt
 %type <sql_node>            analyze_table_stmt
@@ -252,6 +259,7 @@ command_wrapper:
   | update_stmt
   | delete_stmt
   | create_table_stmt
+  | create_table_as_select_stmt
   | create_view_stmt
   | drop_table_stmt
   | analyze_table_stmt
@@ -321,6 +329,16 @@ create_view_stmt:
     }
     ;
 
+/* CREATE TABLE t AS SELECT ... */
+create_table_as_select_stmt:
+    CREATE TABLE ID AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE_AS_SELECT);
+      $$->create_table_as_select.table_name = $3;
+      $$->create_table_as_select.select_node.reset($5);
+    }
+    ;
+
 analyze_table_stmt:  /* analyze table 语法的语法解析树*/
     ANALYZE TABLE ID {
       $$ = new ParsedSqlNode(SCF_ANALYZE_TABLE);
@@ -351,6 +369,32 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       if ($7 != nullptr) {
         create_index.attribute_names.swap(*$7);
         delete $7;
+      }
+      create_index.unique = false;
+    }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE attr_list RBRACE
+    {
+      // 兼容 CREATE VECTOR INDEX 语法，暂按普通索引处理（忽略 WITH 参数）
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      if ($8 != nullptr) {
+        create_index.attribute_names.swap(*$8);
+        delete $8;
+      }
+      create_index.unique = false;
+    }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE attr_list RBRACE ID LBRACE /* WITH ( ... ) 作为可选尾随子句，忽略 */
+      /* with_kv_list */ RBRACE
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      if ($8 != nullptr) {
+        create_index.attribute_names.swap(*$8);
+        delete $8;
       }
       create_index.unique = false;
     }
@@ -542,8 +586,26 @@ value:
     }
     | SSS {
       char *tmp = common::substr($1,1,strlen($1)-2);
-      $$ = new Value(tmp);
+      // If looks like a vector literal, parse as vector; else string
+      if (tmp != nullptr && tmp[0] == '[') {
+        Value v; RC rc = DataType::type_instance(AttrType::VECTORS)->set_value_from_str(v, tmp);
+        if (rc == RC::SUCCESS) {
+          $$ = new Value(v);
+        } else {
+          $$ = new Value(tmp);
+        }
+      } else {
+        $$ = new Value(tmp);
+      }
       free(tmp);
+    }
+    | VEC_LIT {
+      $$ = new Value();
+      RC rc = DataType::type_instance(AttrType::VECTORS)->set_value_from_str(*$$, $1);
+      if (rc != RC::SUCCESS) {
+        $$->set_string($1);
+      }
+      @$ = @1;
     }
     ;
 nullable_opt:
@@ -652,6 +714,31 @@ select_stmt:        /*  select 语句的语法解析树*/
         delete $7;
       }
     }
+    | SELECT expression_list FROM rel_list where group_by order_by LIMIT NUMBER
+    {
+      $$ = new ParsedSqlNode(SCF_SELECT);
+      if ($2 != nullptr) {
+        $$->selection.expressions.swap(*$2);
+        delete $2;
+      }
+      if ($4 != nullptr) {
+        $$->selection.relations.swap(*$4);
+        delete $4;
+      }
+      if ($5 != nullptr) {
+        $$->selection.conditions.swap(*$5);
+        delete $5;
+      }
+      if ($6 != nullptr) {
+        $$->selection.group_by.swap(*$6);
+        delete $6;
+      }
+      if ($7 != nullptr) {
+        $$->selection.order_by.swap(*$7);
+        delete $7;
+      }
+      $$->selection.limit = $9;
+    }
     ;
 calc_stmt:
     CALC expression_list
@@ -697,6 +784,18 @@ expression:
     }
     | '-' expression %prec UMINUS {
       $$ = create_arithmetic_expression(ArithmeticExpr::Type::NEGATIVE, $2, nullptr, sql_string, &@$);
+    }
+    | L2_DISTANCE LBRACE expression COMMA expression RBRACE {
+      $$ = new VectorFuncExpr(VectorFuncExpr::Func::L2, $3, $5);
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    | COSINE_DISTANCE LBRACE expression COMMA expression RBRACE {
+      $$ = new VectorFuncExpr(VectorFuncExpr::Func::COSINE, $3, $5);
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    | INNER_PRODUCT LBRACE expression COMMA expression RBRACE {
+      $$ = new VectorFuncExpr(VectorFuncExpr::Func::INNER_PRODUCT, $3, $5);
+      $$->set_name(token_name(sql_string, &@$));
     }
     | '*' {
       $$ = new StarExpr();

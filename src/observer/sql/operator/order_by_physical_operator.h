@@ -21,7 +21,9 @@ class OrderByPhysicalOperator : public PhysicalOperator
 public:
   using OrderItem = pair<unique_ptr<Expression>, bool>; // bool: true for ASC, false for DESC
 
-  OrderByPhysicalOperator(vector<OrderItem> &&order_by_items) : order_by_items_(std::move(order_by_items)) {}
+  OrderByPhysicalOperator(vector<OrderItem> &&order_by_items, int limit = -1)
+      : order_by_items_(std::move(order_by_items)), limit_(limit)
+  {}
 
   virtual ~OrderByPhysicalOperator() = default;
 
@@ -42,5 +44,5 @@ private:
   vector<ValueListTuple>  rows_;
   size_t                  current_index_ = 0;
   bool                    opened_        = false;
+  int                     limit_         = -1; // 若 >0 仅保留 top-K
 };
-

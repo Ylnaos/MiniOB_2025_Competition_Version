@@ -18,8 +18,8 @@ See the Mulan PSL v2 for more details. */
 class OrderByLogicalOperator : public LogicalOperator
 {
 public:
-  OrderByLogicalOperator(vector<pair<unique_ptr<Expression>, bool>> &&order_by_exprs)
-      : order_by_exprs_(std::move(order_by_exprs))
+  OrderByLogicalOperator(vector<pair<unique_ptr<Expression>, bool>> &&order_by_exprs, int limit = -1)
+      : order_by_exprs_(std::move(order_by_exprs)), limit_(limit)
   {}
 
   virtual ~OrderByLogicalOperator() = default;
@@ -27,8 +27,9 @@ public:
   LogicalOperatorType type() const override { return LogicalOperatorType::ORDER_BY; }
 
   auto &order_by_items() { return order_by_exprs_; }
+  int    limit() const { return limit_; }
 
 private:
   vector<pair<unique_ptr<Expression>, bool>> order_by_exprs_;
+  int                                         limit_ = -1;
 };
-

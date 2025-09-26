@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "common/global_context.h"
 #include "storage/table/table_meta.h"
+#include "common/type/vector_type.h"
 #include "common/type/attr_type.h"
 #include "storage/trx/trx.h"
 #include "json/json.h"
@@ -92,7 +93,12 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     // `i` is the col_id of fields[i]
     int field_len = static_cast<int>(attr_info.length);
     if (attr_info.type == AttrType::TEXTS) {
-      field_len = TEXT_MAX_LENGTH;
+      // TEXT 字段在记录内仅存放 LOB 定位器（offset:int64 + length:int32）
+      field_len = static_cast<int>(sizeof(int64_t) + sizeof(int32_t));
+    }
+    if (attr_info.type == AttrType::VECTORS) {
+      // 向量列采用 LOB 定位器存储（参考 TEXT）
+      field_len = static_cast<int>(sizeof(int64_t) + sizeof(int32_t));
     }
     rc = fields_[i + trx_field_num].init(
       attr_info.name.c_str(), attr_info.type, field_offset, field_len, true /*visible*/, static_cast<int>(i), attr_info.nullable);

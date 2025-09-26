@@ -137,6 +137,7 @@ struct SelectSqlNode
   vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
   vector<OrderBySqlNode>         order_by;     ///< order by clause
+  int                            limit = -1;   ///< limit N (可选)
 
   SelectSqlNode() = default;
   ~SelectSqlNode();  // 定义在 parse_defs.cpp 中
@@ -341,6 +342,7 @@ enum SqlCommandFlag
   SCF_UPDATE,
   SCF_DELETE,
   SCF_CREATE_TABLE,
+  SCF_CREATE_TABLE_AS_SELECT,
   SCF_CREATE_VIEW,
   SCF_DROP_TABLE,
   SCF_ANALYZE_TABLE,
@@ -374,6 +376,11 @@ public:
   DeleteSqlNode       deletion;
   UpdateSqlNode       update;
   CreateTableSqlNode  create_table;
+  // CREATE TABLE ... AS SELECT ...
+  struct CreateTableAsSelectSqlNode {
+    string                    table_name;
+    unique_ptr<ParsedSqlNode> select_node;  ///< parsed SELECT node
+  } create_table_as_select;
   CreateViewSqlNode   create_view;
   DropTableSqlNode    drop_table;
   AnalyzeTableSqlNode analyze_table;

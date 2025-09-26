@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/expr/expression.h"
+#include "common/type/vector_type.h"
 #include "common/type/attr_type.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_iterator.h"
@@ -175,6 +176,61 @@ if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
       return RC::INVALID_ARGUMENT;
     }
     result = like_match(left.get_string().c_str(), right.get_string().c_str());
+    return RC::SUCCESS;
+  }
+
+  // Special case: vector-to-vector comparisons (element-wise, all-of semantics)
+  auto is_vec_or_literal = [](const Value &v) -> bool {
+    if (v.attr_type() == AttrType::VECTORS) return true;
+    if (v.attr_type() == AttrType::CHARS || v.attr_type() == AttrType::TEXTS) {
+      string s = v.get_string();
+      return !s.empty() && s.front() == '[' && s.back() == ']';
+    }
+    return false;
+  };
+  if (is_vec_or_literal(left) || is_vec_or_literal(right)) {
+    vector<float> a, b;
+    // reuse vector type helpers
+    auto *vt = static_cast<VectorType *>(DataType::type_instance(AttrType::VECTORS));
+    Value ltmp = left, rtmp = right;
+    if (ltmp.attr_type() != AttrType::VECTORS) {
+      Value v; RC rc2 = DataType::type_instance(ltmp.attr_type())->cast_to(ltmp, AttrType::VECTORS, v);
+      if (rc2 != RC::SUCCESS) return RC::INVALID_ARGUMENT; ltmp = v;
+    }
+    if (rtmp.attr_type() != AttrType::VECTORS) {
+      Value v; RC rc2 = DataType::type_instance(rtmp.attr_type())->cast_to(rtmp, AttrType::VECTORS, v);
+      if (rc2 != RC::SUCCESS) return RC::INVALID_ARGUMENT; rtmp = v;
+    }
+    rc = vt->decode_vector(ltmp, a);
+    if (OB_FAIL(rc)) return rc;
+    rc = vt->decode_vector(rtmp, b);
+    if (OB_FAIL(rc)) return rc;
+    if (a.size() != b.size()) return RC::INVALID_ARGUMENT;
+    auto all_of = [&](auto pred) {
+      for (size_t i = 0; i < a.size(); ++i) {
+        if (!pred(a[i], b[i])) {
+          return false;
+        }
+      }
+      return true;
+    };
+    auto any_of = [&](auto pred) {
+      for (size_t i = 0; i < a.size(); ++i) {
+        if (pred(a[i], b[i])) {
+          return true;
+        }
+      }
+      return false;
+    };
+    switch (comp_) {
+      case EQUAL_TO:      result = all_of([](float x,float y){return x==y;}); break;
+      case NOT_EQUAL:     result = any_of([](float x,float y){return x!=y;}); break;
+      case GREAT_THAN:    result = all_of([](float x,float y){return x>y;});  break;
+      case GREAT_EQUAL:   result = all_of([](float x,float y){return x>=y;}); break;
+      case LESS_THAN:     result = all_of([](float x,float y){return x<y;});  break;
+      case LESS_EQUAL:    result = all_of([](float x,float y){return x<=y;}); break;
+      default: result = false; break;
+    }
     return RC::SUCCESS;
   }
 
@@ -450,7 +506,8 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     rc = compare_column<int>(left_column, right_column, select);
   } else if (left_column.attr_type() == AttrType::FLOATS) {
     rc = compare_column<float>(left_column, right_column, select);
-  } else if (left_column.attr_type() == AttrType::CHARS || left_column.attr_type() == AttrType::TEXTS) {
+  } else if (left_column.attr_type() == AttrType::CHARS || left_column.attr_type() == AttrType::TEXTS ||
+             left_column.attr_type() == AttrType::VECTORS) {
     int rows = 0;
     if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
       rows = right_column.count();
@@ -568,6 +625,15 @@ AttrType ArithmeticExpr::value_type() const
   if (!right_) {
     // 一元负号：结果类型与子表达式一致
     return left_->value_type();
+  }
+
+  // Vector arithmetic: if any operand is vector, result is vector
+  if ((left_->value_type() == AttrType::VECTORS) || (right_->value_type() == AttrType::VECTORS)) {
+    if (arithmetic_type_ == Type::DIV) {
+      // not supported for vectors; fallback to floats
+      return AttrType::FLOATS;
+    }
+    return AttrType::VECTORS;
   }
 
   // 除法：即使左右都是 INT，也返回 FLOATS，避免整数截断
@@ -902,19 +968,33 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
     const bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
     const bool right_const = right_column.column_type() == Column::Type::CONSTANT_COLUMN;
     const int  rows        = std::max(left_column.count(), right_column.count());
-    column.init(target_type, left_column.attr_len(), rows);
-    if (left_const && right_const) {
-      column.set_column_type(Column::Type::CONSTANT_COLUMN);
-      rc = execute_calc<true, true>(left_column, right_column, column, arithmetic_type_, target_type);
-    } else if (left_const && !right_const) {
+    if (target_type == AttrType::VECTORS) {
+      // vectors: compute row-by-row using Value
+      column.init(AttrType::VECTORS, left_column.attr_len(), rows);
       column.set_column_type(Column::Type::NORMAL_COLUMN);
-      rc = execute_calc<true, false>(left_column, right_column, column, arithmetic_type_, target_type);
-    } else if (!left_const && right_const) {
-      column.set_column_type(Column::Type::NORMAL_COLUMN);
-      rc = execute_calc<false, true>(left_column, right_column, column, arithmetic_type_, target_type);
+      for (int i = 0; i < rows; ++i) {
+        Value lv = left_column.get_value(i);
+        Value rv = right_column.get_value(i);
+        Value out;
+        rc = calc_value(lv, rv, out);
+        if (OB_FAIL(rc)) return rc;
+        column.append_value(out);
+      }
     } else {
-      column.set_column_type(Column::Type::NORMAL_COLUMN);
-      rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
+      column.init(target_type, left_column.attr_len(), rows);
+      if (left_const && right_const) {
+        column.set_column_type(Column::Type::CONSTANT_COLUMN);
+        rc = execute_calc<true, true>(left_column, right_column, column, arithmetic_type_, target_type);
+      } else if (left_const && !right_const) {
+        column.set_column_type(Column::Type::NORMAL_COLUMN);
+        rc = execute_calc<true, false>(left_column, right_column, column, arithmetic_type_, target_type);
+      } else if (!left_const && right_const) {
+        column.set_column_type(Column::Type::NORMAL_COLUMN);
+        rc = execute_calc<false, true>(left_column, right_column, column, arithmetic_type_, target_type);
+      } else {
+        column.set_column_type(Column::Type::NORMAL_COLUMN);
+        rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
+      }
     }
     // 设置结果行数
     if (left_const && !right_const) {
@@ -1578,5 +1658,3 @@ if (set_expr_->type() != ExprType::SUBQUERY) {
   value.set_boolean(result);
   return RC::SUCCESS;
 }
-
-

@@ -39,6 +39,10 @@ RC TextType::cast_to(const Value &val, AttrType type, Value &result) const
       result.set_type(AttrType::TEXTS);
       return RC::SUCCESS;
     }
+    case AttrType::VECTORS: {
+      // Parse TEXT into vector literal [..]
+      return DataType::type_instance(AttrType::VECTORS)->set_value_from_str(result, val.get_string());
+    }
     case AttrType::CHARS: {
       result = val;
       result.set_type(AttrType::CHARS);

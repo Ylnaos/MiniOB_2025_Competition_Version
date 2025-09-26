@@ -110,7 +110,7 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
       for (auto &p : order_logical.order_by_items()) {
         items.emplace_back(std::move(p));
       }
-      auto order_phy = make_unique<OrderByPhysicalOperator>(std::move(items));
+      auto order_phy = make_unique<OrderByPhysicalOperator>(std::move(items), order_logical.limit());
       order_phy->add_child(std::move(child_physical_oper));
       oper = std::move(order_phy);
       return RC::SUCCESS;

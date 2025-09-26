@@ -34,6 +34,10 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       result = val;
       return RC::SUCCESS;
     }
+    case AttrType::VECTORS: {
+      // Try to parse string like [1,2,3] into vector
+      return DataType::type_instance(AttrType::VECTORS)->set_value_from_str(result, val.get_string());
+    }
     case AttrType::TEXTS: {
       result = val;
       result.set_type(AttrType::TEXTS);
@@ -52,6 +56,9 @@ int CharType::cast_cost(AttrType type)
 {
   if (type == AttrType::CHARS) {
     return 0;
+  }
+  if (type == AttrType::VECTORS) {
+    return 1; // allow implicit parsing when needed
   }
   if (type == AttrType::DATES) {
     // 支持从字符串到日期的隐式转换

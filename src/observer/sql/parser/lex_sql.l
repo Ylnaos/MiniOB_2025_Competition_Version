@@ -106,6 +106,7 @@ WHERE                                   RETURN_TOKEN(WHERE);
 AND                                     RETURN_TOKEN(AND);
 ORDER                                   RETURN_TOKEN(ORDER);
 ASC                                     RETURN_TOKEN(ASC);
+LIMIT                                  RETURN_TOKEN(LIMIT);
 INSERT                                  RETURN_TOKEN(INSERT);
 INTO                                    RETURN_TOKEN(INTO);
 VALUES                                  RETURN_TOKEN(VALUES);
@@ -142,6 +143,9 @@ TERMINATED                              RETURN_TOKEN(TERMINATED);
 ENCLOSED                                RETURN_TOKEN(ENCLOSED);
 NULL                                    RETURN_TOKEN(NULL_T);
 NULLABLE                                RETURN_TOKEN(NULLABLE);
+L2_DISTANCE                            RETURN_TOKEN(L2_DISTANCE);
+COSINE_DISTANCE                        RETURN_TOKEN(COSINE_DISTANCE);
+INNER_PRODUCT                          RETURN_TOKEN(INNER_PRODUCT);
 {ID}                                    yylval->cstring=strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(ID);
 "("                                     RETURN_TOKEN(LBRACE);
 ")"                                     RETURN_TOKEN(RBRACE);
@@ -161,6 +165,7 @@ NULLABLE                                RETURN_TOKEN(NULLABLE);
 "/"                                     { return yytext[0]; }
 \"[^"]*\"                               yylval->cstring = strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(SSS);
 '[^']*\'                                yylval->cstring = strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(SSS);
+\[[^\]\[]*\]                          { yylval->cstring = strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(VEC_LIT); }
 
 .                                       LOG_DEBUG("Unknown character [%c]",yytext[0]); return yytext[0];
 %%
