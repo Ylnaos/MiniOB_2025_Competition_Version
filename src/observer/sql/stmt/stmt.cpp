@@ -82,6 +82,65 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
           return Stmt::create_stmt(db, *const_cast<ParsedSqlNode *>(view_node), stmt);
         }
       }
+      // General view inlining for single FROM item: inline the view's SELECT
+      if (sql_node.selection.relations.size() == 1) {
+        const std::string &rel_name = sql_node.selection.relations[0].relation_name;
+        const ParsedSqlNode *view_node = db->find_view(rel_name.c_str());
+        if (view_node && view_node->flag == SCF_SELECT) {
+          SelectSqlNode merged;
+          // helper: deep-clone conditions since ConditionSqlNode is non-copyable
+          auto clone_conditions = [](const std::vector<ConditionSqlNode> &src, std::vector<ConditionSqlNode> &dst) {
+            for (const auto &c : src) {
+              ConditionSqlNode nc;
+              nc.left_is_attr  = c.left_is_attr;
+              nc.left_value    = c.left_value;
+              nc.left_attr     = c.left_attr;
+              nc.comp          = c.comp;
+              nc.right_is_attr = c.right_is_attr;
+              nc.right_attr    = c.right_attr;
+              nc.right_value   = c.right_value;
+              if (c.left_expr)  nc.left_expr  = c.left_expr->copy();
+              if (c.right_expr) nc.right_expr = c.right_expr->copy();
+              dst.emplace_back(std::move(nc));
+            }
+          };
+          // copy parent's select list (expressions)
+          for (auto &expr_up : sql_node.selection.expressions) {
+            if (expr_up) merged.expressions.emplace_back(expr_up->copy());
+          }
+          // inline view's relations
+          merged.relations = view_node->selection.relations;
+          // merge conditions (AND)
+          clone_conditions(view_node->selection.conditions, merged.conditions);
+          if (!sql_node.selection.conditions.empty()) {
+            clone_conditions(sql_node.selection.conditions, merged.conditions);
+          }
+          // merge predicate_expr (AND)
+          if (view_node->selection.predicate_expr || sql_node.selection.predicate_expr) {
+            if (view_node->selection.predicate_expr && sql_node.selection.predicate_expr) {
+              std::vector<std::unique_ptr<Expression>> children;
+              children.emplace_back(view_node->selection.predicate_expr->copy());
+              children.emplace_back(sql_node.selection.predicate_expr->copy());
+              merged.predicate_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, children));
+            } else if (view_node->selection.predicate_expr) {
+              merged.predicate_expr = view_node->selection.predicate_expr->copy();
+            } else {
+              merged.predicate_expr = sql_node.selection.predicate_expr->copy();
+            }
+          }
+          // keep parent's group/order
+          for (auto &g : sql_node.selection.group_by) {
+            if (g) merged.group_by.emplace_back(g->copy());
+          }
+          for (const auto &ob : sql_node.selection.order_by) {
+            OrderBySqlNode item;
+            item.asc = ob.asc;
+            if (ob.expression) item.expression.reset(ob.expression->copy().release());
+            merged.order_by.emplace_back(std::move(item));
+          }
+          return SelectStmt::create(db, merged, stmt);
+        }
+      }
       return SelectStmt::create(db, sql_node.selection, stmt);
     }
 

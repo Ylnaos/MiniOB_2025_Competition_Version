@@ -263,9 +263,23 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
   }
 
   unique_ptr<PredicateLogicalOperator> predicate_oper;
+  unique_ptr<Expression>               final_predicate;
   if (!cmp_exprs.empty()) {
-    unique_ptr<ConjunctionExpr> conjunction_expr(new ConjunctionExpr(ConjunctionExpr::Type::AND, cmp_exprs));
-    predicate_oper = unique_ptr<PredicateLogicalOperator>(new PredicateLogicalOperator(std::move(conjunction_expr)));
+    final_predicate.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, cmp_exprs));
+  }
+  // 附加 where 表达式（可能包含 OR），与 AND 条件取 AND 组合
+  if (filter_stmt->where_expr() != nullptr) {
+    if (final_predicate) {
+      vector<unique_ptr<Expression>> children;
+      children.emplace_back(final_predicate.release());
+      children.emplace_back(filter_stmt->where_expr()->copy());
+      final_predicate.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, children));
+    } else {
+      final_predicate = filter_stmt->where_expr()->copy();
+    }
+  }
+  if (final_predicate) {
+    predicate_oper = unique_ptr<PredicateLogicalOperator>(new PredicateLogicalOperator(std::move(final_predicate)));
   }
 
   logical_operator = std::move(predicate_oper);

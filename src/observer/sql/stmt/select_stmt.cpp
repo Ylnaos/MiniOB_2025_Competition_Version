@@ -125,6 +125,18 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     LOG_WARN("cannot construct filter stmt");
     return rc;
   }
+  // 绑定通用 WHERE 表达式（可包含 OR）
+  if (select_sql.predicate_expr) {
+    vector<unique_ptr<Expression>> bound;
+    RC brc = expression_binder.bind_expression(select_sql.predicate_expr, bound);
+    if (OB_FAIL(brc)) {
+      LOG_INFO("bind where expression failed. rc=%s", strrc(brc));
+      return brc;
+    }
+    if (bound.size() == 1) {
+      filter_stmt->set_where_expr(std::move(bound[0]));
+    }
+  }
 
   // everything alright
   SelectStmt *select_stmt = new SelectStmt();

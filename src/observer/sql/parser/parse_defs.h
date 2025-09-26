@@ -106,9 +106,9 @@ struct ConditionSqlNode
   // 添加移动赋值运算符（声明，定义在 parse_defs.cpp 中）
   ConditionSqlNode& operator=(ConditionSqlNode&& other) noexcept;
 
-  // 删除拷贝构造函数和拷贝赋值运算符
-  ConditionSqlNode(const ConditionSqlNode&) = delete;
-  ConditionSqlNode& operator=(const ConditionSqlNode&) = delete;
+  // 显式提供深拷贝构造与赋值（用于兼容 vector 等场景）
+  ConditionSqlNode(const ConditionSqlNode& other);
+  ConditionSqlNode& operator=(const ConditionSqlNode& other);
 };
 
 /**
@@ -136,6 +136,7 @@ struct SelectSqlNode
   vector<unique_ptr<Expression>> expressions;  ///< 查询的表达式
   vector<RelationSqlNode>                 relations;    ///< 查询的表
   vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
+  unique_ptr<Expression>         predicate_expr;  ///< WHERE 通用表达式（可包含 OR）。与 conditions 取 AND
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
   vector<OrderBySqlNode>         order_by;     ///< order by clause
 
@@ -174,6 +175,15 @@ struct DeleteSqlNode
 {
   string                   relation_name;  ///< Relation to delete from
   vector<ConditionSqlNode> conditions;
+};
+
+/**
+ * @brief WHERE 子句节点：兼容原 AND 链，同时支持通用表达式（可含 OR）
+ */
+struct WhereSqlNode
+{
+  vector<ConditionSqlNode> conditions;         ///< AND 链条件
+  unique_ptr<Expression>   predicate_expr;     ///< 通用表达式（如含 OR/嵌套）
 };
 
 /**

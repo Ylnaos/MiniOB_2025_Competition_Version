@@ -90,6 +90,7 @@ FunctionExpr *create_function_expression(const char *func_name,
 %token  SEMICOLON
         BY
         ORDER
+        OR
         CREATE
         VIEW
         DROP
@@ -182,6 +183,7 @@ FunctionExpr *create_function_expression(const char *func_name,
   int                                        number;
   float                                      floats;
   std::vector<float> *                       float_list;
+  WhereSqlNode *                             where_node;
 }
 
 %destructor { delete $$; } <condition>
@@ -193,6 +195,7 @@ FunctionExpr *create_function_expression(const char *func_name,
 %destructor { delete $$; } <value_list>
 %destructor { delete $$; } <rows>
 %destructor { delete $$; } <condition_list>
+%destructor { delete $$; } <where_node>
 // %destructor { delete $$; } <rel_attr_list>
 %destructor { delete $$; } <relation_list>
 %destructor { delete $$; } <key_list>
@@ -218,7 +221,7 @@ FunctionExpr *create_function_expression(const char *func_name,
 %type <value_list>          value_list
 %type <value_list>          row
 %type <rows>                row_list
-%type <condition_list>      where
+%type <where_node>          where
 %type <condition_list>      condition_list
 %type <update_list>         update_list
 %type <cstring>             storage_format
@@ -262,6 +265,8 @@ FunctionExpr *create_function_expression(const char *func_name,
 %type <sql_node>            commands
 %type <float_list>          vector_item_list
 
+%left OR
+%left AND
 %left '+' '-'
 %left '*' '/'
 %right UMINUS
@@ -662,7 +667,10 @@ delete_stmt:    /*  delete 语句的语法解析树*/
       $$ = new ParsedSqlNode(SCF_DELETE);
       $$->deletion.relation_name = $3;
       if ($4 != nullptr) {
-        $$->deletion.conditions.swap(*$4);
+        if (!$4->conditions.empty()) {
+          $$->deletion.conditions.swap($4->conditions);
+        }
+        // 忽略 delete 的通用谓词表达式（未扩展），仅保留 AND 链条件
         delete $4;
       }
     }
@@ -684,7 +692,10 @@ update_stmt:      /*  update 语句的语法解析树*/
       }
 
       if ($5 != nullptr) {
-        $$->update.conditions.swap(*$5);
+        if (!$5->conditions.empty()) {
+          $$->update.conditions.swap($5->conditions);
+        }
+        // 忽略 update 的通用谓词表达式（未扩展），仅保留 AND 链条件
         delete $5;
       }
     }
@@ -717,7 +728,12 @@ select_stmt:        /*  select 语句的语法解析树*/
       }
 
       if ($5 != nullptr) {
-        $$->selection.conditions.swap(*$5);
+        if ($5->predicate_expr) {
+          $$->selection.predicate_expr.reset($5->predicate_expr.release());
+        }
+        if (!$5->conditions.empty()) {
+          $$->selection.conditions.swap($5->conditions);
+        }
         delete $5;
       }
 
@@ -769,6 +785,20 @@ expression:
     }
     | expression '/' expression {
       $$ = create_arithmetic_expression(ArithmeticExpr::Type::DIV, $1, $3, sql_string, &@$);
+    }
+    | expression AND expression {
+      std::vector<std::unique_ptr<Expression>> children;
+      children.emplace_back($1);
+      children.emplace_back($3);
+      $$ = new ConjunctionExpr(ConjunctionExpr::Type::AND, children);
+      $$->set_name(token_name(sql_string, &@$));
+    }
+    | expression OR expression {
+      std::vector<std::unique_ptr<Expression>> children;
+      children.emplace_back($1);
+      children.emplace_back($3);
+      $$ = new ConjunctionExpr(ConjunctionExpr::Type::OR, children);
+      $$->set_name(token_name(sql_string, &@$));
     }
     | ID LBRACE expression COMMA expression RBRACE {
       auto *fn = create_function_expression($1, $3, $5, sql_string, &@$);
@@ -907,10 +937,18 @@ rel_list:
 where:
     /* empty */
     {
-      $$ = nullptr;
+      $$ = new WhereSqlNode();
     }
     | WHERE condition_list {
-      $$ = $2;  
+      $$ = new WhereSqlNode();
+      if ($2 != nullptr) {
+        $$->conditions.swap(*$2);
+        delete $2;
+      }
+    }
+    | WHERE expression {
+      $$ = new WhereSqlNode();
+      $$->predicate_expr.reset($2);
     }
     ;
 condition_list:

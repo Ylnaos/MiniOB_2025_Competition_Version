@@ -44,6 +44,49 @@ ConditionSqlNode& ConditionSqlNode::operator=(ConditionSqlNode&& other) noexcept
   return *this;
 }
 
+// ConditionSqlNode 的拷贝构造函数（深拷贝表达式指针）
+ConditionSqlNode::ConditionSqlNode(const ConditionSqlNode& other)
+  : left_is_attr(other.left_is_attr),
+    left_value(other.left_value),
+    left_attr(other.left_attr),
+    comp(other.comp),
+    right_is_attr(other.right_is_attr),
+    right_attr(other.right_attr),
+    right_value(other.right_value)
+{
+  if (other.left_expr) {
+    left_expr = other.left_expr->copy();
+  }
+  if (other.right_expr) {
+    right_expr = other.right_expr->copy();
+  }
+}
+
+// ConditionSqlNode 的拷贝赋值运算符（深拷贝表达式指针）
+ConditionSqlNode& ConditionSqlNode::operator=(const ConditionSqlNode& other)
+{
+  if (this != &other) {
+    left_is_attr  = other.left_is_attr;
+    left_value    = other.left_value;
+    left_attr     = other.left_attr;
+    comp          = other.comp;
+    right_is_attr = other.right_is_attr;
+    right_attr    = other.right_attr;
+    right_value   = other.right_value;
+    if (other.left_expr) {
+      left_expr = other.left_expr->copy();
+    } else {
+      left_expr.reset();
+    }
+    if (other.right_expr) {
+      right_expr = other.right_expr->copy();
+    } else {
+      right_expr.reset();
+    }
+  }
+  return *this;
+}
+
 // SelectSqlNode 的析构函数定义
 SelectSqlNode::~SelectSqlNode() = default;
 

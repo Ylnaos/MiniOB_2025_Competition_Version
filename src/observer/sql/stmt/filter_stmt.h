@@ -84,6 +84,8 @@ public:
 
 public:
   const vector<FilterUnit *> &filter_units() const { return filter_units_; }
+  Expression *where_expr() const { return where_expr_.get(); }
+  void set_where_expr(std::unique_ptr<Expression> expr) { where_expr_ = std::move(expr); }
 
 public:
   static RC create(Db *db, Table *default_table, unordered_map<string, Table *> *tables,
@@ -94,4 +96,5 @@ public:
 
 private:
   vector<FilterUnit *> filter_units_;  // 默认当前都是AND关系
+  std::unique_ptr<Expression> where_expr_;     // 额外的谓词表达式（可包含 OR），与 filter_units_ 取 AND
 };
