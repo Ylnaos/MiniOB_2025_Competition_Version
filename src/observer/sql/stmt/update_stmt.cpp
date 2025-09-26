@@ -8,9 +8,7 @@ EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
 MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
-//
 // Created by Wangyunlai on 2022/5/22.
-//
 
 #include "sql/stmt/update_stmt.h"
 #include "common/log/log.h"
@@ -18,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/table/table.h"
 #include "sql/stmt/filter_stmt.h"
 #include "sql/expr/expression.h"
+#include "sql/parser/expression_binder.h"
 #include "common/value.h"
 
 UpdateStmt::UpdateStmt(Table *table, const vector<const FieldMeta *> &field_metas,
@@ -41,19 +40,19 @@ UpdateStmt::~UpdateStmt()
 RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
 {
   const char *table_name = update.relation_name.c_str();
-  if (nullptr == db || nullptr == table_name) {
+  if (db == nullptr || table_name == nullptr) {
     LOG_WARN("invalid argument. db=%p, table_name=%p", db, table_name);
     return RC::INVALID_ARGUMENT;
   }
 
-  // 查找表
+  // find table
   Table *table = db->find_table(table_name);
-  if (nullptr == table) {
+  if (table == nullptr) {
     LOG_WARN("no such table. db=%s, table_name=%s", db->name(), table_name);
     return RC::SCHEMA_TABLE_NOT_EXIST;
   }
 
-  // 对于兼容性：如果没有指定字段（空的更新），返回错误
+  // empty update is invalid (for compatibility)
   if (update.attribute_names.empty()) {
     LOG_WARN("no fields to update");
     return RC::INVALID_ARGUMENT;
@@ -63,21 +62,22 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
   vector<Value> values;
   vector<Expression *> value_expressions;
 
-  // 处理每个字段-表达式对
+  // handle each field-expression pair
   for (size_t i = 0; i < update.attribute_names.size(); ++i) {
-    // 查找要更新的字段
+    // find field meta
     const FieldMeta *field_meta = table->table_meta().field(update.attribute_names[i].c_str());
-    if (nullptr == field_meta) {
+    if (field_meta == nullptr) {
       LOG_WARN("no such field. field=%s.%s", table_name, update.attribute_names[i].c_str());
       return RC::SCHEMA_FIELD_NOT_EXIST;
     }
 
     field_metas.push_back(field_meta);
 
-    // 保存表达式供后续使用
+    // prefer expression if provided
     if (i < update.value_expressions.size() && update.value_expressions[i] != nullptr) {
       Expression *expr = update.value_expressions[i];
-      // 提前做一次常量表达式类型校验与折叠：如果是常量且类型不匹配，尝试转换；转换失败直接报错
+
+      // try constant folding + simple type cast for literals
       Value const_val;
       if (expr->try_get_value(const_val) == RC::SUCCESS) {
         if (!const_val.is_null() && field_meta->type() != const_val.attr_type()) {
@@ -88,23 +88,24 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
                      table_name, field_meta->name(), field_meta->type(), const_val.attr_type());
             return RC::SCHEMA_FIELD_TYPE_MISMATCH;
           }
-          // 用转换后的常量替换原表达式，避免执行期再次转换
+          // replace with casted constant
           delete expr;
           expr = new ValueExpr(casted_val);
         }
       }
+
       value_expressions.push_back(expr);
-      values.push_back(Value());  // 占位符，实际值在执行时计算
+      // placeholder in values when expression is used
+      values.push_back(Value());
     } else if (i < update.values.size()) {
-      // 兼容旧的值列表
+      // legacy value list path
       Value value = update.values[i];
       if (field_meta->type() != value.attr_type()) {
-        // 尝试类型转换
         Value real_value;
         RC rc = Value::cast_to(value, field_meta->type(), real_value);
-        if (RC::SUCCESS != rc) {
+        if (rc != RC::SUCCESS) {
           LOG_WARN("field type mismatch. table=%s, field=%s, field type=%d, value type=%d",
-              table_name, field_meta->name(), field_meta->type(), value.attr_type());
+                   table_name, field_meta->name(), field_meta->type(), value.attr_type());
           return RC::SCHEMA_FIELD_TYPE_MISMATCH;
         }
         value = real_value;
@@ -117,20 +118,45 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
     }
   }
 
-  // 创建过滤条件（即使无 WHERE 条件也创建空 FilterStmt，便于后续计划生成统一处理）
+  // bind expressions in SET list
+  {
+    BinderContext binder_context;
+    binder_context.add_table(table);
+    ExpressionBinder binder(binder_context);
+    for (size_t i = 0; i < value_expressions.size(); ++i) {
+      if (value_expressions[i] == nullptr) {
+        continue;
+      }
+      std::unique_ptr<Expression> expr_guard(value_expressions[i]);
+      std::vector<std::unique_ptr<Expression>> bound_list;
+      RC rc = binder.bind_expression(expr_guard, bound_list);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to bind update set expression for field %s. rc=%s", field_metas[i]->name(), strrc(rc));
+        return rc;
+      }
+      if (bound_list.size() != 1) {
+        LOG_WARN("invalid bound expression size for field %s: %zu", field_metas[i]->name(), bound_list.size());
+        return RC::INVALID_ARGUMENT;
+      }
+      value_expressions[i] = bound_list[0].release();
+    }
+  }
+
+  // build filter stmt (even if WHERE is empty)
   FilterStmt *filter_stmt = nullptr;
   {
     unordered_map<string, Table *> table_map;
     table_map[table->name()] = table;
     RC rc = FilterStmt::create(db, table, &table_map, update.conditions.data(),
-                                update.conditions.size(), filter_stmt);
-    if (RC::SUCCESS != rc) {
+                               update.conditions.size(), filter_stmt);
+    if (rc != RC::SUCCESS) {
       LOG_WARN("failed to create filter statement. rc=%s", strrc(rc));
       return rc;
     }
   }
 
-  // 创建更新语句
+  // create final stmt
   stmt = new UpdateStmt(table, field_metas, values, value_expressions, filter_stmt);
   return RC::SUCCESS;
 }
+

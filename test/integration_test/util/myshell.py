@@ -38,7 +38,7 @@ def run_shell_command(command_args:List[str], cwd=os.getcwd(), env:Dict[str, str
   stdout = subprocess.PIPE if record_stdout else subprocess.DEVNULL # will not record stdout
   stderr = subprocess.PIPE if record_stderr else subprocess.DEVNULL
     
-  command_process = subprocess.Popen(command_args, cwd=cwd, env=env, stdout=stdout, stderr=stdout, 
+  command_process = subprocess.Popen(command_args, cwd=cwd, env=env, stdout=stdout, stderr=stderr, 
       shell=shell, start_new_session=start_new_session)
   # communicate 返回的是bytes，不是str
   stdout, stderr = command_process.communicate(timeout=timeout) # 用communicate去通讯，防止卡死
@@ -46,12 +46,12 @@ def run_shell_command(command_args:List[str], cwd=os.getcwd(), env:Dict[str, str
   error_outputs = []
   if stdout != None:
     stdout = stdout.decode('UTF-8')
-    normal_outputs = stdout.split('\n')
+    # 使用splitlines去除不同平台的换行符(\r, \n, \r\n)，避免残留回车影响单行输出
+    normal_outputs = [line for line in stdout.splitlines() if len(line) != 0]
   if stderr != None:
     stderr = stderr.decode('UTF-8')
-    error_outputs = stderr.split('\n')
-    if len(error_outputs) == 1 and len(error_outputs[0]) == 0:
-      error_outputs = []
+    # 统一按行切分并移除换行，确保后续拼接为单行时无回车残留
+    error_outputs = [line for line in stderr.splitlines() if len(line) != 0]
 
   return_code = command_process.wait(timeout=timeout)
   if not return_code is None:

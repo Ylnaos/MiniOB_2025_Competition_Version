@@ -24,6 +24,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/logical_plan_generator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 #include "session/session.h"
+#include "storage/db/db.h"
 
 using namespace std;
 
@@ -1199,13 +1200,11 @@ TupleSchema schema;
 
 RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
 {
-  RC rc = execute_once();
+  RC rc = execute_with_context(&tuple);
   if (OB_FAIL(rc)) {
     return rc;
   }
-
-  if (results_.size() == 0) {
-    // 鏍囬噺涓婁笅鏂囦腑锛岀┖缁撴灉褰撳仛 NULL
+  if (results_.empty()) {
     value.set_null();
     return RC::SUCCESS;
   }
@@ -1217,7 +1216,6 @@ RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
   value = results_[0];
   return RC::SUCCESS;
 }
-
 RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
 {
   // 鏃犱笂涓嬫枃锛氭部鐢ㄦ噿鎵ц + 缂撳瓨
@@ -1391,15 +1389,27 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
   // relations
   dst.relations = src.relations;
 
-  // expressions (SELECT 鍒楄〃) 鍘熸牱澶嶅埗
+  // 准备内层关系名（含表名和别名），用于判断是否外层引用
+  std::vector<std::string> inner_names;
+  inner_names.reserve(src.relations.size() * 2);
+  for (const auto &r : src.relations) {
+    inner_names.push_back(r.relation_name);
+    if (!r.alias.empty()) inner_names.push_back(r.alias);
+  }
+
+  // expressions (SELECT 列表) 做相关引用替换
   for (const auto &expr_ptr : src.expressions) {
     if (expr_ptr) {
-      dst.expressions.emplace_back(expr_ptr->copy());
+      bool sub = false; RC rc = RC::SUCCESS;
+      auto new_expr = copy_and_substitute_outer_refs(*expr_ptr, inner_names, outer_tuple, sub, rc);
+      if (!new_expr || rc != RC::SUCCESS) return nullptr;
+      dst.expressions.emplace_back(std::move(new_expr));
+      did_substitute = did_substitute || sub;
     }
   }
 
-  // conditions锛圵HERE AND 閾撅級閫掑綊澶嶅埗骞舵浛鎹?
-dst.conditions.reserve(src.conditions.size());
+  // conditions（WHERE AND 链）递归复制并替换
+  dst.conditions.reserve(src.conditions.size());
   for (const auto &cond : src.conditions) {
     ConditionSqlNode new_cond;
     new_cond.left_is_attr  = cond.left_is_attr;
@@ -1412,12 +1422,6 @@ dst.conditions.reserve(src.conditions.size());
 
     RC rc = RC::SUCCESS;
     bool sub = false;
-    std::vector<std::string> inner_names;
-    inner_names.reserve(src.relations.size()*2);
-    for (const auto &r : src.relations) {
-      inner_names.push_back(r.relation_name);
-      if (!r.alias.empty()) inner_names.push_back(r.alias);
-    }
     if (cond.left_expr) {
       auto left_new = copy_and_substitute_outer_refs(*cond.left_expr, inner_names, outer_tuple, sub, rc);
       if (!left_new || rc != RC::SUCCESS) return nullptr;
@@ -1434,25 +1438,31 @@ dst.conditions.reserve(src.conditions.size());
     dst.conditions.emplace_back(std::move(new_cond));
   }
 
-  // group by
+  // group by（做相关引用替换）
   for (const auto &grp : src.group_by) {
     if (grp) {
-      dst.group_by.emplace_back(grp->copy());
+      bool sub = false; RC rc = RC::SUCCESS;
+      auto new_grp = copy_and_substitute_outer_refs(*grp, inner_names, outer_tuple, sub, rc);
+      if (!new_grp || rc != RC::SUCCESS) return nullptr;
+      dst.group_by.emplace_back(std::move(new_grp));
+      did_substitute = did_substitute || sub;
     }
   }
-  // order by
+  // order by（做相关引用替换）
   for (const auto &ord : src.order_by) {
     OrderBySqlNode item;
     item.asc = ord.asc;
     if (ord.expression) {
-      item.expression.reset(ord.expression->copy().release());
+      bool sub = false; RC rc = RC::SUCCESS;
+      auto new_ord = copy_and_substitute_outer_refs(*ord.expression, inner_names, outer_tuple, sub, rc);
+      if (!new_ord || rc != RC::SUCCESS) return nullptr;
+      item.expression.reset(new_ord.release());
+      did_substitute = did_substitute || sub;
     }
     dst.order_by.emplace_back(std::move(item));
   }
   return copied;
-}
-
-std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
+}std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
     const Expression &expr,
     const std::vector<std::string> &inner_relations,
     const Tuple &outer_tuple,
@@ -1585,4 +1595,7 @@ if (set_expr_->type() != ExprType::SUBQUERY) {
   value.set_boolean(result);
   return RC::SUCCESS;
 }
+
+
+
 
