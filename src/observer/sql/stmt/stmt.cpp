@@ -18,6 +18,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/calc_stmt.h"
 #include "sql/stmt/create_index_stmt.h"
 #include "sql/stmt/create_table_stmt.h"
+#include "sql/stmt/create_view_stmt.h"
+#include "storage/db/db.h"
 #include "sql/stmt/drop_table_stmt.h"
 #include "sql/stmt/delete_stmt.h"
 #include "sql/stmt/desc_table_stmt.h"
@@ -32,10 +34,12 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/trx_begin_stmt.h"
 #include "sql/stmt/trx_end_stmt.h"
 #include "sql/stmt/update_stmt.h"
+#include "sql/expr/expression.h"
 
 bool stmt_type_ddl(StmtType type)
 {
   switch (type) {
+    case StmtType::CREATE_VIEW:
     case StmtType::CREATE_TABLE:
     case StmtType::DROP_TABLE:
     case StmtType::DROP_INDEX:
@@ -62,6 +66,22 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
       return UpdateStmt::create(db, sql_node.update, stmt);
     }
     case SCF_SELECT: {
+      // Minimal view expansion: support `select * from <view>`
+      // when the FROM has exactly one relation, expressions only STAR, and no where/group/order
+      if (sql_node.selection.relations.size() == 1 &&
+          sql_node.selection.conditions.empty() &&
+          sql_node.selection.group_by.empty() &&
+          sql_node.selection.order_by.empty() &&
+          sql_node.selection.expressions.size() == 1 &&
+          sql_node.selection.expressions[0] &&
+          sql_node.selection.expressions[0]->type() == ExprType::STAR) {
+        const std::string &rel_name = sql_node.selection.relations[0].relation_name;
+        const ParsedSqlNode *view_node = db->find_view(rel_name.c_str());
+        if (view_node && view_node->flag == SCF_SELECT) {
+          // Expand to the stored view SELECT
+          return Stmt::create_stmt(db, *const_cast<ParsedSqlNode *>(view_node), stmt);
+        }
+      }
       return SelectStmt::create(db, sql_node.selection, stmt);
     }
 
@@ -75,6 +95,12 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
 
     case SCF_CREATE_TABLE: {
       return CreateTableStmt::create(db, sql_node.create_table, stmt);
+    }
+    case SCF_CREATE_TABLE_AS_SELECT: {
+      return CreateTableStmt::create(db, sql_node.create_table_as_select, stmt);
+    }
+    case SCF_CREATE_VIEW: {
+      return CreateViewStmt::create(db, sql_node.create_view, stmt);
     }
 
     case SCF_DROP_TABLE: {

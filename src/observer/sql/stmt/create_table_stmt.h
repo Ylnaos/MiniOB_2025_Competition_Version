@@ -17,8 +17,11 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/string.h"
 #include "common/lang/vector.h"
 #include "sql/stmt/stmt.h"
+#include "sql/stmt/select_stmt.h"
+#include "common/lang/memory.h"
 
 class Db;
+class SelectStmt;
 
 /**
  * @brief 表示创建表的语句
@@ -41,7 +44,11 @@ public:
   const vector<string>          &primary_keys() const { return primary_keys_; }
   const StorageFormat            storage_format() const { return storage_format_; }
 
+  bool         is_ctas() const { return is_ctas_; }
+  SelectStmt  *select_stmt() const { return select_stmt_.get(); }
+
   static RC            create(Db *db, const CreateTableSqlNode &create_table, Stmt *&stmt);
+  static RC            create(Db *db, const CreateTableAsSelectSqlNode &ctas, Stmt *&stmt);
   static StorageFormat get_storage_format(const char *format_str);
 
 private:
@@ -49,4 +56,6 @@ private:
   vector<AttrInfoSqlNode> attr_infos_;
   vector<string>          primary_keys_;
   StorageFormat           storage_format_;
+  bool                    is_ctas_ = false;
+  unique_ptr<SelectStmt>  select_stmt_;
 };

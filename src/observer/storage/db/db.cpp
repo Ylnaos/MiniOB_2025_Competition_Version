@@ -450,3 +450,25 @@ RC Db::init_dblwr_buffer()
 LogHandler        &Db::log_handler() { return *log_handler_; }
 BufferPoolManager &Db::buffer_pool_manager() { return *buffer_pool_manager_; }
 TrxKit            &Db::trx_kit() { return *trx_kit_; }
+
+RC Db::create_view(const char *view_name, std::unique_ptr<ParsedSqlNode> select_node)
+{
+  if (common::is_blank(view_name) || !select_node || select_node->flag != SCF_SELECT) {
+    return RC::INVALID_ARGUMENT;
+  }
+  if (opened_tables_.count(view_name) != 0) {
+    LOG_WARN("view name conflicts with existing table: %s", view_name);
+    return RC::SCHEMA_TABLE_EXIST;
+  }
+  views_[string(view_name)] = std::move(select_node);
+  LOG_INFO("Create view success. view=%s", view_name);
+  return RC::SUCCESS;
+}
+
+const ParsedSqlNode *Db::find_view(const char *view_name) const
+{
+  if (nullptr == view_name || *view_name == '\0') return nullptr;
+  auto it = views_.find(string(view_name));
+  if (it == views_.end()) return nullptr;
+  return it->second.get();
+}

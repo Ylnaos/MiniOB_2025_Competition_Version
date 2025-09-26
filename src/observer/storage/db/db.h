@@ -85,6 +85,10 @@ public:
    */
   Table *find_table(int32_t table_id) const;
 
+  // 简易内存视图注册表（仅当前进程内有效，不持久化）
+  RC create_view(const char *view_name, std::unique_ptr<ParsedSqlNode> select_node);
+  const ParsedSqlNode *find_view(const char *view_name) const;
+
   /// @brief 当前数据库的名称
   const char *name() const;
 
@@ -143,6 +147,7 @@ private:
   string                         name_;                 ///< 数据库名称
   string                         path_;                 ///< 数据库文件存放的目录
   unordered_map<string, Table *> opened_tables_;        ///< 当前所有打开的表
+  unordered_map<string, std::unique_ptr<ParsedSqlNode>> views_; ///< 视图定义（仅内存）
   unique_ptr<BufferPoolManager>  buffer_pool_manager_;  ///< 当前数据库的buffer pool管理器
   unique_ptr<LogHandler>         log_handler_;          ///< 当前数据库的日志处理器
   unique_ptr<TrxKit>             trx_kit_;              ///< 当前数据库的事务管理器

@@ -21,6 +21,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/utility.h"
 
 class Expression;
+class ParsedSqlNode; // 前置声明，便于在各SqlNode中使用唯一指针
 
 /**
  * @defgroup SQLParser SQL Parser
@@ -214,6 +215,29 @@ struct CreateTableSqlNode
   // TODO: integrate to CreateTableOptions
   string storage_format;  ///< storage format
   string storage_engine;  ///< storage engine
+
+  // CREATE TABLE ... AS SELECT 支持：当该指针非空时，表示使用 SELECT 推导结构并导入数据
+  // 仅允许指向 flag=SCF_SELECT 的 ParsedSqlNode
+  unique_ptr<ParsedSqlNode> select_node;
+};
+
+/**
+ * @brief CREATE VIEW 语句节点（为兼容现有 yacc_sql.cpp 中的引用，最小定义）
+ */
+struct CreateViewSqlNode
+{
+  string                         view_name;        ///< 视图名
+  string                         view_select_sql;  ///< 原始select文本（用于展示）
+  unique_ptr<ParsedSqlNode>      select_node;      ///< 视图的SELECT语法树
+};
+
+/**
+ * @brief CREATE TABLE AS SELECT 语句节点（为兼容现有 yacc_sql.cpp 中的引用，最小定义）
+ */
+struct CreateTableAsSelectSqlNode
+{
+  string                    table_name;   ///< 新表名
+  unique_ptr<ParsedSqlNode> select_node;  ///< SELECT 子句语法树
 };
 
 /**
@@ -331,6 +355,8 @@ enum SqlCommandFlag
   SCF_UPDATE,
   SCF_DELETE,
   SCF_CREATE_TABLE,
+  SCF_CREATE_VIEW,              ///< create view（解析兼容）
+  SCF_CREATE_TABLE_AS_SELECT,   ///< create table as select（解析兼容）
   SCF_DROP_TABLE,
   SCF_ANALYZE_TABLE,
   SCF_CREATE_INDEX,
@@ -363,6 +389,8 @@ public:
   DeleteSqlNode       deletion;
   UpdateSqlNode       update;
   CreateTableSqlNode  create_table;
+  CreateViewSqlNode   create_view;              ///< 为兼容 yacc_sql.cpp 引用
+  CreateTableAsSelectSqlNode create_table_as_select; ///< 为兼容 yacc_sql.cpp 引用
   DropTableSqlNode    drop_table;
   AnalyzeTableSqlNode analyze_table;
   CreateIndexSqlNode  create_index;

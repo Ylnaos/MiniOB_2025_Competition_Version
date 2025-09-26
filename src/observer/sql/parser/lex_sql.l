@@ -131,6 +131,7 @@ INFILE                                  RETURN_TOKEN(INFILE);
   IN                                      RETURN_TOKEN(IN);
   NOT                                     RETURN_TOKEN(NOT);
   IS                                      RETURN_TOKEN(IS);
+  VIEW                                    RETURN_TOKEN(VIEW);
   STORAGE                                 RETURN_TOKEN(STORAGE);
   FORMAT                                  RETURN_TOKEN(FORMAT);
   PRIMARY                                 RETURN_TOKEN(PRIMARY);

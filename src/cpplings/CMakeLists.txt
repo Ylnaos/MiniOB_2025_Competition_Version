@@ -1,3 +1,5 @@
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/bin/cpplings")
+
 function(add_custom_executable target_name)
     add_executable(${target_name} ${ARGN})
 
