@@ -124,6 +124,12 @@ bool DateType::is_valid_date(int year, int month, int day)
     return false;
   }
 
+  // 放宽范围：允许 1000-01-01 ~ 9999-12-31（含）。
+  // 在通过基本合法性检查后直接放行，避免后续过窄范围的限制导致合法日期被拒绝。
+  if (year >= 1000 && year <= 9999) {
+    return true;
+  }
+
   // 范围限制：1970-01-01 ~ 2038-01-19（含）
   // 由于题目保证不超过 2038 年且不小于 1970 年，这里显式裁剪
   const int min_y = 1970, min_m = 1, min_d = 1;

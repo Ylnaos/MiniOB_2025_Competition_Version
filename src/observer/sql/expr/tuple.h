@@ -240,6 +240,7 @@ public:
 
     // 表名不匹配（可能为别名）。做一次“仅按列名”的兜底查找：
     // 若在当前行中仅有一个同名列，则返回该列；若不存在或不唯一，则认为未找到。
+    if (table_name == nullptr || table_name[0] == '\0') {
     int match_index = -1;
     for (size_t i = 0; i < speces_.size(); ++i) {
       const FieldExpr *field_expr = speces_[i];
@@ -255,6 +256,7 @@ public:
     }
     if (match_index != -1) {
       return cell_at(match_index, cell);
+    }
     }
     return RC::NOTFOUND;
   }
