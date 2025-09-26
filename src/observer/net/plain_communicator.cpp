@@ -266,7 +266,8 @@ RC PlainCommunicator::write_tuple_result(SqlResult *sql_result)
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
-    if (nullptr != alias || alias[0] != 0) {
+    // 修复判空逻辑：必须同时非空且非空串
+    if (nullptr != alias && alias[0] != 0) {
       if (0 != i) {
         const char *delim = " | ";
         RC wrc = writer_->writen(delim, strlen(delim));
@@ -384,7 +385,8 @@ RC PlainCommunicator::write_chunk_result(SqlResult *sql_result)
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
-    if (nullptr != alias || alias[0] != 0) {
+    // 修复判空逻辑：必须同时非空且非空串
+    if (nullptr != alias && alias[0] != 0) {
       if (0 != i) {
         const char *delim = " | ";
         RC wrc = writer_->writen(delim, strlen(delim));

@@ -395,6 +395,19 @@ create_table_stmt:    /*create table 语句的语法解析树*/
         create_table.storage_format = $8;
       }
     }
+    | CREATE TABLE ID AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
+      CreateTableSqlNode &create_table = $$->create_table;
+      create_table.relation_name = $3;
+      if ($5 == nullptr || $5->flag != SCF_SELECT) {
+        // 不应发生：select_stmt 规约保证 SCF_SELECT
+        delete $$;
+        $$ = nullptr;
+      } else {
+        create_table.as_select.reset($5);
+      }
+    }
     ;
     
 attr_def_list:

@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include <string.h>
+#include <ctype.h>
 
 #include "parse_stage.h"
 
@@ -32,6 +33,68 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
 
   SqlResult         *sql_result = sql_event->session_event()->sql_result();
   const string &sql        = sql_event->sql();
+
+  // quick path: handle CREATE TABLE ... AS SELECT ... without relying on yacc rule
+  auto trim_copy = [&](const string &s) -> string {
+    string t = s;
+    common::strip(t);
+    return t;
+  };
+  string sql_trimmed = trim_copy(sql);
+  {
+    string lowered = sql_trimmed;
+    common::str_to_lower(lowered);
+    // accept pattern: create table <id> as select ...
+    const string prefix = "create table ";
+    size_t pos = lowered.find(prefix);
+    if (pos == 0) {
+      size_t p = prefix.size();
+      // extract table name (letters/digits/underscore)
+      while (p < lowered.size() && isspace(static_cast<unsigned char>(lowered[p]))) ++p;
+      size_t name_start = p;
+      while (p < lowered.size()) {
+        char c = lowered[p];
+        if (isalnum(static_cast<unsigned char>(c)) || c == '_' ) {
+          ++p;
+        } else {
+          break;
+        }
+      }
+      if (name_start < p) {
+        string table_name = sql_trimmed.substr(name_start, p - name_start);
+        // skip spaces
+        while (p < lowered.size() && isspace(static_cast<unsigned char>(lowered[p]))) ++p;
+        // expect "as"
+        if (p + 2 <= lowered.size() && lowered.compare(p, 2, "as") == 0) {
+          p += 2;
+          while (p < lowered.size() && isspace(static_cast<unsigned char>(lowered[p]))) ++p;
+          // expect select
+          if (p < lowered.size() && lowered.compare(p, 6, "select") == 0) {
+            string select_sql = sql_trimmed.substr(p);
+
+            ParsedSqlResult sub_result;
+            parse(select_sql.c_str(), &sub_result);
+            if (!sub_result.sql_nodes().empty()) {
+              // pick first non-error
+              int idx = -1;
+              for (int i = 0; i < static_cast<int>(sub_result.sql_nodes().size()); i++) {
+                auto &node_up = sub_result.sql_nodes()[i];
+                if (node_up && node_up->flag != SCF_ERROR) { idx = i; break; }
+              }
+              if (idx >= 0 && sub_result.sql_nodes()[idx]->flag == SCF_SELECT) {
+                // build CTAS node
+                unique_ptr<ParsedSqlNode> node = make_unique<ParsedSqlNode>(SCF_CREATE_TABLE);
+                node->create_table.relation_name = table_name;
+                node->create_table.as_select.reset(sub_result.sql_nodes()[idx].release());
+                sql_event->set_sql_node(std::move(node));
+                return RC::SUCCESS;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 
   ParsedSqlResult parsed_sql_result;
 

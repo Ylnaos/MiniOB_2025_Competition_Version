@@ -58,9 +58,17 @@ RC get_table_and_field(Db *db, Table *default_table, unordered_map<string, Table
   if (common::is_blank(attr.relation_name.c_str())) {
     table = default_table;
   } else if (nullptr != tables) {
+    // 先精确匹配，再大小写不敏感匹配
     auto iter = tables->find(attr.relation_name);
     if (iter != tables->end()) {
       table = iter->second;
+    } else {
+      for (const auto &kv : *tables) {
+        if (0 == strcasecmp(kv.first.c_str(), attr.relation_name.c_str())) {
+          table = kv.second;
+          break;
+        }
+      }
     }
   } else {
     table = db->find_table(attr.relation_name.c_str());
@@ -100,9 +108,17 @@ static RC bind_expression_fields(unique_ptr<Expression> &expr, Db *db, Table *de
     Table *table = nullptr;
     if (table_name && strlen(table_name) > 0) {
       if (tables) {
+        // 先精确匹配，再大小写不敏感匹配
         auto iter = tables->find(table_name);
         if (iter != tables->end()) {
           table = iter->second;
+        } else {
+          for (const auto &kv : *tables) {
+            if (0 == strcasecmp(kv.first.c_str(), table_name)) {
+              table = kv.second;
+              break;
+            }
+          }
         }
       }
       if (!table) {

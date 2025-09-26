@@ -869,11 +869,12 @@ RC MysqlCommunicator::send_column_definition(SqlResult *sql_result, bool &need_d
     const TupleCellSpec &spec      = tuple_schema.cell_at(i);
     const char          *catalog   = "def";  // The catalog used. Currently always "def"
     const char          *schema    = "sys";  // schema name
+    // MySQL 协议语义：table 用显示名(此处仍使用真实表名)，org_table 用真实表名
     const char          *table     = spec.table_name();
     const char          *org_table = spec.table_name();
+    // name 用展示名(表达式/列别名/默认别名)，org_name 用真实列名
     const char          *name      = spec.alias();
-    // const char *org_name = spec.field_name();
-    const char *org_name         = spec.alias();
+    const char          *org_name  = spec.field_name();
     int         fixed_len_fields = 0x0c;
     int         character_set    = 33;
     int         column_length    = 16384;

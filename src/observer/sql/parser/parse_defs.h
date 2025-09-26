@@ -21,6 +21,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/utility.h"
 
 class Expression;
+class ParsedSqlNode;  // forward declaration for CTAS
 
 /**
  * @defgroup SQLParser SQL Parser
@@ -214,6 +215,8 @@ struct CreateTableSqlNode
   // TODO: integrate to CreateTableOptions
   string storage_format;  ///< storage format
   string storage_engine;  ///< storage engine
+  // CTAS: optional subquery to build schema and data
+  std::unique_ptr<ParsedSqlNode> as_select;  ///< non-null when using `CREATE TABLE ... AS SELECT ...`
 };
 
 /**
