@@ -1479,6 +1479,13 @@ std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
 Value v;
       RC rc2 = outer_tuple.find_cell(TupleCellSpec(t, f), v);
       if (rc2 != RC::SUCCESS) {
+        string tf = string(t) + "." + string(f);
+        rc2       = outer_tuple.find_cell(TupleCellSpec(tf), v);
+      }
+      if (rc2 != RC::SUCCESS) {
+        rc2 = outer_tuple.find_cell(TupleCellSpec(f), v);
+      }
+      if (rc2 != RC::SUCCESS) {
         LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", t, f);
         rc = rc2;
         return nullptr;
@@ -1578,5 +1585,4 @@ if (set_expr_->type() != ExprType::SUBQUERY) {
   value.set_boolean(result);
   return RC::SUCCESS;
 }
-
 
