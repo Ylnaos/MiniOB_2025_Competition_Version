@@ -38,8 +38,8 @@ Value::Value(const Value &other)
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
     case AttrType::CHARS:
-    case AttrType::VECTORS:
-    case AttrType::TEXTS: {
+    case AttrType::TEXTS:
+    case AttrType::VECTORS: {
       set_string_from_other(other);
     } break;
 
@@ -70,8 +70,8 @@ Value &Value::operator=(const Value &other)
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
     case AttrType::CHARS:
-    case AttrType::VECTORS:
-    case AttrType::TEXTS: {
+    case AttrType::TEXTS:
+    case AttrType::VECTORS: {
       set_string_from_other(other);
     } break;
 
@@ -120,12 +120,32 @@ void Value::set_data(char *data, int length)
 {
   switch (attr_type_) {
     case AttrType::CHARS:
-    case AttrType::VECTORS:
     case AttrType::TEXTS: {
-      // 保持原有类型（CHARS/TEXTS），避免 set_string 将类型强制为 CHARS
+      // 对字符串/文本类型，沿用 set_string 的拷贝逻辑
       AttrType old_type = attr_type_;
       set_string(data, length);
       attr_type_ = old_type;
+    } break;
+    case AttrType::VECTORS: {
+      // 二进制缓冲拷贝，不能用 set_string（避免 strnlen 截断 \0 字节）
+      // 不 reset()，沿用当前类型，由上层已 set_type(VECTORS)
+      if (length <= 0 || data == nullptr) {
+        // 空向量表示
+        if (own_data_ && value_.pointer_value_ != nullptr) {
+          delete[] value_.pointer_value_;
+        }
+        value_.pointer_value_ = nullptr;
+        length_               = 0;
+        own_data_             = false;
+      } else {
+        if (own_data_ && value_.pointer_value_ != nullptr) {
+          delete[] value_.pointer_value_;
+        }
+        value_.pointer_value_ = new char[length];
+        memcpy(value_.pointer_value_, data, length);
+        length_   = length;
+        own_data_ = true;
+      }
     } break;
     case AttrType::INTS: {
       value_.int_value_ = *(int *)data;
@@ -233,6 +253,15 @@ void Value::set_value(const Value &value)
     case AttrType::CHARS: {
       set_string(value.get_string().c_str());
     } break;
+    case AttrType::TEXTS: {
+      auto s = value.get_string();
+      set_string(s.c_str(), static_cast<int>(s.size()));
+    } break;
+    case AttrType::VECTORS: {
+      // 深拷贝二进制向量缓冲
+      set_type(AttrType::VECTORS);
+      set_data(value.data(), value.length());
+    } break;
     case AttrType::BOOLEANS: {
       set_boolean(value.get_boolean());
     } break;
@@ -250,11 +279,23 @@ void Value::set_value(const Value &value)
 
 void Value::set_string_from_other(const Value &other)
 {
-  ASSERT(attr_type_ == AttrType::CHARS || attr_type_ == AttrType::TEXTS, "attr type is not string type");
-  if (own_data_ && other.value_.pointer_value_ != nullptr && length_ != 0) {
-    this->value_.pointer_value_ = new char[this->length_ + 1];
-    memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
-    this->value_.pointer_value_[this->length_] = '\0';
+  ASSERT(attr_type_ == AttrType::CHARS || attr_type_ == AttrType::TEXTS || attr_type_ == AttrType::VECTORS,
+      "attr type is not string/binary type");
+  if (length_ <= 0 || other.value_.pointer_value_ == nullptr) {
+    value_.pointer_value_ = nullptr;
+    own_data_             = false;
+    return;
+  }
+  // 对于 CHARS/TEXTS: 末尾补 '\0'；对于 VECTORS: 按 length_ 逐字节拷贝
+  if (attr_type_ == AttrType::CHARS || attr_type_ == AttrType::TEXTS) {
+    value_.pointer_value_ = new char[length_ + 1];
+    memcpy(value_.pointer_value_, other.value_.pointer_value_, length_);
+    value_.pointer_value_[length_] = '\0';
+    own_data_ = true;
+  } else { // VECTORS
+    value_.pointer_value_ = new char[length_];
+    memcpy(value_.pointer_value_, other.value_.pointer_value_, length_);
+    own_data_ = true;
   }
 }
 

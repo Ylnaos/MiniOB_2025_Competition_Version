@@ -117,14 +117,11 @@ RC VectorType::set_value_from_str(Value &val, const string &data) const
   }
   val.reset();
   val.set_type(AttrType::VECTORS);
+  // 深拷贝缓冲区到 Value（内部会分配内存并复制二进制数据）
   if (buf.empty()) {
-    // Disambiguate overload resolution for nullptr
     val.set_data(static_cast<char *>(nullptr), 0);
   } else {
-    // allocate and own
-    char *p = new char[buf.size()];
-    memcpy(p, buf.data(), buf.size());
-    val.set_data(p, static_cast<int>(buf.size()));
+    val.set_data(const_cast<char *>(buf.data()), static_cast<int>(buf.size()));
   }
   return RC::SUCCESS;
 }
@@ -153,10 +150,10 @@ static RC build_vector_value(const vector<float> &vec, Value &out)
   }
   out.reset();
   out.set_type(AttrType::VECTORS);
-  char *buf = new char[bytes];
-  memcpy(buf, &dim, sizeof(int32_t));
-  if (dim > 0) memcpy(buf + sizeof(int32_t), vec.data(), static_cast<size_t>(dim) * sizeof(float));
-  out.set_data(buf, static_cast<int>(bytes));
+  std::vector<char> buf(bytes);
+  memcpy(buf.data(), &dim, sizeof(int32_t));
+  if (dim > 0) memcpy(buf.data() + sizeof(int32_t), vec.data(), static_cast<size_t>(dim) * sizeof(float));
+  out.set_data(buf.data(), static_cast<int>(bytes));
   return RC::SUCCESS;
 }
 

@@ -231,7 +231,8 @@ public:
         return rc;
       }
       cell.set_type(field_meta->type());
-      cell.set_data(buf, len); // Value 持有并在 reset 时释放
+      cell.set_data(buf, len); // 深拷贝到 Value 内部缓冲
+      delete[] buf;            // 释放临时缓冲，避免泄漏
       return RC::SUCCESS;
     } else {
       cell.set_type(field_meta->type());
