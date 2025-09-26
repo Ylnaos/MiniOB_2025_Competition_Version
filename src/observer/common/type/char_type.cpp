@@ -43,6 +43,10 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       // 从字符串转换为日期类型
       return DataType::type_instance(AttrType::DATES)->set_value_from_str(result, val.get_string());
     }
+    case AttrType::VECTORS: {
+      // 解析形如 "[1,2,3]"
+      return DataType::type_instance(AttrType::VECTORS)->set_value_from_str(result, val.get_string());
+    }
     default: return RC::UNIMPLEMENTED;
   }
   return RC::SUCCESS;
@@ -55,6 +59,10 @@ int CharType::cast_cost(AttrType type)
   }
   if (type == AttrType::DATES) {
     // 支持从字符串到日期的隐式转换
+    return 1;
+  }
+  if (type == AttrType::VECTORS) {
+    // 支持从字符串到向量的隐式转换
     return 1;
   }
   return INT32_MAX;

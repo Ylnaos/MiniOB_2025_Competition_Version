@@ -24,6 +24,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/logical_plan_generator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 #include "session/session.h"
+#include <cmath>
 
 using namespace std;
 
@@ -443,6 +444,22 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     return RC::SUCCESS;
   }
   if (left_column.attr_type() != right_column.attr_type()) {
+    // 支持 VECTORS 与 字符串(CHARS/TEXTS) 的比较：逐行 compare_value
+    bool vec_str_ok =
+        (left_column.attr_type() == AttrType::VECTORS && (right_column.attr_type() == AttrType::CHARS || right_column.attr_type() == AttrType::TEXTS)) ||
+        (right_column.attr_type() == AttrType::VECTORS && (left_column.attr_type() == AttrType::CHARS || left_column.attr_type() == AttrType::TEXTS));
+    if (vec_str_ok) {
+      int rows = (left_column.column_type() == Column::Type::CONSTANT_COLUMN) ? right_column.count() : left_column.count();
+      for (int i = 0; i < rows; ++i) {
+        Value left_val  = left_column.get_value(i);
+        Value right_val = right_column.get_value(i);
+        bool  res       = false;
+        rc              = compare_value(left_val, right_val, res);
+        if (OB_FAIL(rc)) return rc;
+        select[i] &= res ? 1 : 0;
+      }
+      return RC::SUCCESS;
+    }
     LOG_WARN("cannot compare columns with different types");
     return RC::INTERNAL;
   }
@@ -469,6 +486,24 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
       select[i] &= result ? 1 : 0;
     }
 
+  } else if (left_column.attr_type() == AttrType::VECTORS) {
+    int rows = 0;
+    if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
+      rows = right_column.count();
+    } else {
+      rows = left_column.count();
+    }
+    for (int i = 0; i < rows; ++i) {
+      Value left_val = left_column.get_value(i);
+      Value right_val = right_column.get_value(i);
+      bool        result   = false;
+      rc                   = compare_value(left_val, right_val, result);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to compare tuple cells. rc=%s", strrc(rc));
+        return rc;
+      }
+      select[i] &= result ? 1 : 0;
+    }
   } else {
     LOG_WARN("unsupported data type %d", left_column.attr_type());
     return RC::INTERNAL;
@@ -568,6 +603,13 @@ AttrType ArithmeticExpr::value_type() const
   if (!right_) {
     // 一元负号：结果类型与子表达式一致
     return left_->value_type();
+  }
+
+  // 向量运算：任一侧为 VECTORS，则结果为 VECTORS（仅对 +, -, * 支持）
+  if (left_->value_type() == AttrType::VECTORS || right_->value_type() == AttrType::VECTORS) {
+    if (arithmetic_type_ == Type::ADD || arithmetic_type_ == Type::SUB || arithmetic_type_ == Type::MUL) {
+      return AttrType::VECTORS;
+    }
   }
 
   // 除法：即使左右都是 INT，也返回 FLOATS，避免整数截断
@@ -887,6 +929,28 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
 
   const AttrType target_type = value_type();
 
+  // 特殊处理向量：逐行计算
+  if (target_type == AttrType::VECTORS) {
+    int attr_len = left_column.attr_type() == AttrType::VECTORS ? left_column.attr_len()
+                    : (right_column.attr_type() == AttrType::VECTORS ? right_column.attr_len() : 0);
+    const int rows = std::max(left_column.count(), right_column.count());
+    column.init(AttrType::VECTORS, attr_len, rows);
+    column.set_column_type(Column::Type::NORMAL_COLUMN);
+    for (int i = 0; i < rows; ++i) {
+      Value lv = left_column.get_value(left_column.column_type() == Column::Type::CONSTANT_COLUMN ? 0 : i);
+      Value rv;
+      if (right_) {
+        rv = right_column.get_value(right_column.column_type() == Column::Type::CONSTANT_COLUMN ? 0 : i);
+      }
+      Value out;
+      rc = calc_value(lv, rv, out);
+      if (OB_FAIL(rc)) return rc;
+      column.append_value(out);
+    }
+    column.set_count(rows);
+    return RC::SUCCESS;
+  }
+
   if (arithmetic_type_ == Type::NEGATIVE) {
     const bool left_const = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
     column.init(target_type, left_column.attr_len(), left_column.count());
@@ -1043,6 +1107,118 @@ RC AggregateExpr::type_from_string(const char *type_str, AggregateExpr::Type &ty
     rc = RC::INVALID_ARGUMENT;
   }
   return rc;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// FunctionExpr
+
+static inline float fx_round2(float x)
+{
+  float y = std::round(x * 100.0f) / 100.0f;
+  if (std::fabs(y) < 0.0005f) y = 0.0f;
+  return y;
+}
+
+static RC fx_get_vec(const Value &v, std::vector<float> &out)
+{
+  out.clear();
+  if (v.attr_type() == AttrType::VECTORS) {
+    const int len = v.length();
+    if (len % static_cast<int>(sizeof(float)) != 0) return RC::INVALID_ARGUMENT;
+    int dim = len / static_cast<int>(sizeof(float));
+    const float *ptr = reinterpret_cast<const float *>(v.data());
+    out.assign(ptr, ptr + dim);
+    return RC::SUCCESS;
+  }
+  if (v.attr_type() == AttrType::CHARS || v.attr_type() == AttrType::TEXTS) {
+    std::string s = v.get_string();
+    if (s.size() < 2 || s.front() != '[' || s.back() != ']') return RC::INVALID_ARGUMENT;
+    std::string inner = s.substr(1, s.size()-2);
+    std::stringstream ss(inner);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+      size_t i=0,j=token.size();
+      while (i<j && std::isspace(static_cast<unsigned char>(token[i]))) i++;
+      while (j>i && std::isspace(static_cast<unsigned char>(token[j-1]))) j--;
+      std::string t = token.substr(i,j-i);
+      if (t.empty()) continue;
+      try { out.push_back(fx_round2(std::stof(t))); } catch (...) { return RC::INVALID_ARGUMENT; }
+    }
+    return RC::SUCCESS;
+  }
+  return RC::INVALID_ARGUMENT;
+}
+
+RC FunctionExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  Value lv, rv;
+  RC rc = left_->get_value(tuple, lv);
+  if (OB_FAIL(rc)) return rc;
+  rc = right_->get_value(tuple, rv);
+  if (OB_FAIL(rc)) return rc;
+
+  std::vector<float> a, b;
+  rc = fx_get_vec(lv, a);
+  if (OB_FAIL(rc)) { value.set_null(); return rc; }
+  rc = fx_get_vec(rv, b);
+  if (OB_FAIL(rc)) { value.set_null(); return rc; }
+  if (a.size() != b.size()) { value.set_null(); return RC::INVALID_ARGUMENT; }
+
+  float res = 0.0f;
+  switch (func_type_) {
+    case FuncType::L2_DISTANCE: {
+      double sum = 0.0; for (size_t i=0;i<a.size();++i){ double d = a[i]-b[i]; sum += d*d; }
+      res = fx_round2(static_cast<float>(std::sqrt(sum)));
+    } break;
+    case FuncType::COSINE_DISTANCE: {
+      double dot=0.0,na=0.0,nb=0.0; for (size_t i=0;i<a.size();++i){ dot+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i]; }
+      double denom = (std::sqrt(na) * std::sqrt(nb));
+      double cosv = (denom==0.0) ? 0.0 : (dot/denom);
+      res = fx_round2(static_cast<float>(1.0 - cosv));
+    } break;
+    case FuncType::INNER_PRODUCT: {
+      double sum=0.0; for (size_t i=0;i<a.size();++i) sum += a[i]*b[i];
+      res = fx_round2(static_cast<float>(sum));
+    } break;
+  }
+  value.set_float(res);
+  return RC::SUCCESS;
+}
+
+RC FunctionExpr::get_column(Chunk &chunk, Column &column)
+{
+  Column lc, rc;
+  RC r = left_->get_column(chunk, lc);
+  if (OB_FAIL(r)) return r;
+  r = right_->get_column(chunk, rc);
+  if (OB_FAIL(r)) return r;
+  const int rows = std::max(lc.count(), rc.count());
+  column.init(AttrType::FLOATS, sizeof(float), rows);
+  column.set_column_type(Column::Type::NORMAL_COLUMN);
+  for (int i = 0; i < rows; ++i) {
+    Value lv = lc.get_value(lc.column_type() == Column::Type::CONSTANT_COLUMN ? 0 : i);
+    Value rv = rc.get_value(rc.column_type() == Column::Type::CONSTANT_COLUMN ? 0 : i);
+    std::vector<float> a, b;
+    RC tr = fx_get_vec(lv, a);
+    Value out;
+    if (OB_FAIL(tr)) { out.set_null(); }
+    else {
+      tr = fx_get_vec(rv, b);
+      if (OB_FAIL(tr) || a.size() != b.size()) { out.set_null(); }
+      else {
+        float res = 0.0f;
+        switch (func_type_) {
+          case FuncType::L2_DISTANCE: { double sum=0.0; for (size_t k=0;k<a.size();++k){double d=a[k]-b[k]; sum+=d*d;} res = fx_round2(static_cast<float>(std::sqrt(sum))); } break;
+          case FuncType::COSINE_DISTANCE: { double dot=0.0,na=0.0,nb=0.0; for (size_t k=0;k<a.size();++k){ dot+=a[k]*b[k]; na+=a[k]*a[k]; nb+=b[k]*b[k]; } double denom=(std::sqrt(na)*std::sqrt(nb)); double cosv=(denom==0.0)?0.0:(dot/denom); res=fx_round2(static_cast<float>(1.0-cosv)); } break;
+          case FuncType::INNER_PRODUCT: { double sum=0.0; for (size_t k=0;k<a.size();++k) sum+=a[k]*b[k]; res = fx_round2(static_cast<float>(sum)); } break;
+        }
+        out.set_float(res);
+      }
+    }
+    column.append_value(out);
+  }
+  column.set_count(rows);
+  return RC::SUCCESS;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1578,5 +1754,3 @@ if (set_expr_->type() != ExprType::SUBQUERY) {
   value.set_boolean(result);
   return RC::SUCCESS;
 }
-
-

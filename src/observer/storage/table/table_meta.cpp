@@ -93,6 +93,11 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     int field_len = static_cast<int>(attr_info.length);
     if (attr_info.type == AttrType::TEXTS) {
       field_len = TEXT_MAX_LENGTH;
+    } else if (attr_info.type == AttrType::VECTORS) {
+      // 向量列：attr_info.length 表示维度，按 float 存储
+      if (field_len < 0) field_len = 0;
+      if (field_len > 16000) field_len = 16000; // 顶到最大支持维度
+      field_len = field_len * static_cast<int>(sizeof(float));
     }
     rc = fields_[i + trx_field_num].init(
       attr_info.name.c_str(), attr_info.type, field_offset, field_len, true /*visible*/, static_cast<int>(i), attr_info.nullable);

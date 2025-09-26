@@ -41,6 +41,16 @@ Value::Value(const Value &other)
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
+    case AttrType::VECTORS: {
+      if (other.length_ > 0) {
+        own_data_ = true;
+        value_.pointer_value_ = new char[other.length_];
+        memcpy(value_.pointer_value_, other.value_.pointer_value_, other.length_);
+      } else {
+        own_data_ = false;
+        value_.pointer_value_ = nullptr;
+      }
+    } break;
 
     default: {
       this->value_ = other.value_;
@@ -72,6 +82,16 @@ Value &Value::operator=(const Value &other)
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
+    case AttrType::VECTORS: {
+      if (other.length_ > 0) {
+        own_data_ = true;
+        value_.pointer_value_ = new char[other.length_];
+        memcpy(value_.pointer_value_, other.value_.pointer_value_, other.length_);
+      } else {
+        own_data_ = false;
+        value_.pointer_value_ = nullptr;
+      }
+    } break;
 
     default: {
       this->value_ = other.value_;
@@ -100,6 +120,7 @@ void Value::reset()
   switch (attr_type_) {
     case AttrType::CHARS:
     case AttrType::TEXTS:
+    case AttrType::VECTORS:
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
         value_.pointer_value_ = nullptr;
@@ -122,6 +143,19 @@ void Value::set_data(char *data, int length)
       AttrType old_type = attr_type_;
       set_string(data, length);
       attr_type_ = old_type;
+    } break;
+    case AttrType::VECTORS: {
+      // 深拷贝向量字节（与 CHARS/TEXTS 一致地拥有内存）
+      if (data == nullptr || length <= 0) {
+        value_.pointer_value_ = nullptr;
+        length_               = 0;
+        own_data_             = false;
+      } else {
+        value_.pointer_value_ = new char[length];
+        memcpy(value_.pointer_value_, data, length);
+        length_   = length;
+        own_data_ = true;
+      }
     } break;
     case AttrType::INTS: {
       value_.int_value_ = *(int *)data;
@@ -238,6 +272,20 @@ void Value::set_value(const Value &value)
     case AttrType::NULLS: {
       set_null();
     } break;
+    case AttrType::VECTORS: {
+      // deep copy vector bytes
+      reset();
+      attr_type_ = AttrType::VECTORS;
+      length_    = value.length_;
+      if (length_ > 0) {
+        own_data_ = true;
+        value_.pointer_value_ = new char[length_];
+        memcpy(value_.pointer_value_, value.value_.pointer_value_, length_);
+      } else {
+        own_data_ = false;
+        value_.pointer_value_ = nullptr;
+      }
+    } break;
     default: {
       ASSERT(false, "got an invalid value type");
     } break;
@@ -261,6 +309,9 @@ char *Value::data() const
       return value_.pointer_value_;
     } break;
     case AttrType::TEXTS: {
+      return value_.pointer_value_;
+    } break;
+    case AttrType::VECTORS: {
       return value_.pointer_value_;
     } break;
     default: {

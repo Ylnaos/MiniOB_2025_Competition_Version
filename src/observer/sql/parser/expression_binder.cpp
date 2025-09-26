@@ -93,6 +93,20 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       return bind_arithmetic_expression(expr, bound_expressions);
     } break;
 
+    case ExprType::FUNCTION: {
+      // 绑定函数左右子表达式
+      auto *fn = static_cast<FunctionExpr *>(expr.get());
+      vector<unique_ptr<Expression>> tmp;
+      RC rc = bind_expression(fn->left(), tmp);
+      if (OB_FAIL(rc)) return rc;
+      if (!tmp.empty() && tmp[0].get() != fn->left().get()) fn->left().reset(tmp[0].release());
+      tmp.clear();
+      rc = bind_expression(fn->right(), tmp);
+      if (OB_FAIL(rc)) return rc;
+      if (!tmp.empty() && tmp[0].get() != fn->right().get()) fn->right().reset(tmp[0].release());
+      return bind_field_expression(expr, bound_expressions);
+    } break;
+
     case ExprType::AGGREGATION: {
       ASSERT(false, "shouldn't be here");
     } break;

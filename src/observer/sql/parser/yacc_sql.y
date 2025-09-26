@@ -7,6 +7,9 @@
 
 #include "common/log/log.h"
 #include "common/lang/string.h"
+#include "common/type/data_type.h"
+#include <cstdio>
+#include <sstream>
 #include "sql/parser/parse_defs.h"
 #include "sql/parser/yacc_sql.hpp"
 #include "sql/parser/lex_sql.h"
@@ -46,6 +49,27 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
                                            YYLTYPE *llocp)
 {
   UnboundAggregateExpr *expr = new UnboundAggregateExpr(aggregate_name, child);
+  expr->set_name(token_name(sql_string, llocp));
+  return expr;
+}
+
+FunctionExpr *create_function_expression(const char *func_name,
+                                         Expression *left,
+                                         Expression *right,
+                                         const char *sql_string,
+                                         YYLTYPE *llocp)
+{
+  FunctionExpr::FuncType ft;
+  if (0 == strcasecmp(func_name, "l2_distance")) {
+    ft = FunctionExpr::FuncType::L2_DISTANCE;
+  } else if (0 == strcasecmp(func_name, "cosine_distance")) {
+    ft = FunctionExpr::FuncType::COSINE_DISTANCE;
+  } else if (0 == strcasecmp(func_name, "inner_product")) {
+    ft = FunctionExpr::FuncType::INNER_PRODUCT;
+  } else {
+    return nullptr; // 交给其它规则
+  }
+  FunctionExpr *expr = new FunctionExpr(ft, unique_ptr<Expression>(left), unique_ptr<Expression>(right));
   expr->set_name(token_name(sql_string, llocp));
   return expr;
 }
@@ -96,6 +120,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         DATE_T
         TEXT_T
         VECTOR_T
+        LSBRACKET
+        RSBRACKET
         HELP
         EXIT
         DOT //QUOTE
@@ -155,6 +181,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   char *                                     cstring;
   int                                        number;
   float                                      floats;
+  std::vector<float> *                       float_list;
 }
 
 %destructor { delete $$; } <condition>
@@ -169,6 +196,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 // %destructor { delete $$; } <rel_attr_list>
 %destructor { delete $$; } <relation_list>
 %destructor { delete $$; } <key_list>
+%destructor { delete $$; } <float_list>
 
 %token <number> NUMBER
 %token <floats> FLOAT
@@ -232,6 +260,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <sql_node>            command_wrapper
 // commands should be a list but I use a single command instead
 %type <sql_node>            commands
+%type <float_list>          vector_item_list
 
 %left '+' '-'
 %left '*' '/'
@@ -548,6 +577,53 @@ value:
       $$ = new Value(tmp);
       free(tmp);
     }
+    | LSBRACKET RSBRACKET {
+      // 空向量
+      Value *v = new Value();
+      DataType::type_instance(AttrType::VECTORS)->set_value_from_str(*v, "[]");
+      $$ = v;
+    }
+    | LSBRACKET NUMBER RSBRACKET {
+      // 单元素向量（整数）
+      string s = string("[") + std::to_string($2) + "]";
+      Value *v = new Value();
+      DataType::type_instance(AttrType::VECTORS)->set_value_from_str(*v, s);
+      $$ = v;
+    }
+    | LSBRACKET FLOAT RSBRACKET {
+      char buf[64]; snprintf(buf, sizeof(buf), "%.6f", $2);
+      string s = string("[") + string(buf) + "]";
+      Value *v = new Value();
+      DataType::type_instance(AttrType::VECTORS)->set_value_from_str(*v, s);
+      $$ = v;
+    }
+    | LSBRACKET vector_item_list RSBRACKET {
+      // 列表向量 -> 构造字符串并让 DataType 解析
+      std::ostringstream oss; oss << "[";
+      for (size_t i=0;i<$2->size();++i){ if(i) oss << ","; char b[64]; snprintf(b,sizeof(b),"%.6f", $2->at(i)); oss << b; }
+      oss << "]";
+      Value *v = new Value();
+      DataType::type_instance(AttrType::VECTORS)->set_value_from_str(*v, oss.str());
+      delete $2;
+      $$ = v;
+    }
+    ;
+
+vector_item_list:
+    NUMBER {
+      $$ = new std::vector<float>();
+      $$->push_back((float)$1);
+    }
+    | FLOAT {
+      $$ = new std::vector<float>();
+      $$->push_back((float)$1);
+    }
+    | vector_item_list COMMA NUMBER {
+      $$ = $1; $$->push_back((float)$3);
+    }
+    | vector_item_list COMMA FLOAT {
+      $$ = $1; $$->push_back((float)$3);
+    }
     ;
 nullable_opt:
     /* empty */
@@ -693,6 +769,15 @@ expression:
     }
     | expression '/' expression {
       $$ = create_arithmetic_expression(ArithmeticExpr::Type::DIV, $1, $3, sql_string, &@$);
+    }
+    | ID LBRACE expression COMMA expression RBRACE {
+      auto *fn = create_function_expression($1, $3, $5, sql_string, &@$);
+      if (fn != nullptr) {
+        $$ = fn;
+      } else {
+        // 回退：非内置函数，产生语法错误
+        $$ = nullptr;
+      }
     }
     | LBRACE expression RBRACE {
       $$ = $2;

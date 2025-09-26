@@ -145,6 +145,8 @@ NULLABLE                                RETURN_TOKEN(NULLABLE);
 {ID}                                    yylval->cstring=strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(ID);
 "("                                     RETURN_TOKEN(LBRACE);
 ")"                                     RETURN_TOKEN(RBRACE);
+"\["                                    RETURN_TOKEN(LSBRACKET);
+"\]"                                    RETURN_TOKEN(RSBRACKET);
 
 ","                                     RETURN_TOKEN(COMMA);
 "="                                     RETURN_TOKEN(EQ);

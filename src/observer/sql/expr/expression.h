@@ -50,6 +50,7 @@ enum class ExprType
   AGGREGATION,  ///< 聚合运算
   SUBQUERY,     ///< 子查询表达式（返回单列结果）
   IN_LIST,      ///< IN/NOT IN 表达式（右侧可以为子查询）
+  FUNCTION,     ///< 标量函数（例如距离计算）
 };
 
 /**
@@ -639,4 +640,38 @@ private:
   std::unique_ptr<Expression> test_expr_;
   std::unique_ptr<Expression> set_expr_;  // 期望为 SubqueryExpr
   bool                         not_in_ = false;
+};
+
+/**
+ * @brief 标量函数表达式：支持向量距离/相似度
+ */
+class FunctionExpr : public Expression
+{
+public:
+  enum class FuncType { L2_DISTANCE, COSINE_DISTANCE, INNER_PRODUCT };
+
+  FunctionExpr(FuncType ft, std::unique_ptr<Expression> left, std::unique_ptr<Expression> right)
+    : func_type_(ft), left_(std::move(left)), right_(std::move(right)) {}
+  virtual ~FunctionExpr() = default;
+
+  unique_ptr<Expression> copy() const override
+  {
+    return make_unique<FunctionExpr>(func_type_, left_->copy(), right_->copy());
+  }
+
+  ExprType type() const override { return ExprType::FUNCTION; }
+  AttrType value_type() const override { return AttrType::FLOATS; }
+  int      value_length() const override { return sizeof(float); }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+  RC get_column(Chunk &chunk, Column &column) override;
+
+  FuncType func_type() const { return func_type_; }
+  unique_ptr<Expression> &left() { return left_; }
+  unique_ptr<Expression> &right() { return right_; }
+
+private:
+  FuncType                 func_type_;
+  std::unique_ptr<Expression> left_;
+  std::unique_ptr<Expression> right_;
 };
