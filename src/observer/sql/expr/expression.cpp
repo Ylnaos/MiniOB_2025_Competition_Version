@@ -194,12 +194,20 @@ if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
     auto *vt = static_cast<VectorType *>(DataType::type_instance(AttrType::VECTORS));
     Value ltmp = left, rtmp = right;
     if (ltmp.attr_type() != AttrType::VECTORS) {
-      Value v; RC rc2 = DataType::type_instance(ltmp.attr_type())->cast_to(ltmp, AttrType::VECTORS, v);
-      if (rc2 != RC::SUCCESS) return RC::INVALID_ARGUMENT; ltmp = v;
+      Value v;
+      RC rc2 = DataType::type_instance(ltmp.attr_type())->cast_to(ltmp, AttrType::VECTORS, v);
+      if (rc2 != RC::SUCCESS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      ltmp = v;
     }
     if (rtmp.attr_type() != AttrType::VECTORS) {
-      Value v; RC rc2 = DataType::type_instance(rtmp.attr_type())->cast_to(rtmp, AttrType::VECTORS, v);
-      if (rc2 != RC::SUCCESS) return RC::INVALID_ARGUMENT; rtmp = v;
+      Value v;
+      RC rc2 = DataType::type_instance(rtmp.attr_type())->cast_to(rtmp, AttrType::VECTORS, v);
+      if (rc2 != RC::SUCCESS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      rtmp = v;
     }
     rc = vt->decode_vector(ltmp, a);
     if (OB_FAIL(rc)) return rc;
