@@ -270,12 +270,26 @@ int store_fix_length_string(char *buf, const char *s, int len)
  * @return int 写入的字节数
  * @ingroup MySQLProtocolStore
  */
-int store_lenenc_string(char *buf, const char *s)
+// 写入长度编码字符串（基于已知长度，安全支持内嵌'\0'字节）
+static inline int store_lenenc_string(char *buf, const char *s, int len)
 {
-  int len = static_cast<int>(strlen(s));
-  int pos = store_lenenc_int(buf, len);
+  if (s == nullptr || len <= 0) {
+    // 长度为 0 也要写入长度前缀 0
+    return store_lenenc_int(buf, 0);
+  }
+  int pos = store_lenenc_int(buf, static_cast<uint64_t>(len));
   store_fix_length_string(buf + pos, s, len);
   return pos + len;
+}
+
+// 与原接口保持兼容，按 C 字符串写入（不支持内嵌'\0'）
+int store_lenenc_string(char *buf, const char *s)
+{
+  if (s == nullptr) {
+    return store_lenenc_int(buf, 0);
+  }
+  const int len = static_cast<int>(strlen(s));
+  return store_lenenc_string(buf, s, len);
 }
 
 /**
@@ -1003,7 +1017,11 @@ RC MysqlCommunicator::write_tuple_result(SqlResult *sql_result, vector<char> &pa
         break;  // TODO send error packet
       }
 
-      pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+      {
+        // 使用 size 精确编码，避免内嵌'\0'导致的截断
+        std::string cell_str = value.to_string();
+        pos += store_lenenc_string(buf + pos, cell_str.data(), static_cast<int>(cell_str.size()));
+      }
     }
 
     int payload_length = pos - 4;
@@ -1039,7 +1057,8 @@ RC MysqlCommunicator::write_chunk_result(SqlResult *sql_result, vector<char> &pa
 
       for (int col_idx = 0; col_idx < column_num; col_idx++) {
         Value value = chunk.get_value(col_idx, i);
-        pos += store_lenenc_string(buf + pos, value.to_string().c_str());
+        std::string cell_str = value.to_string();
+        pos += store_lenenc_string(buf + pos, cell_str.data(), static_cast<int>(cell_str.size()));
       }
 
       int payload_length = pos - 4;
