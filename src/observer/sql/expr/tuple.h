@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple_cell.h"
+#include "common/sys/rc.h"
 #include "sql/parser/parse.h"
 #include "common/value.h"
 #include <cstring>
@@ -211,6 +212,44 @@ public:
         }
       }
     }
+    // TEXT 列特殊处理：行内仅保存 LOB 引用，需要从 .lob 文件读取真实文本
+    if (field_meta->type() == AttrType::TEXTS) {
+      cell.set_type(AttrType::TEXTS);
+      const char *ref_ptr = this->record_->data() + field_meta->offset();
+      if (ref_ptr == nullptr) {
+        cell.set_empty_string(0);
+        cell.set_type(AttrType::TEXTS);
+        return RC::SUCCESS;
+      }
+      int64_t lob_offset = 0;
+      int32_t data_len   = 0;
+      memcpy(&lob_offset, ref_ptr, sizeof(int64_t));
+      memcpy(&data_len, ref_ptr + sizeof(int64_t), sizeof(int32_t));
+      if (data_len <= 0) {
+        cell.set_empty_string(0);
+        cell.set_type(AttrType::TEXTS);
+        return RC::SUCCESS;
+      }
+      // 读取 LOB 数据
+      const Table *tbl = table_;
+      if (tbl == nullptr || tbl->lob_handler() == nullptr) {
+        LOG_WARN("table lob handler not ready for TEXT column: %s", field_meta->name());
+        return RC::INTERNAL;
+      }
+      std::string buf;
+      buf.resize(static_cast<size_t>(data_len));
+      RC rc = tbl->lob_handler()->get_data(lob_offset, data_len, buf.data());
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to read lob data. offset=%lld, len=%d, rc=%s", static_cast<long long>(lob_offset), data_len, strrc(rc));
+        return rc;
+      }
+      // 将真实文本设置到 Value，保持 TEXTS 类型
+      cell.set_type(AttrType::TEXTS);
+      cell.set_data(buf.data(), data_len);
+      return RC::SUCCESS;
+    }
+
+    // 其他类型：直接按固定长度取值
     cell.set_type(field_meta->type());
     cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
     return RC::SUCCESS;

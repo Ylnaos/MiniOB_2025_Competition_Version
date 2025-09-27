@@ -121,6 +121,26 @@ RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, c
     return rc;
   }
 
+  // 创建并打开 LOB 文件（用于 TEXT 字段存储）
+  if (lob_handler_ == nullptr) {
+    lob_handler_ = new LobFileHandler();
+  }
+  string lob_file = table_lob_file(base_dir, name);
+  // 如果文件已存在，直接打开；否则创建再打开
+  RC lob_rc = lob_handler_->open_file(lob_file.c_str());
+  if (lob_rc == RC::FILE_NOT_EXIST) {
+    lob_rc = lob_handler_->create_file(lob_file.c_str());
+    if (OB_FAIL(lob_rc)) {
+      LOG_WARN("Failed to create lob file for table %s. rc=%s", name, strrc(lob_rc));
+      return lob_rc;
+    }
+    lob_rc = lob_handler_->open_file(lob_file.c_str());
+  }
+  if (OB_FAIL(lob_rc)) {
+    LOG_WARN("Failed to open lob file for table %s. rc=%s", name, strrc(lob_rc));
+    return lob_rc;
+  }
+
   LOG_INFO("Successfully create table %s:%s", base_dir, name);
   return rc;
 }
@@ -167,6 +187,25 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
   if (rc != RC::SUCCESS) {
     LOG_ERROR("Failed to open table %s due to engine open failed.", base_dir);
     return rc;
+  }
+
+  // 打开 LOB 文件（若不存在则创建），供 TEXT 列使用
+  if (lob_handler_ == nullptr) {
+    lob_handler_ = new LobFileHandler();
+  }
+  string lob_file = table_lob_file(base_dir, table_meta_.name());
+  RC lob_rc = lob_handler_->open_file(lob_file.c_str());
+  if (lob_rc == RC::FILE_NOT_EXIST) {
+    lob_rc = lob_handler_->create_file(lob_file.c_str());
+    if (OB_FAIL(lob_rc)) {
+      LOG_WARN("Failed to create lob file for table %s. rc=%s", table_meta_.name(), strrc(lob_rc));
+      return lob_rc;
+    }
+    lob_rc = lob_handler_->open_file(lob_file.c_str());
+  }
+  if (OB_FAIL(lob_rc)) {
+    LOG_WARN("Failed to open lob file for table %s. rc=%s", table_meta_.name(), strrc(lob_rc));
+    return lob_rc;
   }
 
   return rc;
@@ -278,7 +317,62 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     src = &real_value;
   }
 
-  // 安全写入：计算该字段在记录缓冲区内的可写范围，避免越界
+  // TEXT 字段：采用 LOB 存储，行内只保存 offset+length
+  if (field->type() == AttrType::TEXTS) {
+    if (lob_handler_ == nullptr) {
+      LOG_WARN("lob handler not initialized for TEXT column. table=%s, field=%s", table_meta_.name(), field->name());
+      return RC::INTERNAL;
+    }
+
+    // 取字符串数据（支持来自 CHARS/TEXTS）
+    Value tmp;
+    const Value *src_v = &value;
+    if (value.attr_type() != AttrType::CHARS && value.attr_type() != AttrType::TEXTS) {
+      RC rc = Value::cast_to(value, AttrType::TEXTS, tmp);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to cast to TEXT for field=%s", field->name());
+        return rc;
+      }
+      src_v = &tmp;
+    }
+    const int data_len = src_v->length();
+    if (data_len > TEXT_MAX_LENGTH) {
+      LOG_WARN("TEXT value too long. len=%d, max=%d", data_len, TEXT_MAX_LENGTH);
+      return RC::IOERR_TOO_LONG;
+    }
+
+    // 插入到 LOB 文件
+    int64_t lob_offset = 0;
+    RC      rc         = RC::SUCCESS;
+    if (data_len > 0) {
+      rc = lob_handler_->insert_data(lob_offset, data_len, src_v->data());
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to write text to lob file. rc=%s", strrc(rc));
+        return rc;
+      }
+    } else {
+      lob_offset = 0; // 空串
+    }
+
+    // 行内写入 LobRef
+    const size_t record_size   = table_meta_.record_size();
+    const size_t field_offset  = static_cast<size_t>(field->offset());
+    const size_t field_len     = static_cast<size_t>(field->len());
+    const size_t avail_in_rec  = (field_offset < record_size) ? (record_size - field_offset) : 0;
+    const size_t writable_size = std::min(field_len, avail_in_rec);
+    if (writable_size < sizeof(int64_t) + sizeof(int32_t)) {
+      LOG_WARN("TEXT ref storage too small. field=%s", field->name());
+      return RC::INTERNAL;
+    }
+    // 清零再写入
+    memset(record_data + field_offset, 0, writable_size);
+    // 序列化 LobRef: [int64_t offset][int32_t length]
+    memcpy(record_data + field_offset, &lob_offset, sizeof(int64_t));
+    memcpy(record_data + field_offset + sizeof(int64_t), &data_len, sizeof(int32_t));
+    return RC::SUCCESS;
+  }
+
+  // 非 TEXT：安全写入，计算该字段在记录缓冲区内的可写范围，避免越界
   {
     const size_t record_size   = table_meta_.record_size();
     const size_t field_offset  = static_cast<size_t>(field->offset());
@@ -299,9 +393,6 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     if (field->type() == AttrType::CHARS) {
       // CHARS：尽量包含末尾'\0'
       copy_len = std::min(writable_size, data_len + 1);
-    } else if (field->type() == AttrType::TEXTS) {
-      // TEXT：仅按长度截断，不强制添加'\0'
-      copy_len = std::min(writable_size, data_len);
     } else {
       // 其他类型：保守处理
       copy_len = std::min(writable_size, data_len);
@@ -313,6 +404,7 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     return RC::SUCCESS;
   }
 
+  // 旧路径兜底（理论上不会走到这里）
   size_t       copy_len = field->len();
   const size_t data_len = src->length();
   if (field->type() == AttrType::CHARS) {
@@ -320,14 +412,10 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
       copy_len = data_len + 1; // 预留结尾'\0'
     }
     memset(record_data + field->offset(), 0, field->len());
-  } else if (field->type() == AttrType::TEXTS) {
-    // TEXT: 截断到最多4096字节，不强制添加额外'\0'
-    if (copy_len > data_len) {
-      copy_len = data_len;
-    }
-    memset(record_data + field->offset(), 0, field->len());
+    memcpy(record_data + field->offset(), src->data(), copy_len);
+    return RC::SUCCESS;
   }
-  memcpy(record_data + field->offset(), src->data(), copy_len);
+  memcpy(record_data + field->offset(), src->data(), std::min(copy_len, data_len));
   return RC::SUCCESS;
 }
 

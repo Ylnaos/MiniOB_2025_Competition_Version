@@ -13,7 +13,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/type/data_type.h"
 
 /**
- * @brief TEXT 字符串类型（固定最大4096字节）
+ * @brief TEXT 字符串类型（最大 65535 字节）
  * @ingroup DataType
  */
 class TextType : public DataType
@@ -32,4 +32,3 @@ public:
 
   RC to_string(const Value &val, string &result) const override;
 };
-

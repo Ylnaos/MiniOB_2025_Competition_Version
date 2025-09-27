@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "common/global_context.h"
 #include "storage/table/table_meta.h"
+#include "storage/record/lob_ref.h"
 #include "common/type/attr_type.h"
 #include "storage/trx/trx.h"
 #include "json/json.h"
@@ -92,7 +93,10 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     // `i` is the col_id of fields[i]
     int field_len = static_cast<int>(attr_info.length);
     if (attr_info.type == AttrType::TEXTS) {
-      field_len = TEXT_MAX_LENGTH;
+      // TEXT 采用 LOB 方式存储：行内仅保存 offset+length 的引用，不直接塞入文本内容。
+      // 因此列存储长度固定为 LobRef 的尺寸（8+4=12，对齐后按 12 使用）。
+      // 文本内容的最大允许长度由 TEXT_MAX_LENGTH 控制（默认 65535）。
+      field_len = static_cast<int>(sizeof(LobRef));
     }
     rc = fields_[i + trx_field_num].init(
       attr_info.name.c_str(), attr_info.type, field_offset, field_len, true /*visible*/, static_cast<int>(i), attr_info.nullable);
