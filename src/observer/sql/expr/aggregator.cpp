@@ -34,6 +34,11 @@ RC SumAggregator::accumulate(const Value &value)
 
 RC SumAggregator::evaluate(Value& result)
 {
+  // 没有任何非 NULL 的输入时，SUM 应返回 NULL
+  if (value_.attr_type() == AttrType::UNDEFINED) {
+    result.set_null();
+    return RC::SUCCESS;
+  }
   result = value_;
   return RC::SUCCESS;
 }

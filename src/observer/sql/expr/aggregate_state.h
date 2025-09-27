@@ -17,8 +17,9 @@ class SumState
 public:
   SumState() : value(0) {}
   T    value;
+  bool has_value {false};
   void update(const T *values, int size);
-  void update(const T &value) { this->value += value; }
+  void update(const T &value) { this->value += value; this->has_value = true; }
   template <class U>
   U finalize()
   {

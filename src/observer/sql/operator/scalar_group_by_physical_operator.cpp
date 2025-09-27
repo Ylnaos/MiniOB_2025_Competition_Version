@@ -83,9 +83,16 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
   }
 
   // 得到最终聚合后的值
-  if (group_value_) {
-    rc = evaluate(*group_value_);
+  // 即使没有任何输入行(例如空表或所有行被过滤)，聚合查询也应返回一行结果：
+  // COUNT -> 0，其它聚合(SUM/AVG/MIN/MAX)在无输入时返回 NULL
+  if (!group_value_) {
+    AggregatorList aggregator_list;
+    create_aggregator_list(aggregator_list);
+
+    CompositeTuple composite_tuple; // 无需缓存子元组
+    group_value_ = make_unique<GroupValueType>(std::move(aggregator_list), std::move(composite_tuple));
   }
+  rc = evaluate(*group_value_);
 
   emitted_ = false;
   return rc;

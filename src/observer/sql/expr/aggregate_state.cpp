@@ -25,9 +25,12 @@ void SumState<T>::update(const T *values, int size)
   }
 #else
   for (int i = 0; i < size; ++i) {
- 	  value += values[i];
+	  value += values[i];
   }
 #endif
+  if (size > 0) {
+    has_value = true;
+  }
 }
 
 template <typename T>
@@ -145,9 +148,23 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
   RC rc = RC::SUCCESS;
   if ( aggr_type == AggregateExpr::Type::SUM) {
     if (attr_type == AttrType::INTS) {
-      append_to_column<SumState<int>, int>(state, col);
+      auto *st = reinterpret_cast<SumState<int> *>(state);
+      if (!st->has_value) {
+        Value v; v.set_null();
+        col.set_attr_type(AttrType::NULLS);
+        col.append_value(v);
+      } else {
+        append_to_column<SumState<int>, int>(state, col);
+      }
     } else if (attr_type == AttrType::FLOATS) {
-      append_to_column<SumState<float>, float>(state, col);
+      auto *st = reinterpret_cast<SumState<float> *>(state);
+      if (!st->has_value) {
+        Value v; v.set_null();
+        col.set_attr_type(AttrType::NULLS);
+        col.append_value(v);
+      } else {
+        append_to_column<SumState<float>, float>(state, col);
+      }
     } else {
       rc = RC::UNIMPLEMENTED;
       LOG_WARN("unsupported aggregate value type");
@@ -156,9 +173,23 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
     append_to_column<CountState<int>, int>(state, col);
   } else if (aggr_type == AggregateExpr::Type::AVG) {
     if (attr_type == AttrType::INTS) {
-      append_to_column<AvgState<int>, float>(state, col);
+      auto *st = reinterpret_cast<AvgState<int> *>(state);
+      if (st->count == 0) {
+        Value v; v.set_null();
+        col.set_attr_type(AttrType::NULLS);
+        col.append_value(v);
+      } else {
+        append_to_column<AvgState<int>, float>(state, col);
+      }
     } else if (attr_type == AttrType::FLOATS) {
-      append_to_column<AvgState<float>, float>(state, col);
+      auto *st = reinterpret_cast<AvgState<float> *>(state);
+      if (st->count == 0) {
+        Value v; v.set_null();
+        col.set_attr_type(AttrType::NULLS);
+        col.append_value(v);
+      } else {
+        append_to_column<AvgState<float>, float>(state, col);
+      }
     } else {
       rc = RC::UNIMPLEMENTED;
       LOG_WARN("unsupported aggregate value type");
@@ -168,6 +199,7 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
     if (!st->has_value) {
       // All NULLs -> result NULL
       Value v; v.set_null();
+      col.set_attr_type(AttrType::NULLS);
       col.append_value(v);
     } else {
       col.append_value(st->value);
