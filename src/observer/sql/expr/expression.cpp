@@ -170,6 +170,15 @@ if (left.is_null() || right.is_null()) {
     return RC::SUCCESS;
   }
 
+  if (comp_ == NOT_LIKE) {
+if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
+      LOG_WARN("LIKE/NOT LIKE operator only supports string type");
+      return RC::INVALID_ARGUMENT;
+    }
+    bool matched = like_match(left.get_string().c_str(), right.get_string().c_str());
+    result = !matched;
+    return RC::SUCCESS;
+  }
   if (comp_ == LIKE_OP) {
     // LIKE 浠呮敮鎸佸瓧绗︿覆绫诲瀷锛堝寘鍚?CHAR/TEXT锛?
 if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {

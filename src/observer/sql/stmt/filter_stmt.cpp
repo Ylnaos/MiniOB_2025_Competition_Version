@@ -198,8 +198,8 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
     return RC::INVALID_ARGUMENT;
   }
 
-  // LIKE operator only works with CHAR type fields
-  if (comp == LIKE_OP) {
+  // LIKE/NOT LIKE operator only works with CHAR type fields
+  if (comp == LIKE_OP || comp == NOT_LIKE) {
     // Check if at least one side is an attribute (field)
     if (!condition.left_is_attr && !condition.right_is_attr) {
       LOG_WARN("LIKE operator requires at least one field operand");
