@@ -1275,6 +1275,51 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
   return RC::UNIMPLEMENTED;
 }
 
+RC ScalarFunctionExpr::try_get_value(Value &value) const
+{
+  if (!child_) {
+    return RC::INVALID_ARGUMENT;
+  }
+  Value arg;
+  RC rc = child_->try_get_value(arg);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  switch (func_type_) {
+    case FuncType::LENGTH: {
+      if (arg.attr_type() != AttrType::CHARS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      auto s = arg.get_string_t();
+      value.set_int(static_cast<int>(s.size()));
+      return RC::SUCCESS;
+    }
+    case FuncType::ROUND: {
+      if (arg.attr_type() != AttrType::FLOATS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      float f  = arg.get_float();
+      float rf = std::round(f);
+      value.set_float(rf);
+      return RC::SUCCESS;
+    }
+    case FuncType::DATE_FORMAT: {
+      if (arg.attr_type() != AttrType::DATES) {
+        return RC::INVALID_ARGUMENT;
+      }
+      int32_t d = arg.get_date();
+      int year  = d / 10000;
+      int month = (d / 100) % 100;
+      int day   = d % 100;
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
+      value.set_string(buf);
+      return RC::SUCCESS;
+    }
+  }
+  return RC::UNIMPLEMENTED;
+}
+
 RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
 {
   if (pos_ != -1) {

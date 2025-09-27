@@ -688,6 +688,7 @@ public:
 
   RC get_value(const Tuple &tuple, Value &value) const override;
   RC get_column(Chunk &chunk, Column &column) override;
+  RC try_get_value(Value &value) const override;
 
   unique_ptr<Expression> &child() { return child_; }
   const unique_ptr<Expression> &child() const { return child_; }
