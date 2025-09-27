@@ -28,6 +28,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/index/bplus_tree_index.h"
 #include "storage/index/index.h"
 #include "storage/record/record_manager.h"
+#include "storage/record/lob_ref.h"
 #include "storage/table/table.h"
 #include "storage/trx/trx.h"
 #include "storage/record/heap_record_scanner.h"
@@ -106,6 +107,17 @@ RC Table::create(Db *db, int32_t table_id, const char *path, const char *name, c
     return rc;
   }
 
+  // Create LOB file for TEXT storage
+  if (lob_handler_ == nullptr) {
+    lob_handler_ = new LobFileHandler();
+  }
+  string lob_file = table_lob_file(base_dir, name);
+  RC lob_rc = lob_handler_->create_file(lob_file.c_str());
+  if (lob_rc != RC::SUCCESS) {
+    LOG_WARN("Failed to create LOB file. file=%s, rc=%s", lob_file.c_str(), strrc(lob_rc));
+    // Not fatal for non-TEXT tables, but keep handler for later use
+  }
+
   if (table_meta_.storage_engine() == StorageEngine::HEAP) {
     engine_ = make_unique<HeapTableEngine>(&table_meta_, db_, this);
   } else if (table_meta_.storage_engine() == StorageEngine::LSM) {
@@ -161,6 +173,19 @@ RC Table::open(Db *db, const char *meta_file, const char *base_dir)
     rc = RC::UNSUPPORTED;
     LOG_ERROR("Unsupported storage engine type: %d", table_meta_.storage_engine());
     return rc;
+  }
+
+  // Open LOB file for this table
+  if (lob_handler_ == nullptr) {
+    lob_handler_ = new LobFileHandler();
+  }
+  {
+    string lob_file = table_lob_file(base_dir, table_meta_.name());
+    RC lob_rc = lob_handler_->open_file(lob_file.c_str());
+    if (lob_rc != RC::SUCCESS) {
+      LOG_WARN("LOB file open failed or missing. file=%s, rc=%s", lob_file.c_str(), strrc(lob_rc));
+      // tolerate missing lob file for legacy tables; it will be created on demand by create path
+    }
   }
 
   rc = engine_->open();
@@ -276,6 +301,55 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
       return rc;
     }
     src = &real_value;
+  }
+
+  // Special handling for TEXT: store into LOB file, and write LobRef to record
+  if (field->type() == AttrType::TEXTS) {
+    if (lob_handler_ == nullptr) {
+      LOG_WARN("LOB handler not initialized for table %s", table_meta_.name());
+      return RC::INTERNAL;
+    }
+
+    // Enforce TEXT length limit
+    int text_len = 0;
+    if (src->attr_type() == AttrType::TEXTS || src->attr_type() == AttrType::CHARS) {
+      text_len = src->length();
+    } else {
+      // fall back to to_string
+      std::string tmp = src->to_string();
+      text_len = static_cast<int>(tmp.size());
+    }
+    if (text_len > TEXT_MAX_LENGTH) {
+      LOG_WARN("TEXT too long: len=%d > %d", text_len, TEXT_MAX_LENGTH);
+      return RC::IOERR_TOO_LONG;
+    }
+
+    // Write data into .lob file
+    int64_t offset = 0;
+    RC      lrc    = RC::SUCCESS;
+    if (text_len > 0) {
+      lrc = lob_handler_->insert_data(offset, text_len, src->data());
+      if (OB_FAIL(lrc)) {
+        LOG_WARN("failed to append LOB. rc=%s", strrc(lrc));
+        return lrc;
+      }
+    } else {
+      offset = 0; // empty
+    }
+
+    // Fill LobRef into record
+    LobRef ref;
+    ref.length = text_len;
+    ref.offset = offset;
+    const size_t record_size   = table_meta_.record_size();
+    const size_t field_offset  = static_cast<size_t>(field->offset());
+    const size_t field_len     = static_cast<size_t>(field->len());
+    const size_t avail_in_rec  = (field_offset < record_size) ? (record_size - field_offset) : 0;
+    const size_t writable_size = std::min(field_len, avail_in_rec);
+    if (writable_size >= sizeof(LobRef)) {
+      memcpy(record_data + field_offset, &ref, sizeof(LobRef));
+    }
+    return RC::SUCCESS;
   }
 
   // 安全写入：计算该字段在记录缓冲区内的可写范围，避免越界

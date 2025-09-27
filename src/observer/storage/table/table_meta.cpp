@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "common/global_context.h"
 #include "storage/table/table_meta.h"
+#include "storage/record/lob_ref.h"
 #include "common/type/attr_type.h"
 #include "storage/trx/trx.h"
 #include "json/json.h"
@@ -92,7 +93,7 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     // `i` is the col_id of fields[i]
     int field_len = static_cast<int>(attr_info.length);
     if (attr_info.type == AttrType::TEXTS) {
-      field_len = TEXT_MAX_LENGTH;
+      field_len = static_cast<int>(sizeof(LobRef));
     }
     rc = fields_[i + trx_field_num].init(
       attr_info.name.c_str(), attr_info.type, field_offset, field_len, true /*visible*/, static_cast<int>(i), attr_info.nullable);

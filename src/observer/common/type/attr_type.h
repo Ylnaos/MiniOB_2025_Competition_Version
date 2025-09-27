@@ -29,10 +29,9 @@ enum class AttrType
 };
 
 // TEXT 固定最大长度
-static constexpr int TEXT_MAX_LENGTH = 4096;
+static constexpr int TEXT_MAX_LENGTH = 65535;
 
 const char *attr_type_to_string(AttrType type);
 AttrType    attr_type_from_string(const char *s);
 bool        is_numerical_type(AttrType type);
 bool        is_string_type(AttrType type);
-

@@ -20,6 +20,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/parser/parse.h"
 #include "common/value.h"
 #include <cstring>
+#include <cstdint>
 #include "storage/record/record.h"
 #include "storage/table/table.h"
 
@@ -211,9 +212,38 @@ public:
         }
       }
     }
-    cell.set_type(field_meta->type());
-    cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
-    return RC::SUCCESS;
+    // TEXTS are stored as LobRef in record; need to fetch from LOB file
+    if (field_meta->type() == AttrType::TEXTS) {
+      // decode LobRef {int32 length, int64 offset}
+      const char *p = this->record_->data() + field_meta->offset();
+      int32_t length = 0;
+      int64_t offset = 0;
+      memcpy(&length, p, sizeof(int32_t));
+      memcpy(&offset, p + sizeof(int32_t), sizeof(int64_t));
+
+      if (length <= 0) {
+        // empty text
+        cell.set_type(AttrType::TEXTS);
+        cell.set_data("", 0);
+        return RC::SUCCESS;
+      }
+      if (table_ == nullptr || table_->lob_handler() == nullptr) {
+        return RC::INTERNAL;
+      }
+      std::vector<char> buf;
+      buf.resize(static_cast<size_t>(length));
+      RC rc = table_->lob_handler()->get_data(offset, length, buf.data());
+      if (rc != RC::SUCCESS) {
+        return rc;
+      }
+      cell.set_type(AttrType::TEXTS);
+      cell.set_data(buf.data(), length);
+      return RC::SUCCESS;
+    } else {
+      cell.set_type(field_meta->type());
+      cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());
+      return RC::SUCCESS;
+    }
   }
 
   RC spec_at(int index, TupleCellSpec &spec) const override
