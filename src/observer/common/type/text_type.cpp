@@ -10,6 +10,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/type/text_type.h"
 #include "common/type/char_type.h"
+#include <cstdlib>
 #include "common/lang/comparator.h"
 #include "common/log/log.h"
 #include "common/value.h"
@@ -44,6 +45,24 @@ RC TextType::cast_to(const Value &val, AttrType type, Value &result) const
       result.set_type(AttrType::CHARS);
       return RC::SUCCESS;
     }
+    case AttrType::INTS: {
+      try {
+        int v = std::stoi(val.get_string());
+        result.set_int(v);
+        return RC::SUCCESS;
+      } catch (...) {
+        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+      }
+    }
+    case AttrType::FLOATS: {
+      try {
+        float v = std::stof(val.get_string());
+        result.set_float(v);
+        return RC::SUCCESS;
+      } catch (...) {
+        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+      }
+    }
     default: return RC::UNIMPLEMENTED;
   }
   return RC::SUCCESS;
@@ -53,6 +72,9 @@ int TextType::cast_cost(AttrType type)
 {
   if (type == AttrType::TEXTS || type == AttrType::CHARS) {
     return 0;
+  }
+  if (type == AttrType::INTS || type == AttrType::FLOATS) {
+    return 1;
   }
   return INT32_MAX;
 }
