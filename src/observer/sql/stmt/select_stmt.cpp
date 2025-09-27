@@ -41,7 +41,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     return RC::INVALID_ARGUMENT;
   }
 
-  // 简单的视图展开：仅支持单视图；支持外层 `SELECT * FROM view` 或 `SELECT COUNT(*) FROM view`
+  // 视图展开（仅支持单视图）：允许 SELECT * 或 简单聚合（如 COUNT(col)、COUNT(*)）
   if (select_sql.relations.size() == 1) {
     const RelationSqlNode &rel = select_sql.relations[0];
     const char *rel_name = rel.relation_name.c_str();
@@ -55,101 +55,75 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                                 select_sql.group_by.empty() &&
                                 select_sql.order_by.empty() &&
                                 rel.alias.empty();
-        bool is_count_star = false;
+        bool simple_aggregate = false;
         if (select_sql.expressions.size() == 1 && select_sql.expressions[0] != nullptr && no_outer_filters) {
-          // 绑定后 AGGREGATION
-          if (select_sql.expressions[0]->type() == ExprType::AGGREGATION) {
-            is_count_star = true;
-          }
+          ExprType et = select_sql.expressions[0]->type();
+          simple_aggregate = (et == ExprType::AGGREGATION || et == ExprType::UNBOUND_AGGREGATION);
         }
-        // 兼容绑定前 UNBOUND_AGGREGATION 的 COUNT(*)
-        if (!is_count_star && select_sql.expressions.size() == 1 && select_sql.expressions[0] != nullptr && no_outer_filters) {
-          Expression *expr0 = select_sql.expressions[0].get();
-          if (expr0->type() == ExprType::UNBOUND_AGGREGATION) {
-            auto *uagg = static_cast<UnboundAggregateExpr *>(expr0);
-            const char *name = uagg->aggregate_name();
-            if (name != nullptr && 0 == strcasecmp(name, "count")) {
-              auto &child = uagg->child();
-              if (child && child->type() == ExprType::STAR) {
-                is_count_star = true;
-              }
+        if (only_star || simple_aggregate) {
+          ParsedSqlResult parsed;
+          RC parse_rc = parse(view->select_sql(), &parsed);
+          if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+            LOG_WARN("parse view select failed. view=%s", view->name());
+            return RC::SQL_SYNTAX;
+          }
+          ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+          if (node->flag != SCF_SELECT) {
+            LOG_WARN("view definition is not a SELECT. view=%s", view->name());
+            return RC::SQL_SYNTAX;
+          }
+          if (only_star) {
+            select_sql.expressions.swap(node->selection.expressions);
+            select_sql.relations.swap(node->selection.relations);
+            select_sql.conditions.swap(node->selection.conditions);
+            select_sql.group_by.swap(node->selection.group_by);
+            select_sql.order_by.swap(node->selection.order_by);
+          } else {
+            select_sql.relations.swap(node->selection.relations);
+            for (auto &cond : node->selection.conditions) {
+              select_sql.conditions.emplace_back(std::move(cond));
             }
-          }
-        }
-
-        // 仅允许 SELECT * 或 COUNT(*) 且外层无 WHERE/GROUP/ORDER/Alias
-        if ((!only_star && !is_count_star) || !no_outer_filters) {
-          LOG_WARN("current view usage is limited to: SELECT * FROM view_name or simple aggregates like COUNT(*)");
-          return RC::UNSUPPORTED;
-        }
-
-        ParsedSqlResult parsed;
-        RC parse_rc = parse(view->select_sql(), &parsed);
-        if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
-          LOG_WARN("parse view select failed. view=%s", view->name());
-          return RC::SQL_SYNTAX;
-        }
-        ParsedSqlNode *node = parsed.sql_nodes()[0].get();
-        if (node->flag != SCF_SELECT) {
-          LOG_WARN("view definition is not a SELECT. view=%s", view->name());
-          return RC::SQL_SYNTAX;
-        }
-
-        if (only_star) {
-          // 用视图的SELECT定义整体替换
-          select_sql.expressions.swap(node->selection.expressions);
-          select_sql.relations.swap(node->selection.relations);
-          select_sql.conditions.swap(node->selection.conditions);
-          select_sql.group_by.swap(node->selection.group_by);
-          select_sql.order_by.swap(node->selection.order_by);
-        } else {
-          // 对于 COUNT(*) FROM view：展开 FROM 与 WHERE 条件
-          select_sql.relations.swap(node->selection.relations);
-          for (auto &cond : node->selection.conditions) {
-            select_sql.conditions.emplace_back(std::move(cond));
           }
         }
       }
     }
   }
 
+  // 绑定阶段
   BinderContext binder_context;
 
-  // collect tables in `from` statement
+  // 收集 FROM 表
   vector<Table *>                tables;
   unordered_map<string, Table *> table_map;
   for (size_t i = 0; i < select_sql.relations.size(); i++) {
-    const RelationSqlNode &rel = select_sql.relations[i];
-    const char *table_name = rel.relation_name.c_str();
+    const RelationSqlNode &r = select_sql.relations[i];
+    const char *table_name = r.relation_name.c_str();
     if (nullptr == table_name) {
       LOG_WARN("invalid argument. relation name is null. index=%d", i);
       return RC::INVALID_ARGUMENT;
     }
-
     Table *table = db->find_table(table_name);
     if (nullptr == table) {
       LOG_WARN("no such table. db=%s, table_name=%s", db->name(), table_name);
       return RC::SCHEMA_TABLE_NOT_EXIST;
     }
-
     binder_context.add_table(table);
     tables.push_back(table);
     table_map.insert({table_name, table});
     // 别名检查：同层不重复
-    if (!rel.alias.empty()) {
-      if (table_map.find(rel.alias) != table_map.end()) {
-        LOG_WARN("duplicate table alias in same scope: %s", rel.alias.c_str());
+    if (!r.alias.empty()) {
+      if (table_map.find(r.alias) != table_map.end()) {
+        LOG_WARN("duplicate table alias in same scope: %s", r.alias.c_str());
         return RC::INVALID_ARGUMENT;
       }
-      table_map.insert({rel.alias, table});
-      binder_context.add_alias(rel.alias, table);
+      table_map.insert({r.alias, table});
+      binder_context.add_alias(r.alias, table);
     }
   }
 
-  // collect query fields in `select` statement
+  // 绑定 SELECT 列
   vector<unique_ptr<Expression>> bound_expressions;
   ExpressionBinder expression_binder(binder_context);
-  
   for (unique_ptr<Expression> &expression : select_sql.expressions) {
     RC rc = expression_binder.bind_expression(expression, bound_expressions);
     if (OB_FAIL(rc)) {
@@ -158,6 +132,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
   }
 
+  // 绑定 GROUP BY
   vector<unique_ptr<Expression>> group_by_expressions;
   for (unique_ptr<Expression> &expression : select_sql.group_by) {
     RC rc = expression_binder.bind_expression(expression, group_by_expressions);
@@ -167,7 +142,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
   }
 
-  // bind order by expressions
+  // 绑定 ORDER BY
   vector<pair<unique_ptr<Expression>, bool>> order_by_items;
   for (auto &item : select_sql.order_by) {
     vector<unique_ptr<Expression>> bound;
@@ -183,14 +158,13 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     order_by_items.emplace_back(std::move(bound[0]), item.asc);
   }
 
+  // WHERE 过滤
   Table *default_table = nullptr;
   if (tables.size() == 1) {
     default_table = tables[0];
   }
-
-  // create filter statement in `where` statement
   FilterStmt *filter_stmt = nullptr;
-  RC          rc          = FilterStmt::create(db,
+  RC rc = FilterStmt::create(db,
       default_table,
       &table_map,
       select_sql.conditions.data(),
@@ -201,15 +175,14 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     return rc;
   }
 
-  // everything alright
+  // 组装 SelectStmt
   SelectStmt *select_stmt = new SelectStmt();
-
   select_stmt->tables_.swap(tables);
   select_stmt->query_expressions_.swap(bound_expressions);
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);
   select_stmt->order_by_.swap(order_by_items);
-  stmt                      = select_stmt;
+  stmt = select_stmt;
   return RC::SUCCESS;
 }
 
