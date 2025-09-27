@@ -343,6 +343,14 @@ RC LogicalPlanGenerator::create_plan(UpdateStmt *update_stmt, unique_ptr<Logical
 
   unique_ptr<LogicalOperator> update_oper(new UpdateLogicalOperator(table, field_metas, values, value_expressions));
 
+  // 将 SET 子句中的表达式也附加到逻辑算子的 expressions_ 中，
+  // 便于后续阶段做通用的表达式扫描（例如用于检测子查询从而禁用向量化）。
+  for (auto &expr_up : value_expressions) {
+    if (expr_up) {
+      update_oper->add_expressions(expr_up->copy());
+    }
+  }
+
   if (predicate_oper) {
     predicate_oper->add_child(std::move(table_get_oper));
     update_oper->add_child(std::move(predicate_oper));

@@ -10,6 +10,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/expr/expression.h"
 #include "common/type/attr_type.h"
+#include "common/value.h"
 template <class T>
 class SumState
 {
@@ -58,6 +59,15 @@ public:
   {
     return (U)((float)value / (float)count);
   }
+};
+
+// For MIN/MAX across any supported Value type
+class MinMaxState
+{
+public:
+  MinMaxState() = default;
+  bool  has_value {false};
+  Value value;
 };
 
 void *create_aggregate_state(AggregateExpr::Type aggr_type, AttrType attr_type);

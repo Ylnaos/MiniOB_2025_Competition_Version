@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/type/attr_type.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_iterator.h"
+#include <cmath>
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -1214,6 +1215,102 @@ RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
     return RC::INVALID_ARGUMENT;
   }
   value = results_[0];
+  return RC::SUCCESS;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ScalarFunctionExpr
+
+RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  if (!child_) {
+    return RC::INVALID_ARGUMENT;
+  }
+  Value arg;
+  RC rc = child_->get_value(tuple, arg);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  switch (func_type_) {
+    case FuncType::LENGTH: {
+      if (arg.attr_type() != AttrType::CHARS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      auto s = arg.get_string_t();
+      value.set_int(static_cast<int>(s.size()));
+      return RC::SUCCESS;
+    }
+    case FuncType::ROUND: {
+      if (arg.attr_type() != AttrType::FLOATS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      float f = arg.get_float();
+      float rf = std::round(f);
+      value.set_float(rf);
+      return RC::SUCCESS;
+    }
+    case FuncType::DATE_FORMAT: {
+      if (arg.attr_type() != AttrType::DATES) {
+        return RC::INVALID_ARGUMENT;
+      }
+      int32_t d = arg.get_date();
+      int year = d / 10000;
+      int month = (d / 100) % 100;
+      int day = d % 100;
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
+      value.set_string(buf);
+      return RC::SUCCESS;
+    }
+  }
+  return RC::UNIMPLEMENTED;
+}
+
+RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
+{
+  if (pos_ != -1) {
+    column.reference(chunk.column(pos_));
+    return RC::SUCCESS;
+  }
+  if (!child_) return RC::INVALID_ARGUMENT;
+
+  Column arg_col;
+  RC rc = child_->get_column(chunk, arg_col);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  const int rows = arg_col.count();
+  column.init(value_type(), value_length(), rows);
+  column.set_column_type(Column::Type::NORMAL_COLUMN);
+
+  for (int i = 0; i < rows; ++i) {
+    Value arg = arg_col.get_value(i);
+    Value out;
+    switch (func_type_) {
+      case FuncType::LENGTH: {
+        if (arg.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
+        auto s = arg.get_string_t();
+        out.set_int(static_cast<int>(s.size()));
+      } break;
+      case FuncType::ROUND: {
+        if (arg.attr_type() != AttrType::FLOATS) return RC::INVALID_ARGUMENT;
+        float rf = std::round(arg.get_float());
+        out.set_float(rf);
+      } break;
+      case FuncType::DATE_FORMAT: {
+        if (arg.attr_type() != AttrType::DATES) return RC::INVALID_ARGUMENT;
+        int32_t d = arg.get_date();
+        int year = d / 10000;
+        int month = (d / 100) % 100;
+        int day = d % 100;
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
+        out.set_string(buf);
+      } break;
+    }
+    column.append_value(out);
+  }
   return RC::SUCCESS;
 }
 RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const

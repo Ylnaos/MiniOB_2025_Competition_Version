@@ -68,6 +68,17 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       rc = callback(aggregate_expr.child());
     } break;
 
+    case ExprType::UNBOUND_AGGREGATION: {
+      // 解析阶段的未绑定聚合表达式：也需要递归其子节点（便于相关子查询替换等场景）
+      auto &uagg = static_cast<UnboundAggregateExpr &>(expr);
+      rc = callback(uagg.child());
+    } break;
+
+    case ExprType::FUNCTION: {
+      auto &fn = static_cast<ScalarFunctionExpr &>(expr);
+      rc = callback(fn.child());
+    } break;
+
     case ExprType::SUBQUERY: {
       // 作为叶子节点，无需递归
     } break;

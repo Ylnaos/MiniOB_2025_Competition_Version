@@ -56,6 +56,47 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     return RC::SUCCESS;
   }
 
+  // Pre-handle new or special expression types to avoid falling into legacy branches
+  if (expr->type() == ExprType::SUBQUERY) {
+    // 子查询作为叶子表达式，直接下放到执行阶段
+    bound_expressions.emplace_back(std::move(expr));
+    return RC::SUCCESS;
+  }
+
+  if (expr->type() == ExprType::FUNCTION) {
+    auto *func = static_cast<ScalarFunctionExpr *>(expr.get());
+    vector<unique_ptr<Expression>> child_bound;
+    RC rc = bind_expression(func->child(), child_bound);
+    if (OB_FAIL(rc)) return rc;
+    if (child_bound.size() == 1 && child_bound[0].get() != func->child().get()) {
+      func->child().reset(child_bound[0].release());
+    }
+
+    AttrType arg_type = func->child()->value_type();
+    switch (func->function_type()) {
+      case ScalarFunctionExpr::FuncType::LENGTH:
+        if (arg_type != AttrType::CHARS && arg_type != AttrType::TEXTS) {
+          LOG_WARN("length expects char/text type, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+        break;
+      case ScalarFunctionExpr::FuncType::ROUND:
+        if (arg_type != AttrType::FLOATS) {
+          LOG_WARN("round expects float type, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+        break;
+      case ScalarFunctionExpr::FuncType::DATE_FORMAT:
+        if (arg_type != AttrType::DATES) {
+          LOG_WARN("date_format expects date type, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+        break;
+    }
+    // 落入常规绑定，便于后续统一处理列位置等
+    return bind_field_expression(expr, bound_expressions);
+  }
+
   switch (expr->type()) {
     case ExprType::STAR: {
       return bind_star_expression(expr, bound_expressions);

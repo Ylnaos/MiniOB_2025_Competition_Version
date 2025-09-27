@@ -130,6 +130,9 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         LIKE
         NULL_T
         NULLABLE
+        LENGTH_F
+        ROUND_F
+        DATE_FORMAT_F
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -198,6 +201,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <key_list>            attr_list
 %type <relation_list>       rel_list
 %type <expression>          expression
+%type <expression>          function_expression
 %type <expression>          aggregate_expression
 %type <expression_list>     expression_list
 %type <expression>          select_item
@@ -692,6 +696,11 @@ expression_list:
     }
     ;
 expression:
+    function_expression
+    {
+      $$ = $1;
+    }
+    |
     expression '+' expression {
       $$ = create_arithmetic_expression(ArithmeticExpr::Type::ADD, $1, $3, sql_string, &@$);
     }
@@ -756,6 +765,25 @@ select_item:
       $1->set_alias($3);
       $$ = $1;
     }
+    ;
+
+// scalar function calls
+function_expression:
+      LENGTH_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::LENGTH, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | ROUND_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::ROUND, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | DATE_FORMAT_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DATE_FORMAT, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
     ;
 
 aggregate_expression:

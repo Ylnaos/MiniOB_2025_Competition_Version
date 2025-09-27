@@ -21,6 +21,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/parser/expression_binder.h"
 #include "sql/parser/parse.h"
 #include "storage/view/view.h"
+#include "sql/expr/expression.h"
 
 using namespace std;
 using namespace common;
@@ -40,7 +41,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     return RC::INVALID_ARGUMENT;
   }
 
-  // 简单的视图展开：仅支持单视图、且外层为 `SELECT * FROM view` 无其它 WHERE/ORDER/GROUP 的场景
+  // 简单的视图展开：仅支持单视图；支持外层 `SELECT * FROM view` 或 `SELECT COUNT(*) FROM view`
   if (select_sql.relations.size() == 1) {
     const RelationSqlNode &rel = select_sql.relations[0];
     const char *rel_name = rel.relation_name.c_str();
@@ -54,8 +55,31 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                                 select_sql.group_by.empty() &&
                                 select_sql.order_by.empty() &&
                                 rel.alias.empty();
-        if (!only_star || !no_outer_filters) {
-          LOG_WARN("current view usage is limited to: SELECT * FROM view_name");
+        bool is_count_star = false;
+        if (select_sql.expressions.size() == 1 && select_sql.expressions[0] != nullptr && no_outer_filters) {
+          // 绑定后 AGGREGATION
+          if (select_sql.expressions[0]->type() == ExprType::AGGREGATION) {
+            is_count_star = true;
+          }
+        }
+        // 兼容绑定前 UNBOUND_AGGREGATION 的 COUNT(*)
+        if (!is_count_star && select_sql.expressions.size() == 1 && select_sql.expressions[0] != nullptr && no_outer_filters) {
+          Expression *expr0 = select_sql.expressions[0].get();
+          if (expr0->type() == ExprType::UNBOUND_AGGREGATION) {
+            auto *uagg = static_cast<UnboundAggregateExpr *>(expr0);
+            const char *name = uagg->aggregate_name();
+            if (name != nullptr && 0 == strcasecmp(name, "count")) {
+              auto &child = uagg->child();
+              if (child && child->type() == ExprType::STAR) {
+                is_count_star = true;
+              }
+            }
+          }
+        }
+
+        // 仅允许 SELECT * 或 COUNT(*) 且外层无 WHERE/GROUP/ORDER/Alias
+        if ((!only_star && !is_count_star) || !no_outer_filters) {
+          LOG_WARN("current view usage is limited to: SELECT * FROM view_name or simple aggregates like COUNT(*)");
           return RC::UNSUPPORTED;
         }
 
@@ -71,12 +95,20 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           return RC::SQL_SYNTAX;
         }
 
-        // 用视图的SELECT定义替换外层SELECT
-        select_sql.expressions.swap(node->selection.expressions);
-        select_sql.relations.swap(node->selection.relations);
-        select_sql.conditions.swap(node->selection.conditions);
-        select_sql.group_by.swap(node->selection.group_by);
-        select_sql.order_by.swap(node->selection.order_by);
+        if (only_star) {
+          // 用视图的SELECT定义整体替换
+          select_sql.expressions.swap(node->selection.expressions);
+          select_sql.relations.swap(node->selection.relations);
+          select_sql.conditions.swap(node->selection.conditions);
+          select_sql.group_by.swap(node->selection.group_by);
+          select_sql.order_by.swap(node->selection.order_by);
+        } else {
+          // 对于 COUNT(*) FROM view：展开 FROM 与 WHERE 条件
+          select_sql.relations.swap(node->selection.relations);
+          for (auto &cond : node->selection.conditions) {
+            select_sql.conditions.emplace_back(std::move(cond));
+          }
+        }
       }
     }
   }
@@ -180,3 +212,4 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   stmt                      = select_stmt;
   return RC::SUCCESS;
 }
+

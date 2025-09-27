@@ -48,6 +48,7 @@ enum class ExprType
   CONJUNCTION,  ///< 多个表达式使用同一种关系(AND或OR)来联结
   ARITHMETIC,   ///< 算术运算
   AGGREGATION,  ///< 聚合运算
+  FUNCTION,     ///< 标量函数表达式（如 LENGTH/ROUND/DATE_FORMAT）
   SUBQUERY,     ///< 子查询表达式（返回单列结果）
   IN_LIST,      ///< IN/NOT IN 表达式（右侧可以为子查询）
 };
@@ -639,4 +640,60 @@ private:
   std::unique_ptr<Expression> test_expr_;
   std::unique_ptr<Expression> set_expr_;  // 期望为 SubqueryExpr
   bool                         not_in_ = false;
+};
+
+/**
+ * @brief 标量函数表达式：支持 LENGTH/ROUND/DATE_FORMAT 三个函数
+ */
+class ScalarFunctionExpr : public Expression
+{
+public:
+  enum class FuncType { LENGTH, ROUND, DATE_FORMAT };
+
+  explicit ScalarFunctionExpr(FuncType func_type, std::unique_ptr<Expression> child)
+      : func_type_(func_type), child_(std::move(child))
+  {}
+  explicit ScalarFunctionExpr(FuncType func_type, Expression *child)
+      : func_type_(func_type), child_(child)
+  {}
+
+  virtual ~ScalarFunctionExpr() = default;
+
+  unique_ptr<Expression> copy() const override
+  {
+    return make_unique<ScalarFunctionExpr>(func_type_, child_ ? child_->copy().release() : nullptr);
+  }
+
+  ExprType type() const override { return ExprType::FUNCTION; }
+
+  AttrType value_type() const override
+  {
+    switch (func_type_) {
+      case FuncType::LENGTH: return AttrType::INTS;
+      case FuncType::ROUND: return AttrType::FLOATS;
+      case FuncType::DATE_FORMAT: return AttrType::CHARS;
+    }
+    return AttrType::UNDEFINED;
+  }
+
+  int value_length() const override
+  {
+    switch (func_type_) {
+      case FuncType::LENGTH: return sizeof(int);
+      case FuncType::ROUND: return sizeof(float);
+      case FuncType::DATE_FORMAT: return 10; // YYYY-MM-DD
+    }
+    return -1;
+  }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+  RC get_column(Chunk &chunk, Column &column) override;
+
+  unique_ptr<Expression> &child() { return child_; }
+  const unique_ptr<Expression> &child() const { return child_; }
+  FuncType function_type() const { return func_type_; }
+
+private:
+  FuncType                 func_type_;
+  unique_ptr<Expression>   child_;
 };

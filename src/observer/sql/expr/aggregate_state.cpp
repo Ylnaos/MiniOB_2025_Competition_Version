@@ -71,6 +71,10 @@ void* create_aggregate_state(AggregateExpr::Type aggr_type, AttrType attr_type)
     } else {
       LOG_WARN("unsupported aggregate value type");
     }
+  } else if (aggr_type == AggregateExpr::Type::MAX || aggr_type == AggregateExpr::Type::MIN) {
+    // MIN/MAX support any comparable type via Value container
+    state_ptr = malloc(sizeof(MinMaxState));
+    new (state_ptr) MinMaxState();
   } else {
     LOG_WARN("unsupported aggregator type");
   }
@@ -105,6 +109,22 @@ RC aggregate_state_update_by_value(void *state, AggregateExpr::Type aggr_type, A
       LOG_WARN("unsupported aggregate value type");
       return RC::UNIMPLEMENTED;
     }
+  } else if (aggr_type == AggregateExpr::Type::MAX || aggr_type == AggregateExpr::Type::MIN) {
+    auto *st = reinterpret_cast<MinMaxState *>(state);
+    if (val.is_null()) {
+      return RC::SUCCESS; // ignore NULLs
+    }
+    if (!st->has_value) {
+      st->value     = val;
+      st->has_value = true;
+      return RC::SUCCESS;
+    }
+    int cmp = 0;
+    Value::compare(st->value, val, cmp);
+    if ((aggr_type == AggregateExpr::Type::MAX && cmp < 0) || (aggr_type == AggregateExpr::Type::MIN && cmp > 0)) {
+      st->value = val;
+    }
+    return RC::SUCCESS;
   } else {
     LOG_WARN("unsupported aggregator type");
     return RC::UNIMPLEMENTED;
@@ -143,6 +163,15 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
       rc = RC::UNIMPLEMENTED;
       LOG_WARN("unsupported aggregate value type");
     }// 
+  } else if (aggr_type == AggregateExpr::Type::MAX || aggr_type == AggregateExpr::Type::MIN) {
+    auto *st = reinterpret_cast<MinMaxState *>(state);
+    if (!st->has_value) {
+      // All NULLs -> result NULL
+      Value v; v.set_null();
+      col.append_value(v);
+    } else {
+      col.append_value(st->value);
+    }
   } else {
     rc = RC::UNIMPLEMENTED;
     LOG_WARN("unsupported aggregator type");
@@ -180,6 +209,16 @@ RC aggregate_state_update_by_column(void *state, AggregateExpr::Type aggr_type, 
     } else {
       LOG_WARN("unsupported aggregate value type");
       rc = RC::UNIMPLEMENTED;
+    }
+  } else if (aggr_type == AggregateExpr::Type::MAX || aggr_type == AggregateExpr::Type::MIN) {
+    // Generic path: iterate row by row using Value wrapper
+    const int rows = col.count();
+    for (int i = 0; i < rows; ++i) {
+      Value v = col.get_value(i);
+      RC rc2 = aggregate_state_update_by_value(state, aggr_type, attr_type, v);
+      if (rc2 != RC::SUCCESS) {
+        return rc2;
+      }
     }
   } else {
     LOG_WARN("unsupported aggregator type");
