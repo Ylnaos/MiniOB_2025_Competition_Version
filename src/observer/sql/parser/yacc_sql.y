@@ -751,7 +751,20 @@ expression:
 
 
 select_item:
-    expression
+    '*'               /* allow SELECT * */
+    {
+      $$ = new StarExpr();
+    }
+    | '*' AS ID       /* allow SELECT * AS alias: ignore alias to match MySQL's behavior */
+    {
+      $$ = new StarExpr();
+      /* intentionally ignore alias on wildcard to keep semantics simple */
+    }
+    | '*' ID          /* allow SELECT * alias: ignore alias */
+    {
+      $$ = new StarExpr();
+    }
+    | expression
     {
       $$ = $1;
     }
