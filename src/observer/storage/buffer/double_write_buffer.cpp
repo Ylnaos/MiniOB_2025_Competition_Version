@@ -169,7 +169,12 @@ RC DiskDoubleWriteBuffer::write_page(DoubleWritePage *dblwr_page)
     return RC::SUCCESS;
   }
   RC rc = bp_manager_.get_buffer_pool(dblwr_page->key.buffer_pool_id, disk_buffer);
-  ASSERT(OB_SUCC(rc) && disk_buffer != nullptr, "failed to get disk buffer pool of %d", dblwr_page->key.buffer_pool_id);
+  if (OB_FAIL(rc) || disk_buffer == nullptr) {
+    LOG_WARN("failed to get disk buffer pool of %d", dblwr_page->key.buffer_pool_id);
+    // 目标 buffer pool 未打开或已不存在，无法应用该页。为保证进程健壮性，跳过该页。
+    // 后续 flush_page 会将其标记为 invalid 并从文件中清理。
+    return RC::SUCCESS;
+  }
 
   LOG_TRACE("double write buffer write page. buffer_pool_id:%d,page_num:%d,lsn=%d",
             dblwr_page->key.buffer_pool_id, dblwr_page->key.page_num, dblwr_page->page.lsn);
@@ -299,4 +304,3 @@ RC VacuousDoubleWriteBuffer::add_page(DiskBufferPool *bp, PageNum page_num, Page
 {
   return bp->write_page(page_num, page);
 }
-

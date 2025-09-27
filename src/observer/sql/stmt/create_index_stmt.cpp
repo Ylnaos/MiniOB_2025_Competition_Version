@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
+#include "storage/index/index.h"  // for Index and IndexMeta (avoid incomplete type)
 
 using namespace std;
 using namespace common;
@@ -52,9 +53,29 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     field_metas.push_back(field_meta);
   }
 
-  Index *index = table->find_index(create_index.index_name.c_str());
-  if (nullptr != index) {
-    LOG_WARN("index with name(%s) already exists. table name=%s", create_index.index_name.c_str(), table_name);
+  // 幂等处理：若已存在同名索引，且字段列表、唯一性与本次请求一致，则视为成功
+  // 否则保持与现有行为一致，返回索引名重复错误
+  if (Index *exist = table->find_index(create_index.index_name.c_str()); exist != nullptr) {
+    const IndexMeta            &meta          = exist->index_meta();
+    const vector<string>       &exist_fields  = meta.fields();
+    const vector<string>       &req_fields    = create_index.attribute_names;
+    const bool                  same_unique   = (meta.unique() == create_index.unique);
+    const bool                  same_field_sz = (exist_fields.size() == req_fields.size());
+    bool                        same_fields   = same_field_sz;
+    if (same_field_sz) {
+      for (size_t i = 0; i < exist_fields.size(); i++) {
+        if (0 != strcasecmp(exist_fields[i].c_str(), req_fields[i].c_str())) {
+          same_fields = false;
+          break;
+        }
+      }
+    }
+    if (same_fields && same_unique) {
+      // 已存在完全相同定义的索引：幂等返回成功，符合官方期望
+      return RC::SUCCESS;
+    }
+    LOG_WARN("index with name(%s) already exists but definition differs. table=%s",
+             create_index.index_name.c_str(), table_name);
     return RC::SCHEMA_INDEX_NAME_REPEAT;
   }
 
