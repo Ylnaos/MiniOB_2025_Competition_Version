@@ -67,6 +67,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         BY
         ORDER
         HAVING
+        OR
         CREATE
         VIEW
         DROP
@@ -195,6 +196,10 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <value_list>          row
 %type <rows>                row_list
 %type <condition_list>      where
+%type <expression>          where_bool
+%type <expression>          bool_term
+%type <expression>          bool_factor
+%type <expression>          condition_expr
 %type <condition_list>      condition_list
 %type <condition_list>      having
 %type <update_list>         update_list
@@ -715,6 +720,45 @@ select_stmt:        /*  select 语句的语法解析树*/
         delete $8;
       }
     }
+    | SELECT expression_list FROM rel_list where_bool group_by having order_by
+    {
+      $$ = new ParsedSqlNode(SCF_SELECT);
+      if ($2 != nullptr) {
+        $$->selection.expressions.swap(*$2);
+        delete $2;
+      }
+
+      if ($4 != nullptr) {
+        $$->selection.relations.swap(*$4);
+        delete $4;
+      }
+
+      // where_bool 解析到布尔表达式
+      $$->selection.where_expr.reset($5);
+
+      if ($6 != nullptr) {
+        $$->selection.group_by.swap(*$6);
+        delete $6;
+      }
+
+      if ($7 != nullptr) {
+        $$->selection.having.swap(*$7);
+        delete $7;
+      }
+
+      if ($8 != nullptr) {
+        $$->selection.order_by.swap(*$8);
+        delete $8;
+      }
+    }
+    | SELECT expression_list
+    {
+      $$ = new ParsedSqlNode(SCF_SELECT);
+      if ($2 != nullptr) {
+        $$->selection.expressions.swap(*$2);
+        delete $2;
+      }
+    }
     ;
 calc_stmt:
     CALC expression_list
@@ -1015,6 +1059,81 @@ condition:
       $$->right_expr.reset(new SubqueryExpr(vals, rt, rlen));
       $$->comp = NOT_IN_OP;
       $$->left_is_attr = -1; $$->right_is_attr = -1;
+    }
+    ;
+
+// WHERE 的布尔表达式解析（支持 AND/OR 与括号）
+where_bool:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | WHERE bool_term
+    {
+      $$ = $2;
+    }
+    ;
+
+bool_term:
+    bool_term OR bool_factor
+    {
+      vector<unique_ptr<Expression>> children;
+      children.emplace_back($1);
+      children.emplace_back($3);
+      $$ = new ConjunctionExpr(ConjunctionExpr::Type::OR, children);
+    }
+    | bool_term AND bool_factor
+    {
+      vector<unique_ptr<Expression>> children;
+      children.emplace_back($1);
+      children.emplace_back($3);
+      $$ = new ConjunctionExpr(ConjunctionExpr::Type::AND, children);
+    }
+    | bool_factor
+    {
+      $$ = $1;
+    }
+    ;
+
+bool_factor:
+    LBRACE bool_term RBRACE { $$ = $2; }
+    | condition_expr          { $$ = $1; }
+    ;
+
+condition_expr:
+    expression comp_op expression
+    {
+      $$ = new ComparisonExpr($2, std::unique_ptr<Expression>($1), std::unique_ptr<Expression>($3));
+    }
+    | expression IS NULL_T
+    {
+      Value __v; __v.set_null();
+      $$ = new ComparisonExpr(IS_NULL, std::unique_ptr<Expression>($1), std::make_unique<ValueExpr>(__v));
+    }
+    | expression IS NOT NULL_T
+    {
+      Value __v; __v.set_null();
+      $$ = new ComparisonExpr(IS_NOT_NULL, std::unique_ptr<Expression>($1), std::make_unique<ValueExpr>(__v));
+    }
+    | expression IN LBRACE select_stmt RBRACE
+    {
+      $$ = new InExpr(std::unique_ptr<Expression>($1), std::make_unique<SubqueryExpr>(std::unique_ptr<ParsedSqlNode>($4)), false);
+    }
+    | expression NOT IN LBRACE select_stmt RBRACE
+    {
+      $$ = new InExpr(std::unique_ptr<Expression>($1), std::make_unique<SubqueryExpr>(std::unique_ptr<ParsedSqlNode>($5)), true);
+    }
+    | expression IN LBRACE value_list RBRACE
+    {
+      std::vector<Value> vals; if ($4) { vals = std::move(*$4); delete $4; }
+      AttrType rt = AttrType::UNDEFINED; int rlen = -1; if (!vals.empty()) { rt = vals[0].attr_type(); rlen = vals[0].length(); }
+      $$ = new InExpr(std::unique_ptr<Expression>($1), std::make_unique<SubqueryExpr>(vals, rt, rlen), false);
+    }
+    | expression NOT IN LBRACE value_list RBRACE
+    {
+      std::vector<Value> vals; if ($5) { vals = std::move(*$5); delete $5; }
+      AttrType rt = AttrType::UNDEFINED; int rlen = -1; if (!vals.empty()) { rt = vals[0].attr_type(); rlen = vals[0].length(); }
+      $$ = new InExpr(std::unique_ptr<Expression>($1), std::make_unique<SubqueryExpr>(vals, rt, rlen), true);
     }
     ;
 

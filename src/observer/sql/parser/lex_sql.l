@@ -106,6 +106,7 @@ FROM                                    RETURN_TOKEN(FROM);
         HAVING                                  RETURN_TOKEN(HAVING);
         AND                                     RETURN_TOKEN(AND);
 ORDER                                   RETURN_TOKEN(ORDER);
+OR                                      RETURN_TOKEN(OR);
 ASC                                     RETURN_TOKEN(ASC);
 INSERT                                  RETURN_TOKEN(INSERT);
 INTO                                    RETURN_TOKEN(INTO);

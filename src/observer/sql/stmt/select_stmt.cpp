@@ -158,21 +158,37 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     order_by_items.emplace_back(std::move(bound[0]), item.asc);
   }
 
-  // WHERE 过滤
+  // WHERE 过滤：支持两种来源
+  // 1) 传统 AND 链（conditions）
+  // 2) where_expr（支持 AND/OR 的布尔表达式）
   Table *default_table = nullptr;
   if (tables.size() == 1) {
     default_table = tables[0];
   }
   FilterStmt *filter_stmt = nullptr;
-  RC rc = FilterStmt::create(db,
-      default_table,
-      &table_map,
-      select_sql.conditions.data(),
-      static_cast<int>(select_sql.conditions.size()),
-      filter_stmt);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("cannot construct filter stmt");
-    return rc;
+  RC rc = RC::SUCCESS;
+  if (select_sql.where_expr) {
+    // 使用表达式绑定
+    vector<unique_ptr<Expression>> bound;
+    RC rc2 = expression_binder.bind_expression(select_sql.where_expr, bound);
+    if (OB_FAIL(rc2) || bound.size() != 1) {
+      LOG_WARN("bind where boolean expression failed. rc=%s", strrc(rc2));
+      return rc2 == RC::SUCCESS ? RC::INVALID_ARGUMENT : rc2;
+    }
+    // 后续在逻辑阶段接成谓词算子
+    // 先占位到 select_stmt 中
+    // filter_stmt 为空，表示不使用传统过滤器
+  } else {
+    rc = FilterStmt::create(db,
+        default_table,
+        &table_map,
+        select_sql.conditions.data(),
+        static_cast<int>(select_sql.conditions.size()),
+        filter_stmt);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("cannot construct filter stmt");
+      return rc;
+    }
   }
 
   // 组装 SelectStmt
@@ -182,6 +198,15 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);
   select_stmt->order_by_.swap(order_by_items);
+  if (select_sql.where_expr) {
+    vector<unique_ptr<Expression>> bound;
+    RC rc2 = expression_binder.bind_expression(select_sql.where_expr, bound);
+    if (OB_FAIL(rc2) || bound.size() != 1) {
+      LOG_WARN("bind where boolean expression failed. rc=%s", strrc(rc2));
+      return rc2 == RC::SUCCESS ? RC::INVALID_ARGUMENT : rc2;
+    }
+    select_stmt->where_expr_.reset(bound[0].release());
+  }
   
   // 绑定 HAVING（将 AND 串联的条件转为一个布尔表达式树）
   if (!select_sql.having.empty()) {

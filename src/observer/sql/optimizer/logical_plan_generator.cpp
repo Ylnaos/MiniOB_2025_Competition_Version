@@ -110,6 +110,11 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     return rc;
   }
 
+  // 如果 WHERE 使用布尔表达式（支持 AND/OR），优先生成该谓词
+  if (!predicate_oper && select_stmt->where_expr()) {
+    predicate_oper = make_unique<PredicateLogicalOperator>(std::move(select_stmt->where_expr()));
+  }
+
   const vector<Table *> &tables = select_stmt->tables();
   for (Table *table : tables) {
 
@@ -131,6 +136,12 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     }
 
     last_oper = &predicate_oper;
+  }
+
+  // 针对 SELECT 无 FROM 且无其他算子（仅常量/表达式）的特殊优化：直接使用 CALC 输出一行结果
+  if (tables.empty() && !predicate_oper && select_stmt->group_by().empty() && select_stmt->order_by().empty()) {
+    logical_operator.reset(new CalcLogicalOperator(std::move(select_stmt->query_expressions())));
+    return RC::SUCCESS;
   }
 
   unique_ptr<LogicalOperator> group_by_oper;
