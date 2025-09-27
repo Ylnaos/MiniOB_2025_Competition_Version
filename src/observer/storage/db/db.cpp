@@ -222,6 +222,12 @@ Table *Db::find_table(const char *table_name) const
   if (iter != opened_tables_.end()) {
     return iter->second;
   }
+  // fallback: case-insensitive lookup to be compatible with SQL's case-insensitive identifiers
+  for (const auto &kv : opened_tables_) {
+    if (0 == strcasecmp(kv.first.c_str(), table_name)) {
+      return kv.second;
+    }
+  }
   return nullptr;
 }
 

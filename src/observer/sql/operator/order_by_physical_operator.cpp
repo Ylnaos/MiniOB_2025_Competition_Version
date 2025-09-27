@@ -76,6 +76,23 @@ int OrderByPhysicalOperator::compare_rows(const ValueListTuple &lhs, const Value
       return 0;
     }
 
+    // NULL 排序规则：
+    //  - 升序(ASC)：NULL 排在最后
+    //  - 降序(DESC)：NULL 排在最前
+    if (lv.is_null() || rv.is_null()) {
+      if (lv.is_null() && rv.is_null()) {
+        // 本列相等，继续比较下一个排序键
+        continue;
+      }
+      if (asc) {
+        // ASC: 非 NULL < NULL
+        return lv.is_null() ? 1 : -1;
+      } else {
+        // DESC: NULL < 非 NULL
+        return lv.is_null() ? -1 : 1;
+      }
+    }
+
     int c = 0;
     Value::compare(lv, rv, c);
     if (c == 0) {
@@ -135,4 +152,3 @@ RC OrderByPhysicalOperator::close()
   current_index_ = 0;
   return RC::SUCCESS;
 }
-
