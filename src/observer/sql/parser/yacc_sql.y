@@ -818,10 +818,24 @@ function_expression:
         $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::ROUND, $3);
         $$->set_name(token_name(sql_string, &@$));
       }
+    | ROUND_F LBRACE expression COMMA expression RBRACE
+      {
+        // 语法上支持第二个参数(保留小数位数)，语义阶段按题意忽略
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::ROUND, $3);
+        $$->set_name(token_name(sql_string, &@$));
+        delete $5;
+      }
     | DATE_FORMAT_F LBRACE expression RBRACE
       {
         $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DATE_FORMAT, $3);
         $$->set_name(token_name(sql_string, &@$));
+      }
+    | DATE_FORMAT_F LBRACE expression COMMA expression RBRACE
+      {
+        // 语法上支持格式串参数，语义阶段按题意忽略
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DATE_FORMAT, $3);
+        $$->set_name(token_name(sql_string, &@$));
+        delete $5;
       }
     ;
 

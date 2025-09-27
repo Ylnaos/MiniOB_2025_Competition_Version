@@ -280,7 +280,18 @@ string Value::to_string() const
   return res;
 }
 
-int Value::compare(const Value &other) const { return DataType::type_instance(this->attr_type_)->compare(*this, other); }
+int Value::compare(const Value &other) const
+{
+  // 统一处理 NULL 的比较，避免具体类型比较中断言或崩溃
+  const bool lhs_null = (this->attr_type_ == AttrType::NULLS);
+  const bool rhs_null = (other.attr_type() == AttrType::NULLS);
+  if (lhs_null || rhs_null) {
+    if (lhs_null && rhs_null) return 0;  // NULL == NULL
+    if (lhs_null) return -1;             // NULL < 非 NULL
+    return 1;                            // 非 NULL > NULL
+  }
+  return DataType::type_instance(this->attr_type_)->compare(*this, other);
+}
 
 int Value::get_int() const
 {

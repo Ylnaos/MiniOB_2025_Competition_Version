@@ -75,18 +75,21 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     AttrType arg_type = func->child()->value_type();
     switch (func->function_type()) {
       case ScalarFunctionExpr::FuncType::LENGTH:
-        if (arg_type != AttrType::CHARS && arg_type != AttrType::TEXTS) {
-          LOG_WARN("length expects char/text type, got %d", (int)arg_type);
+        // 题目约束：length 仅支持 CHAR 类型
+        if (arg_type != AttrType::CHARS) {
+          LOG_WARN("length expects char type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
         }
         break;
       case ScalarFunctionExpr::FuncType::ROUND:
+        // 题目约束：round 仅支持 FLOAT 类型
         if (arg_type != AttrType::FLOATS) {
           LOG_WARN("round expects float type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
         }
         break;
       case ScalarFunctionExpr::FuncType::DATE_FORMAT:
+        // 题目约束：date_format 仅支持 DATE 类型
         if (arg_type != AttrType::DATES) {
           LOG_WARN("date_format expects date type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
