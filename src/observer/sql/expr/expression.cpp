@@ -1324,12 +1324,16 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
 }
 RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
 {
-  // 鏃犱笂涓嬫枃锛氭部鐢ㄦ噿鎵ц + 缂撳瓨
+  // 无上下文：走一次执行 + 缓存
   if (outer_tuple == nullptr) {
     return execute_once();
   }
 
-  if (!subquery_node_ || subquery_node_->flag != SCF_SELECT) {
+  // 常量集合场景：使用缓存结果（如 IN (1,2,3) 被封装为缓存结果）
+  if (!subquery_node_) {
+    return execute_once();
+  }
+  if (subquery_node_->flag != SCF_SELECT) {
     LOG_WARN("subquery node invalid or not select");
     return RC::INVALID_ARGUMENT;
   }

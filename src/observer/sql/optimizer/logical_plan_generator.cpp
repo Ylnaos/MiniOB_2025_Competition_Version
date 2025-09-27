@@ -102,6 +102,7 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
   unique_ptr<LogicalOperator> table_oper(nullptr);
   last_oper = &table_oper;
   unique_ptr<LogicalOperator> predicate_oper;
+  unique_ptr<LogicalOperator> having_pred;
 
   RC rc = create_plan(select_stmt->filter_stmt(), predicate_oper);
   if (OB_FAIL(rc)) {
@@ -145,6 +146,15 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     }
 
     last_oper = &group_by_oper;
+  }
+
+  // HAVING（在 GROUP BY 之后、ORDER BY 之前）
+  if (select_stmt->having_expr()) {
+    having_pred = make_unique<PredicateLogicalOperator>(std::move(select_stmt->having_expr()));
+    if (*last_oper) {
+      having_pred->add_child(std::move(*last_oper));
+    }
+    last_oper = &having_pred;
   }
 
   // ORDER BY
@@ -387,8 +397,14 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   function<RC(unique_ptr<Expression>&)> collector = [&](unique_ptr<Expression> &expr) -> RC {
     RC rc = RC::SUCCESS;
     if (expr->type() == ExprType::AGGREGATION) {
-      expr->set_pos(aggregate_expressions.size() + group_by_expressions.size());
-      aggregate_expressions.push_back(expr.get());
+      bool exists = false;
+      for (auto *ag : aggregate_expressions) {
+        if (expr->equal(*ag)) { exists = true; break; }
+      }
+      if (!exists) {
+        expr->set_pos(aggregate_expressions.size() + group_by_expressions.size());
+        aggregate_expressions.push_back(expr.get());
+      }
     }
     rc = ExpressionIterator::iterate_child_expr(*expr, collector);
     return rc;
@@ -434,9 +450,12 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
     find_unbound_column(expression);
   }
 
-  // collect all aggregate expressions
+  // collect all aggregate expressions（来自 SELECT 列与 HAVING 表达式）
   for (unique_ptr<Expression> &expression : query_expressions) {
     collector(expression);
+  }
+  if (select_stmt->having_expr()) {
+    collector(select_stmt->having_expr());
   }
 
   if (group_by_expressions.empty() && aggregate_expressions.empty()) {

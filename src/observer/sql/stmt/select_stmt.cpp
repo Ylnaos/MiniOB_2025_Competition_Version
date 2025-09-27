@@ -182,7 +182,59 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);
   select_stmt->order_by_.swap(order_by_items);
+  
+  // 绑定 HAVING（将 AND 串联的条件转为一个布尔表达式树）
+  if (!select_sql.having.empty()) {
+    vector<unique_ptr<Expression>> cmp_exprs;
+    for (auto &cond : select_sql.having) {
+      unique_ptr<Expression> left_expr;
+      unique_ptr<Expression> right_expr;
+
+      if (cond.left_expr) {
+        vector<unique_ptr<Expression>> bound;
+        RC rc2 = expression_binder.bind_expression(cond.left_expr, bound);
+        if (OB_FAIL(rc2) || bound.size() != 1) {
+          LOG_WARN("bind having left expr failed. rc=%s", strrc(rc2));
+          return rc2 == RC::SUCCESS ? RC::INVALID_ARGUMENT : rc2;
+        }
+        left_expr.reset(bound[0].release());
+      } else if (cond.left_is_attr == 1) {
+        // 不太可能触发（语法上HAVING使用表达式路径），兜底
+        FieldExpr *f = new FieldExpr(Field());
+        left_expr.reset(f);
+      } else {
+        left_expr.reset(new ValueExpr(cond.left_value));
+      }
+
+      if (cond.right_expr) {
+        vector<unique_ptr<Expression>> bound;
+        RC rc2 = expression_binder.bind_expression(cond.right_expr, bound);
+        if (OB_FAIL(rc2) || bound.size() != 1) {
+          LOG_WARN("bind having right expr failed. rc=%s", strrc(rc2));
+          return rc2 == RC::SUCCESS ? RC::INVALID_ARGUMENT : rc2;
+        }
+        right_expr.reset(bound[0].release());
+      } else if (cond.right_is_attr == 1) {
+        FieldExpr *f = new FieldExpr(Field());
+        right_expr.reset(f);
+      } else {
+        right_expr.reset(new ValueExpr(cond.right_value));
+      }
+
+      if (cond.comp == IN_OP || cond.comp == NOT_IN_OP) {
+        bool not_in = (cond.comp == NOT_IN_OP);
+        cmp_exprs.emplace_back(new InExpr(std::move(left_expr), std::move(right_expr), not_in));
+      } else {
+        cmp_exprs.emplace_back(new ComparisonExpr(cond.comp, std::move(left_expr), std::move(right_expr)));
+      }
+    }
+
+    if (!cmp_exprs.empty()) {
+      unique_ptr<Expression> having_expr(new ConjunctionExpr(ConjunctionExpr::Type::AND, cmp_exprs));
+      select_stmt->having_expr_.swap(having_expr);
+    }
+  }
+
   stmt = select_stmt;
   return RC::SUCCESS;
 }
-

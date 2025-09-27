@@ -41,6 +41,8 @@ public:
 public:
   const vector<Table *> &tables() const { return tables_; }
   FilterStmt            *filter_stmt() const { return filter_stmt_; }
+  // HAVING 表达式（AND 链接后的整体表达式）；为空表示无 HAVING
+  unique_ptr<Expression> &having_expr() { return having_expr_; }
 
   vector<unique_ptr<Expression>> &query_expressions() { return query_expressions_; }
   vector<unique_ptr<Expression>> &group_by() { return group_by_; }
@@ -52,4 +54,5 @@ private:
   FilterStmt                    *filter_stmt_ = nullptr;
   vector<unique_ptr<Expression>> group_by_;
   vector<pair<unique_ptr<Expression>, bool>> order_by_;
+  unique_ptr<Expression>         having_expr_;
 };

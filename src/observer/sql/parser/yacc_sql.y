@@ -66,6 +66,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %token  SEMICOLON
         BY
         ORDER
+        HAVING
         CREATE
         VIEW
         DROP
@@ -195,6 +196,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <rows>                row_list
 %type <condition_list>      where
 %type <condition_list>      condition_list
+%type <condition_list>      having
 %type <update_list>         update_list
 %type <cstring>             storage_format
 %type <key_list>            primary_key
@@ -680,7 +682,7 @@ update_list:
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by order_by
+    SELECT expression_list FROM rel_list where group_by having order_by
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -704,8 +706,13 @@ select_stmt:        /*  select 语句的语法解析树*/
       }
 
       if ($7 != nullptr) {
-        $$->selection.order_by.swap(*$7);
+        $$->selection.having.swap(*$7);
         delete $7;
+      }
+
+      if ($8 != nullptr) {
+        $$->selection.order_by.swap(*$8);
+        delete $8;
       }
     }
     ;
@@ -985,6 +992,30 @@ condition:
       $$->left_is_attr = -1;
       $$->right_is_attr = -1;
     }
+    | expression IN LBRACE value_list RBRACE
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_expr.reset($1);
+      std::vector<Value> vals;
+      if ($4 != nullptr) { vals = std::move(*$4); delete $4; }
+      AttrType rt = AttrType::UNDEFINED; int rlen = -1;
+      if (!vals.empty()) { rt = vals[0].attr_type(); rlen = vals[0].length(); }
+      $$->right_expr.reset(new SubqueryExpr(vals, rt, rlen));
+      $$->comp = IN_OP;
+      $$->left_is_attr = -1; $$->right_is_attr = -1;
+    }
+    | expression NOT IN LBRACE value_list RBRACE
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_expr.reset($1);
+      std::vector<Value> vals;
+      if ($5 != nullptr) { vals = std::move(*$5); delete $5; }
+      AttrType rt = AttrType::UNDEFINED; int rlen = -1;
+      if (!vals.empty()) { rt = vals[0].attr_type(); rlen = vals[0].length(); }
+      $$->right_expr.reset(new SubqueryExpr(vals, rt, rlen));
+      $$->comp = NOT_IN_OP;
+      $$->left_is_attr = -1; $$->right_is_attr = -1;
+    }
     ;
 
 comp_op:
@@ -1009,6 +1040,17 @@ group_by:
       // group by 的表达式范围与select查询值的表达式范围是不同的，比如group by不支持 *
       // 但是这里没有处理。
       $$ = $3;
+    }
+    ;
+
+having:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | HAVING condition_list
+    {
+      $$ = $2;
     }
     ;
 
