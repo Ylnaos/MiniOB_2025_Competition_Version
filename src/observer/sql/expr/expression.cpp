@@ -1583,14 +1583,16 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     const char *f = u.field_name();
     if (t != nullptr && *t != '\0' && !is_inner_table(t)) {
       // 澶栧眰琛ㄥ瓧娈碉細浠?outer_tuple 鎶藉彇鎴愬父閲?
-Value v;
+      Value v;
       RC rc2 = outer_tuple.find_cell(TupleCellSpec(t, f), v);
       if (rc2 != RC::SUCCESS) {
+        // 尝试以输出别名形式匹配（如 T1.COL1）
         string tf = string(t) + "." + string(f);
         rc2       = outer_tuple.find_cell(TupleCellSpec(tf), v);
       }
       if (rc2 != RC::SUCCESS) {
-        rc2 = outer_tuple.find_cell(TupleCellSpec(f), v);
+        // 退化为“仅按列名匹配”，忽略表名/别名，要求该列在当前行中唯一
+        rc2 = outer_tuple.find_cell(TupleCellSpec("", f), v);
       }
       if (rc2 != RC::SUCCESS) {
         LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", t, f);
