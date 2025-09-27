@@ -1393,6 +1393,12 @@ int sql_parse(const char *s, ParsedSqlResult *sql_result) {
         if (group_pos != std::string::npos) where_end = std::min(where_end, group_pos);
         if (order_pos != std::string::npos) where_end = std::min(where_end, order_pos);
         orig_where = trim(orig_sql.substr(where_pos + 7, where_end - (where_pos + 7)));
+        // 去掉末尾分号，避免拼接到 WHERE 内部
+        if (!orig_where.empty() && orig_where.back() == ';') {
+          orig_where.pop_back();
+          // 可能去除分号后留有末尾空白，再做一次 trim
+          orig_where = trim(orig_where);
+        }
         tail       = orig_sql.substr(where_end);
       } else {
         tail = orig_sql.substr(after_from_end);

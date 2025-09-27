@@ -150,30 +150,47 @@ void BplusTreeIndex::build_composite_key(const char *record, char *buf) const
 
 RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 {
-  // Enforce UNIQUE constraint if needed
+  // Enforce UNIQUE constraint if needed (NULL 值不参与唯一约束)
   if (index_meta_.unique()) {
-    const int key_len = key_attr_length_sum();
-    std::unique_ptr<char[]> key(new char[key_len]);
-    build_composite_key(record, key.get());
-    std::list<RID> rids;
-    RC rc = index_handler_.get_entry(key.get(), key_len, rids);
-    if (rc != RC::SUCCESS && rc != RC::EMPTY) {
-      // 扫描器打开失败(非空树)等异常，保守放行，由真正插入路径再兜底
-      // 这里不直接返回错误，避免将偶发扫描失败当作唯一键冲突
-    }
-    if (!rids.empty()) {
-      // 为防止边界修正等误差带来的“伪冲突”，对命中的 RID 做二次精准校验：
-      // 逐条取出对应记录，重新编码索引键，与当前待插入键逐字节比较。
-      for (const RID &exist_rid : rids) {
-        Record exist_rec;
-        RC     grc = table_->get_record(exist_rid, exist_rec);
-        if (OB_FAIL(grc)) {
-          continue; // 读取失败则忽略该条，交由后续真正插入时再做一致性校验
+    // 若任一参与索引的列为 NULL，则跳过唯一性检查（允许多个 NULL）
+    bool has_null = false;
+    const TableMeta &tm = table_->table_meta();
+    const int nb_off = tm.null_bitmap_offset();
+    if (nb_off >= 0) {
+      const unsigned char *nb = reinterpret_cast<const unsigned char *>(record + nb_off);
+      for (const FieldMeta &fm : field_metas_) {
+        int fid = fm.field_id();
+        if (fid >= 0) {
+          if (nb[fid / 8] & (1U << (fid % 8))) {
+            has_null = true;
+            break;
+          }
         }
-        std::unique_ptr<char[]> exist_key(new char[key_len]);
-        build_composite_key(exist_rec.data(), exist_key.get());
-        if (memcmp(exist_key.get(), key.get(), key_len) == 0) {
-          return RC::RECORD_DUPLICATE_KEY;
+      }
+    }
+
+    if (!has_null) {
+      const int key_len = key_attr_length_sum();
+      std::unique_ptr<char[]> key(new char[key_len]);
+      build_composite_key(record, key.get());
+      std::list<RID> rids;
+      RC rc = index_handler_.get_entry(key.get(), key_len, rids);
+      if (rc != RC::SUCCESS && rc != RC::EMPTY) {
+        // 扫描失败不直接判冲突，由真正插入路径兜底
+      }
+      if (!rids.empty()) {
+        // 精准重算键逐字节比对，确认冲突
+        for (const RID &exist_rid : rids) {
+          Record exist_rec;
+          RC     grc = table_->get_record(exist_rid, exist_rec);
+          if (OB_FAIL(grc)) {
+            continue;
+          }
+          std::unique_ptr<char[]> exist_key(new char[key_len]);
+          build_composite_key(exist_rec.data(), exist_key.get());
+          if (memcmp(exist_key.get(), key.get(), key_len) == 0) {
+            return RC::RECORD_DUPLICATE_KEY;
+          }
         }
       }
     }
