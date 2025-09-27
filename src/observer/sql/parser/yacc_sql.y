@@ -399,6 +399,45 @@ create_table_stmt:    /*create table 语句的语法解析树*/
         create_table.storage_format = $8;
       }
     }
+    | CREATE TABLE ID LBRACE attr_def_list primary_key RBRACE AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
+      CreateTableSqlNode &create_table = $$->create_table;
+      create_table.relation_name = $3;
+      // keep user-specified columns
+      create_table.attr_infos.swap(*$5);
+      delete $5;
+      if ($6 != nullptr) {
+        create_table.primary_keys.swap(*$6);
+        delete $6;
+      }
+      if ($9 == nullptr || $9->flag != SCF_SELECT) {
+        delete $$;
+        $$ = nullptr;
+      } else {
+        create_table.as_select.reset($9);
+      }
+    }
+    | CREATE TABLE ID LBRACE attr_def_list primary_key RBRACE select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
+      CreateTableSqlNode &create_table = $$->create_table;
+      create_table.relation_name = $3;
+      // keep user-specified columns
+      create_table.attr_infos.swap(*$5);
+      delete $5;
+      if ($6 != nullptr) {
+        create_table.primary_keys.swap(*$6);
+        delete $6;
+      }
+      // fix: the select_stmt is at position 8 in this rule
+      if ($8 == nullptr || $8->flag != SCF_SELECT) {
+        delete $$;
+        $$ = nullptr;
+      } else {
+        create_table.as_select.reset($8);
+      }
+    }
     | CREATE TABLE ID AS select_stmt
     {
       $$ = new ParsedSqlNode(SCF_CREATE_TABLE);

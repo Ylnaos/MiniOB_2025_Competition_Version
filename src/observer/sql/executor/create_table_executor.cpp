@@ -73,7 +73,10 @@ RC CreateTableExecutor::execute(SQLStageEvent *sql_event)
       return rc;
     }
 
-    rc = physical_oper->open(session->current_trx());
+    Trx *trx = session->current_trx();
+    // Ensure DML inside CTAS runs in a proper transaction
+    trx->start_if_need();
+    rc = physical_oper->open(trx);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to open CTAS physical operator. rc=%s", strrc(rc));
       return rc;
@@ -134,6 +137,15 @@ RC CreateTableExecutor::execute(SQLStageEvent *sql_event)
         if (rc_del != RC::SUCCESS) {
           LOG_WARN("failed to delete record for CTAS rollback. rid=%s rc=%s", rid.to_string().c_str(), strrc(rc_del));
         }
+      }
+      // rollback transaction
+      trx->rollback();
+    } else {
+      // commit the inserts for CTAS immediately (DDL auto-commit semantics)
+      RC rc_commit = trx->commit();
+      if (rc_commit != RC::SUCCESS) {
+        LOG_WARN("failed to commit CTAS inserts. rc=%s", strrc(rc_commit));
+        return rc_commit;
       }
     }
 

@@ -28,7 +28,10 @@ RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt 
     return RC::INVALID_ARGUMENT;
   }
 
-  // CTAS path: derive schema from select and keep select stmt for executor
+  // CTAS path: when a SELECT subquery is present after CREATE TABLE.
+  // Behavior:
+  // - If user provided column definitions (attr_infos not empty), keep them.
+  // - Else, derive schema from SELECT expressions.
   if (create_table.as_select) {
     Stmt *child = nullptr;
     RC rc       = Stmt::create_stmt(db, *create_table.as_select, child);
@@ -42,73 +45,77 @@ RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt 
       delete child;
       return RC::INVALID_ARGUMENT;
     }
-
-    // Derive attributes from select expressions
     vector<AttrInfoSqlNode> attrs;
-    attrs.reserve(select_stmt->query_expressions().size());
+    if (!create_table.attr_infos.empty()) {
+      // Use user-specified columns in CREATE TABLE (col defs) SELECT ...
+      attrs = create_table.attr_infos;
+    } else {
+      // Derive attributes from select expressions for CREATE TABLE AS SELECT ...
+      attrs.reserve(select_stmt->query_expressions().size());
 
-    // Track used names for deduplication
-    unordered_set<string> used;
+      // Track used names for deduplication
+      unordered_set<string> used;
 
-    auto make_unique_name = [&](const string &base) -> string {
-      string name = base;
-      if (name.empty()) name = "COL";
-      // sanitize: strip table prefix t.col -> col
-      size_t pos = name.rfind('.');
-      if (pos != string::npos && pos + 1 < name.size()) {
-        name = name.substr(pos + 1);
+      auto make_unique_name = [&](const string &base) -> string {
+        string name = base;
+        if (name.empty()) name = "COL";
+        // sanitize: strip table prefix t.col -> col
+        size_t pos = name.rfind('.');
+        if (pos != string::npos && pos + 1 < name.size()) {
+          name = name.substr(pos + 1);
+        }
+        // ensure uniqueness
+        if (!used.count(name)) {
+          used.insert(name);
+          return name;
+        }
+        int suffix = 1;
+        string cand;
+        do {
+          cand = name + "_" + to_string(suffix++);
+        } while (used.count(cand));
+        used.insert(cand);
+        return cand;
+      };
+
+      for (const auto &uptr : select_stmt->query_expressions()) {
+        const Expression *expr = uptr.get();
+        AttrInfoSqlNode   info;
+
+        const char *alias = expr->alias();
+        string      base  = alias ? string(alias) : string(expr->name());
+        info.name         = make_unique_name(base);
+
+        AttrType type = expr->value_type();
+        info.type      = type;
+        int vlen       = expr->value_length();
+
+        // choose sensible defaults when unknown
+        size_t len = 4;
+        switch (type) {
+          case AttrType::INTS:
+          case AttrType::FLOATS:
+          case AttrType::DATES: {
+            len = 4;
+          } break;
+          case AttrType::CHARS: {
+            len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(128);
+          } break;
+          case AttrType::TEXTS: {
+            // TableMeta will set to TEXT_MAX_LENGTH
+            len = 0;
+          } break;
+          case AttrType::VECTORS: {
+            len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(16);
+          } break;
+          default: {
+            len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(4);
+          } break;
+        }
+        info.length   = len;
+        info.nullable = true; // CTAS columns default nullable
+        attrs.emplace_back(std::move(info));
       }
-      // ensure uniqueness
-      if (!used.count(name)) {
-        used.insert(name);
-        return name;
-      }
-      int suffix = 1;
-      string cand;
-      do {
-        cand = name + "_" + to_string(suffix++);
-      } while (used.count(cand));
-      used.insert(cand);
-      return cand;
-    };
-
-    for (const auto &uptr : select_stmt->query_expressions()) {
-      const Expression *expr = uptr.get();
-      AttrInfoSqlNode   info;
-
-      const char *alias = expr->alias();
-      string      base  = alias ? string(alias) : string(expr->name());
-      info.name         = make_unique_name(base);
-
-      AttrType type = expr->value_type();
-      info.type      = type;
-      int vlen       = expr->value_length();
-
-      // choose sensible defaults when unknown
-      size_t len = 4;
-      switch (type) {
-        case AttrType::INTS:
-        case AttrType::FLOATS:
-        case AttrType::DATES: {
-          len = 4;
-        } break;
-        case AttrType::CHARS: {
-          len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(128);
-        } break;
-        case AttrType::TEXTS: {
-          // TableMeta will set to TEXT_MAX_LENGTH
-          len = 0;
-        } break;
-        case AttrType::VECTORS: {
-          len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(16);
-        } break;
-        default: {
-          len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(4);
-        } break;
-      }
-      info.length   = len;
-      info.nullable = true; // CTAS columns default nullable
-      attrs.emplace_back(std::move(info));
     }
 
     auto *create_stmt = new CreateTableStmt(create_table.relation_name, attrs, {} /*pks*/, storage_format);
