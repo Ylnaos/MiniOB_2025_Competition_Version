@@ -19,6 +19,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple_cell.h"
 #include "sql/parser/parse.h"
 #include "common/value.h"
+#include <cstring>
 #include "storage/record/record.h"
 #include "storage/table/table.h"
 
@@ -238,25 +239,43 @@ public:
       return RC::NOTFOUND;
     }
 
-    // 表名不匹配（可能为别名）。做一次“仅按列名”的兜底查找：
-    // 若在当前行中仅有一个同名列，则返回该列；若不存在或不唯一，则认为未找到。
+    // 表名不匹配（可能为别名），或表名为空：
+    // 做一次“仅按列名”的兜底查找，并兼容通过 alias 传入的“t.f”或“f”形式。
     if (table_name == nullptr || table_name[0] == '\0') {
-    int match_index = -1;
-    for (size_t i = 0; i < speces_.size(); ++i) {
-      const FieldExpr *field_expr = speces_[i];
-      const Field     &field      = field_expr->field();
-      if (0 == strcmp(field_name, field.field_name())) {
-        if (match_index == -1) {
-          match_index = static_cast<int>(i);
-        } else {
-          // 多个同名列，无法唯一定位
-          return RC::NOTFOUND;
+      // 优先使用 spec.field_name()；若为空，则尝试从 alias 解析
+      std::string fld;
+      if (field_name != nullptr && field_name[0] != '\0') {
+        fld = field_name;
+      } else {
+        const char *alias = spec.alias();
+        if (alias != nullptr && alias[0] != '\0') {
+          const char *dot = strrchr(alias, '.');
+          if (dot != nullptr && *(dot + 1) != '\0') {
+            fld.assign(dot + 1);
+          } else {
+            fld.assign(alias);
+          }
         }
       }
-    }
-    if (match_index != -1) {
-      return cell_at(match_index, cell);
-    }
+
+      if (!fld.empty()) {
+        int match_index = -1;
+        for (size_t i = 0; i < speces_.size(); ++i) {
+          const FieldExpr *field_expr = speces_[i];
+          const Field     &field      = field_expr->field();
+          if (0 == strcasecmp(fld.c_str(), field.field_name())) {
+            if (match_index == -1) {
+              match_index = static_cast<int>(i);
+            } else {
+              // 多个同名列，无法唯一定位
+              return RC::NOTFOUND;
+            }
+          }
+        }
+        if (match_index != -1) {
+          return cell_at(match_index, cell);
+        }
+      }
     }
     return RC::NOTFOUND;
   }
