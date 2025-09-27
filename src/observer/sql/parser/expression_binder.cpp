@@ -178,6 +178,12 @@ RC ExpressionBinder::bind_star_expression(
 
   auto star_expr = static_cast<StarExpr *>(expr.get());
 
+  // 禁止对通配符 * 起别名：例如 SELECT * AS alias / SELECT * alias
+  if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+    LOG_WARN("wildcard '*' cannot have alias");
+    return RC::INVALID_ARGUMENT;
+  }
+
   vector<Table *> tables_to_wildcard;
 
   const char *table_name = star_expr->table_name();
@@ -230,6 +236,11 @@ RC ExpressionBinder::bind_unbound_field_expression(
   }
 
   if (0 == strcmp(field_name, "*")) {
+    // 禁止对 t.* 起别名
+    if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+      LOG_WARN("wildcard 't.*' cannot have alias");
+      return RC::INVALID_ARGUMENT;
+    }
     wildcard_fields(table, bound_expressions);
   } else {
     const FieldMeta *field_meta = table->table_meta().field(field_name);
