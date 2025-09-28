@@ -144,6 +144,14 @@ static RC bind_expression_fields(unique_ptr<Expression> &expr, Db *db, Table *de
     field_expr->set_name(expr->name());
     expr = std::move(field_expr);
   }
+  // 如果是标量函数表达式，递归绑定其子表达式
+  else if (expr->type() == ExprType::FUNCTION) {
+    auto *fn_expr = static_cast<ScalarFunctionExpr *>(expr.get());
+    rc = bind_expression_fields(fn_expr->child(), db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+  }
   // 如果是算术表达式，递归处理子表达式
   else if (expr->type() == ExprType::ARITHMETIC) {
     auto* arith_expr = static_cast<ArithmeticExpr*>(expr.get());
