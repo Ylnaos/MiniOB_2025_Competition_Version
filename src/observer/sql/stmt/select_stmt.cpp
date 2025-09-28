@@ -56,11 +56,11 @@ static void build_view_output_mapping(
 
 // 在绑定前重写外层表达式树中未限定的字段引用：
 //   name -> real_table.real_field (依据视图输出列名映射)
-static void rewrite_unqualified_fields(
+static RC rewrite_unqualified_fields(
     unique_ptr<Expression> &expr,
     const unordered_map<string, pair<string, string>> &name_to_relattr)
 {
-  if (!expr) return;
+  if (!expr) return RC::SUCCESS;
 
   switch (expr->type()) {
     case ExprType::UNBOUND_FIELD: {
@@ -83,53 +83,69 @@ static void rewrite_unqualified_fields(
             replaced->set_alias(expr->alias());
           }
           expr.swap(replaced);
+          return RC::SUCCESS;
+        } else {
+          // 外层引用了视图未输出的列，应报错
+          return RC::SCHEMA_FIELD_MISSING;
         }
       }
+      return RC::SUCCESS;
     } break;
 
     case ExprType::UNBOUND_AGGREGATION: {
       auto *agg = static_cast<UnboundAggregateExpr *>(expr.get());
-      rewrite_unqualified_fields(agg->child(), name_to_relattr);
+      return rewrite_unqualified_fields(agg->child(), name_to_relattr);
     } break;
 
     case ExprType::ARITHMETIC: {
       auto *arith = static_cast<ArithmeticExpr *>(expr.get());
-      rewrite_unqualified_fields(arith->left(), name_to_relattr);
-      if (arith->right()) rewrite_unqualified_fields(arith->right(), name_to_relattr);
+      RC rc = rewrite_unqualified_fields(arith->left(), name_to_relattr);
+      if (OB_FAIL(rc)) return rc;
+      if (arith->right()) {
+        rc = rewrite_unqualified_fields(arith->right(), name_to_relattr);
+        if (OB_FAIL(rc)) return rc;
+      }
+      return RC::SUCCESS;
     } break;
 
     case ExprType::COMPARISON: {
       auto *cmp = static_cast<ComparisonExpr *>(expr.get());
-      rewrite_unqualified_fields(cmp->left(), name_to_relattr);
-      rewrite_unqualified_fields(cmp->right(), name_to_relattr);
+      RC rc = rewrite_unqualified_fields(cmp->left(), name_to_relattr);
+      if (OB_FAIL(rc)) return rc;
+      rc = rewrite_unqualified_fields(cmp->right(), name_to_relattr);
+      return rc;
     } break;
 
     case ExprType::CONJUNCTION: {
       auto *conj = static_cast<ConjunctionExpr *>(expr.get());
       for (auto &child : conj->children()) {
-        rewrite_unqualified_fields(child, name_to_relattr);
+        RC rc = rewrite_unqualified_fields(child, name_to_relattr);
+        if (OB_FAIL(rc)) return rc;
       }
+      return RC::SUCCESS;
     } break;
 
     case ExprType::CAST: {
       auto *c = static_cast<CastExpr *>(expr.get());
-      rewrite_unqualified_fields(c->child(), name_to_relattr);
+      return rewrite_unqualified_fields(c->child(), name_to_relattr);
     } break;
 
     case ExprType::FUNCTION: {
       auto *fn = static_cast<ScalarFunctionExpr *>(expr.get());
-      rewrite_unqualified_fields(fn->child(), name_to_relattr);
+      return rewrite_unqualified_fields(fn->child(), name_to_relattr);
     } break;
 
     case ExprType::IN_LIST: {
       auto *in = static_cast<InExpr *>(expr.get());
-      rewrite_unqualified_fields(in->test_expr(), name_to_relattr);
-      rewrite_unqualified_fields(in->set_expr(), name_to_relattr);
+      RC rc = rewrite_unqualified_fields(in->test_expr(), name_to_relattr);
+      if (OB_FAIL(rc)) return rc;
+      rc = rewrite_unqualified_fields(in->set_expr(), name_to_relattr);
+      return rc;
     } break;
 
     default:
       // 其它类型无需处理或在binder中处理
-      break;
+      return RC::SUCCESS;
   }
 }
 
@@ -148,54 +164,62 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     return RC::INVALID_ARGUMENT;
   }
 
-  // 视图展开（仅支持单视图）：允许 SELECT * 或 简单聚合（如 COUNT(col)、COUNT(*)）
+  // 视图展开（单表 FROM 视图）：统一展开 FROM/WHERE；
+  // - SELECT * 用视图 SELECT 列替换
+  // - 其余场景根据视图输出列名映射重写未限定字段：若外层引用视图未输出的列，报错
   if (select_sql.relations.size() == 1) {
     const RelationSqlNode &rel = select_sql.relations[0];
     const char *rel_name = rel.relation_name.c_str();
     if (db->find_table(rel_name) == nullptr) {
       View *view = db->find_view(rel_name);
-      if (view != nullptr) {
+      if (view != nullptr && rel.alias.empty()) {
+        ParsedSqlResult parsed;
+        RC parse_rc = parse(view->select_sql(), &parsed);
+        if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+          LOG_WARN("parse view select failed. view=%s", view->name());
+          return RC::SQL_SYNTAX;
+        }
+        ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+        if (node->flag != SCF_SELECT) {
+          LOG_WARN("view definition is not a SELECT. view=%s", view->name());
+          return RC::SQL_SYNTAX;
+        }
+
+        // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
+        select_sql.relations.swap(node->selection.relations);
+        for (auto &cond : node->selection.conditions) {
+          select_sql.conditions.emplace_back(std::move(cond));
+        }
+
+        // 2) 如果是 SELECT *，用视图 SELECT 列替换
         bool only_star = (select_sql.expressions.size() == 1) &&
                          (select_sql.expressions[0] != nullptr) &&
                          (select_sql.expressions[0]->type() == ExprType::STAR);
-        bool no_outer_filters = select_sql.conditions.empty() &&
-                                select_sql.group_by.empty() &&
-                                select_sql.order_by.empty() &&
-                                rel.alias.empty();
-        bool simple_aggregate = false;
-        if (select_sql.expressions.size() == 1 && select_sql.expressions[0] != nullptr && no_outer_filters) {
-          ExprType et = select_sql.expressions[0]->type();
-          simple_aggregate = (et == ExprType::AGGREGATION || et == ExprType::UNBOUND_AGGREGATION);
-        }
-        if (only_star || simple_aggregate) {
-          ParsedSqlResult parsed;
-          RC parse_rc = parse(view->select_sql(), &parsed);
-          if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
-            LOG_WARN("parse view select failed. view=%s", view->name());
-            return RC::SQL_SYNTAX;
-          }
-          ParsedSqlNode *node = parsed.sql_nodes()[0].get();
-          if (node->flag != SCF_SELECT) {
-            LOG_WARN("view definition is not a SELECT. view=%s", view->name());
-            return RC::SQL_SYNTAX;
-          }
-          if (only_star) {
-            select_sql.expressions.swap(node->selection.expressions);
-            select_sql.relations.swap(node->selection.relations);
-            select_sql.conditions.swap(node->selection.conditions);
+        if (only_star) {
+          select_sql.expressions.swap(node->selection.expressions);
+          // 同步 group/order（如果视图中带有）
+          if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
             select_sql.group_by.swap(node->selection.group_by);
+          }
+          if (!node->selection.order_by.empty() && select_sql.order_by.empty()) {
             select_sql.order_by.swap(node->selection.order_by);
-          } else {
-            select_sql.relations.swap(node->selection.relations);
-            for (auto &cond : node->selection.conditions) {
-              select_sql.conditions.emplace_back(std::move(cond));
-            }
-            // simple_aggregate 情况下：根据视图输出列名映射，重写外层未限定字段
-            unordered_map<string, pair<string, string>> name_to_relattr;
-            build_view_output_mapping(node->selection.expressions, name_to_relattr);
-            for (auto &outer_expr : select_sql.expressions) {
-              rewrite_unqualified_fields(outer_expr, name_to_relattr);
-            }
+          }
+        } else {
+          // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
+          unordered_map<string, pair<string, string>> name_to_relattr;
+          build_view_output_mapping(node->selection.expressions, name_to_relattr);
+          for (auto &outer_expr : select_sql.expressions) {
+            RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr);
+            if (OB_FAIL(rc)) return rc;
+          }
+          // group by / order by 同样做一次字段重写，出现未输出列一律报错
+          for (auto &gexpr : select_sql.group_by) {
+            RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr);
+            if (OB_FAIL(rc)) return rc;
+          }
+          for (auto &item : select_sql.order_by) {
+            RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr);
+            if (OB_FAIL(rc)) return rc;
           }
         }
       }
