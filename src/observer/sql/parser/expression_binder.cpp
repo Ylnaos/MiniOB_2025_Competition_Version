@@ -75,9 +75,9 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     AttrType arg_type = func->child()->value_type();
     switch (func->function_type()) {
       case ScalarFunctionExpr::FuncType::LENGTH:
-        // 题目约束：length 仅支持 CHAR 类型
-        if (arg_type != AttrType::CHARS) {
-          LOG_WARN("length expects char type, got %d", (int)arg_type);
+        // 支持 CHAR 与 TEXT 两种字符串类型
+        if (!(arg_type == AttrType::CHARS || arg_type == AttrType::TEXTS)) {
+          LOG_WARN("length expects char/text type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
         }
         break;

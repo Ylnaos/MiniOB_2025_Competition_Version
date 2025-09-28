@@ -14,6 +14,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
+#include "storage/view/view.h"
+#include "sql/parser/parse.h"
 #include "sql/stmt/filter_stmt.h"
 #include "sql/expr/expression.h"
 #include "sql/parser/expression_binder.h"
@@ -45,11 +47,31 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
     return RC::INVALID_ARGUMENT;
   }
 
-  // find table
+  // find table; 若不存在则尝试将视图改写为底层单表
   Table *table = db->find_table(table_name);
   if (table == nullptr) {
-    LOG_WARN("no such table. db=%s, table_name=%s", db->name(), table_name);
-    return RC::SCHEMA_TABLE_NOT_EXIST;
+    View *view = db->find_view(table_name);
+    if (view != nullptr) {
+      // 解析视图定义，提取第一个关系名
+      ParsedSqlResult parsed;
+      RC prc = parse(view->select_sql(), &parsed);
+      if (prc == RC::SUCCESS && !parsed.sql_nodes().empty()) {
+        ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+        if (node->flag == SCF_SELECT && !node->selection.relations.empty()) {
+          const auto &rel = node->selection.relations[0];
+          if (!rel.relation_name.empty()) {
+            table = db->find_table(rel.relation_name.c_str());
+            if (table != nullptr) {
+              LOG_INFO("rewrite update on view(%s) to base table(%s)", table_name, rel.relation_name.c_str());
+            }
+          }
+        }
+      }
+    }
+    if (table == nullptr) {
+      LOG_WARN("no such table or unsupported view update. db=%s, target=%s", db->name(), table_name);
+      return RC::SCHEMA_TABLE_NOT_EXIST;
+    }
   }
 
   // empty update is invalid (for compatibility)
@@ -159,4 +181,3 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
   stmt = new UpdateStmt(table, field_metas, values, value_expressions, filter_stmt);
   return RC::SUCCESS;
 }
-

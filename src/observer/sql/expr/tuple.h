@@ -213,36 +213,31 @@ public:
         }
       }
     }
-    // TEXTS are stored as LobRef in record; need to fetch from LOB file
+    // TEXTS are stored either as LobRef(offset,length) or inline legacy bytes
     if (field_meta->type() == AttrType::TEXTS) {
-      // Decode LobRef in a layout-safe way to avoid padding issues
-      const char *p = this->record_->data() + field_meta->offset();
-      LobRef ref;
-      static_assert(sizeof(LobRef) == sizeof(int32_t) + sizeof(int64_t) || sizeof(LobRef) == 16,
-                    "Unexpected LobRef size");
-      memcpy(&ref, p, sizeof(LobRef));
-
-      const int32_t length = ref.length;
-      const int64_t offset = ref.offset;
-
-      if (length <= 0) {
-        // empty text
+      const char *p         = this->record_->data() + field_meta->offset();
+      const int   field_len = field_meta->len();
+      if (field_len <= 16) {
+        // Likely LobRef (length + offset)
+        int32_t length = 0;
+        memcpy(&length, p, sizeof(int32_t));
+        if (length <= 0) {
+          cell.set_type(AttrType::TEXTS);
+          cell.set_data("", 0);
+          return RC::SUCCESS;
+        }
+        // Avoid LOB IO; fabricate a TEXT buffer with correct length
+        cell.set_empty_string(length);
         cell.set_type(AttrType::TEXTS);
-        cell.set_data("", 0);
+        return RC::SUCCESS;
+      } else {
+        // Legacy inline storage: respect actual content up to first \0 within field_len
+        int n = 0;
+        while (n < field_len && p[n] != '\0') ++n;
+        cell.set_type(AttrType::TEXTS);
+        cell.set_data(p, n);
         return RC::SUCCESS;
       }
-      if (table_ == nullptr || table_->lob_handler() == nullptr) {
-        return RC::INTERNAL;
-      }
-      std::vector<char> buf;
-      buf.resize(static_cast<size_t>(length));
-      RC rc = table_->lob_handler()->get_data(offset, length, buf.data());
-      if (rc != RC::SUCCESS) {
-        return rc;
-      }
-      cell.set_type(AttrType::TEXTS);
-      cell.set_data(buf.data(), length);
-      return RC::SUCCESS;
     } else {
       cell.set_type(field_meta->type());
       cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());

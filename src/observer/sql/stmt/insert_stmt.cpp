@@ -17,47 +17,56 @@ See the Mulan PSL v2 for more details. */
 #include "storage/db/db.h"
 #include "storage/table/table.h"
 #include "storage/view/view.h"
+#include "sql/parser/parse.h"
 
 namespace {
-// 从简单的 SELECT 语句中提取 FROM 后的第一个表名。
-// 仅用于将 "INSERT INTO <view> ..." 简单重写为向底层单表插入的场景：
-//   CREATE VIEW v AS SELECT * FROM base;
-// 若无法可靠提取，则返回空串。
+// 提取视图定义中的第一个底表名：优先解析 AST，失败时回退到简单字符串扫描。
 static std::string extract_first_table_name(const std::string &sql)
 {
   if (sql.empty()) return {};
-  std::string lower = sql;
-  for (auto &ch : lower) ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
 
-  auto find_ci = [&](const std::string &pat, size_t pos) -> size_t {
-    std::string p = pat;
-    for (auto &c : p) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
-    return lower.find(p, pos);
-  };
-
-  size_t from_pos = find_ci(" from ", 0);
-  if (from_pos == std::string::npos) return {};
-  size_t i = from_pos + 6; // skip " from "
-  // skip spaces
-  while (i < lower.size() && isspace(static_cast<unsigned char>(lower[i]))) i++;
-  size_t start = i;
-  // accept identifier characters: letters, digits, underscore and dot
-  while (i < lower.size()) {
-    char c = lower[i];
-    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.') {
-      ++i;
-    } else {
-      break;
+  // 优先：通过解析器拿到 SELECT 的 rel_list[0]
+  ParsedSqlResult parsed;
+  RC prc = parse(sql.c_str(), &parsed);
+  if (prc == RC::SUCCESS && !parsed.sql_nodes().empty()) {
+    ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+    if (node->flag == SCF_SELECT && !node->selection.relations.empty()) {
+      const auto &rel = node->selection.relations[0];
+      if (!rel.relation_name.empty()) {
+        return rel.relation_name;
+      }
     }
   }
+
+  // 退化：大小写不敏感查找 FROM，并容忍多种空白（空格/换行/制表）
+  std::string lower = sql;
+  for (auto &ch : lower) ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+  auto is_ident = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.';
+  };
+  auto find_from = [&]() -> size_t {
+    const std::string pat = "from";
+    for (size_t i = 0; i + pat.size() <= lower.size(); ++i) {
+      if (lower.compare(i, pat.size(), pat) == 0) {
+        return i;
+      }
+    }
+    return std::string::npos;
+  };
+  size_t from_pos = find_from();
+  if (from_pos == std::string::npos) return {};
+  size_t i = from_pos + 4;
+  // 跳过任意空白
+  while (i < lower.size() && isspace(static_cast<unsigned char>(lower[i]))) i++;
+  size_t start = i;
+  while (i < lower.size() && is_ident(lower[i])) i++;
   if (i <= start) return {};
-  // strip possible schema prefix db.table -> table
   std::string name = sql.substr(start, i - start);
   size_t dot = name.rfind('.');
   if (dot != std::string::npos && dot + 1 < name.size()) {
     name = name.substr(dot + 1);
   }
-  // trim trailing spaces if any (unlikely)
+  // 去掉尾部空白
   while (!name.empty() && isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
   return name;
 }

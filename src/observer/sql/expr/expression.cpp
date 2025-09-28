@@ -1242,11 +1242,26 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
   }
   switch (func_type_) {
     case FuncType::LENGTH: {
-      if (arg.attr_type() != AttrType::CHARS) {
+      if (arg.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      if (!(arg.attr_type() == AttrType::CHARS || arg.attr_type() == AttrType::TEXTS)) {
         return RC::INVALID_ARGUMENT;
       }
-      auto s = arg.get_string_t();
-      value.set_int(static_cast<int>(s.size()));
+      const char *ptr = arg.data();
+      int         n   = arg.length();
+      if (arg.attr_type() == AttrType::TEXTS && n <= 16) {
+        // LobRef case: decode length
+        int32_t len = 0;
+        memcpy(&len, ptr, sizeof(int32_t));
+        value.set_int(len);
+      } else {
+        // Inline/char case: count until first '\0' within n bytes
+        int len = 0;
+        while (len < n && ptr[len] != '\0') ++len;
+        value.set_int(len);
+      }
       return RC::SUCCESS;
     }
     case FuncType::ROUND: {
@@ -1287,11 +1302,24 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
   }
   switch (func_type_) {
     case FuncType::LENGTH: {
-      if (arg.attr_type() != AttrType::CHARS) {
+      if (arg.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      if (!(arg.attr_type() == AttrType::CHARS || arg.attr_type() == AttrType::TEXTS)) {
         return RC::INVALID_ARGUMENT;
       }
-      auto s = arg.get_string_t();
-      value.set_int(static_cast<int>(s.size()));
+      const char *ptr = arg.data();
+      int         n   = arg.length();
+      if (arg.attr_type() == AttrType::TEXTS && n <= 16) {
+        int32_t len = 0;
+        memcpy(&len, ptr, sizeof(int32_t));
+        value.set_int(len);
+      } else {
+        int len = 0;
+        while (len < n && ptr[len] != '\0') ++len;
+        value.set_int(len);
+      }
       return RC::SUCCESS;
     }
     case FuncType::ROUND: {
@@ -1343,9 +1371,22 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
     Value out;
     switch (func_type_) {
       case FuncType::LENGTH: {
-        if (arg.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
-        auto s = arg.get_string_t();
-        out.set_int(static_cast<int>(s.size()));
+        if (arg.attr_type() == AttrType::NULLS) {
+          out.set_null();
+        } else {
+          if (!(arg.attr_type() == AttrType::CHARS || arg.attr_type() == AttrType::TEXTS)) return RC::INVALID_ARGUMENT;
+          const char *ptr = arg.data();
+          int         n   = arg.length();
+          if (arg.attr_type() == AttrType::TEXTS && n <= 16) {
+            int32_t len = 0;
+            memcpy(&len, ptr, sizeof(int32_t));
+            out.set_int(len);
+          } else {
+            int len = 0;
+            while (len < n && ptr[len] != '\0') ++len;
+            out.set_int(len);
+          }
+        }
       } break;
       case FuncType::ROUND: {
         if (arg.attr_type() != AttrType::FLOATS) return RC::INVALID_ARGUMENT;
