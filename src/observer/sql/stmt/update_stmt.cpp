@@ -18,6 +18,52 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "sql/parser/expression_binder.h"
 #include "common/value.h"
+#include "storage/view/view.h"
+
+namespace {
+// 从简单的 SELECT 语句中提取 FROM 后的第一个表名。
+// 仅用于将 "UPDATE <view> ..." 简单重写为对底层单表的更新：
+//   CREATE VIEW v AS SELECT * FROM base;
+// 若无法可靠提取，则返回空串。
+static std::string extract_first_table_name(const std::string &sql)
+{
+  if (sql.empty()) return {};
+  std::string lower = sql;
+  for (auto &ch : lower) ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+
+  auto find_ci = [&](const std::string &pat, size_t pos) -> size_t {
+    std::string p = pat;
+    for (auto &c : p) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    return lower.find(p, pos);
+  };
+
+  size_t from_pos = find_ci(" from ", 0);
+  if (from_pos == std::string::npos) return {};
+  size_t i = from_pos + 6; // skip " from "
+  // skip spaces
+  while (i < lower.size() && isspace(static_cast<unsigned char>(lower[i]))) i++;
+  size_t start = i;
+  // accept identifier characters: letters, digits, underscore and dot
+  while (i < lower.size()) {
+    char c = lower[i];
+    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.') {
+      ++i;
+    } else {
+      break;
+    }
+  }
+  if (i <= start) return {};
+  // strip possible schema prefix db.table -> table
+  std::string name = sql.substr(start, i - start);
+  size_t dot = name.rfind('.');
+  if (dot != std::string::npos && dot + 1 < name.size()) {
+    name = name.substr(dot + 1);
+  }
+  // trim trailing spaces if any (unlikely)
+  while (!name.empty() && isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
+  return name;
+}
+}
 
 UpdateStmt::UpdateStmt(Table *table, const vector<const FieldMeta *> &field_metas,
                        const vector<Value> &values, const vector<Expression *> &value_expressions,
@@ -47,9 +93,24 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
 
   // find table
   Table *table = db->find_table(table_name);
+  std::string view_alias; // 当从视图改写时，保存视图名用于别名映射
   if (table == nullptr) {
-    LOG_WARN("no such table. db=%s, table_name=%s", db->name(), table_name);
-    return RC::SCHEMA_TABLE_NOT_EXIST;
+    // 支持：UPDATE <view> ... 其中 <view> = CREATE VIEW v AS SELECT * FROM base;
+    View *view = db->find_view(table_name);
+    if (view != nullptr) {
+      std::string base = extract_first_table_name(view->select_sql());
+      if (!base.empty()) {
+        table = db->find_table(base.c_str());
+        if (table != nullptr) {
+          view_alias = table_name;  // 用视图名作为别名映射到底层表
+          LOG_INFO("rewrite update on view(%s) to base table(%s)", table_name, base.c_str());
+        }
+      }
+    }
+    if (table == nullptr) {
+      LOG_WARN("no such table or unsupported view update. db=%s, target=%s", db->name(), table_name);
+      return RC::SCHEMA_TABLE_NOT_EXIST;
+    }
   }
 
   // empty update is invalid (for compatibility)
@@ -122,6 +183,10 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
   {
     BinderContext binder_context;
     binder_context.add_table(table);
+    // 若来自视图改写，允许在表达式中使用视图名限定列（如 view.col）
+    if (!view_alias.empty()) {
+      binder_context.add_alias(view_alias, table);
+    }
     ExpressionBinder binder(binder_context);
     for (size_t i = 0; i < value_expressions.size(); ++i) {
       if (value_expressions[i] == nullptr) {
@@ -147,6 +212,9 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
   {
     unordered_map<string, Table *> table_map;
     table_map[table->name()] = table;
+    if (!view_alias.empty()) {
+      table_map[view_alias] = table;
+    }
     RC rc = FilterStmt::create(db, table, &table_map, update.conditions.data(),
                                update.conditions.size(), filter_stmt);
     if (rc != RC::SUCCESS) {
@@ -159,4 +227,3 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
   stmt = new UpdateStmt(table, field_metas, values, value_expressions, filter_stmt);
   return RC::SUCCESS;
 }
-
