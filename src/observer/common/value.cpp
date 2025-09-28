@@ -290,6 +290,25 @@ int Value::compare(const Value &other) const
     if (lhs_null) return -1;             // NULL < 非 NULL
     return 1;                            // 非 NULL > NULL
   }
+
+  auto is_string = [](AttrType t) { return t == AttrType::CHARS || t == AttrType::TEXTS; };
+  auto is_number = [](AttrType t) { return t == AttrType::INTS || t == AttrType::FLOATS; };
+
+  // 字符串与数字比较：采用数值语义（如 '16a' -> 16，与 13.5 比较）
+  if ((is_string(this->attr_type_) && is_number(other.attr_type())) ||
+      (is_number(this->attr_type_) && is_string(other.attr_type()))) {
+    float lv = this->get_float();
+    float rv = other.get_float();
+    return common::compare_float((void *)&lv, (void *)&rv);
+  }
+
+  // 字符串与字符串比较：统一使用字典序比较（支持 CHARS/TEXTS 混用）
+  if (is_string(this->attr_type_) && is_string(other.attr_type())) {
+    auto l = this->get_string_t();
+    auto r = other.get_string_t();
+    return common::compare_string((void *)l.data(), static_cast<int>(l.size()), (void *)r.data(), static_cast<int>(r.size()));
+  }
+
   return DataType::type_instance(this->attr_type_)->compare(*this, other);
 }
 

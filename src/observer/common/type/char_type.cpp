@@ -17,9 +17,27 @@ See the Mulan PSL v2 for more details. */
 
 int CharType::compare(const Value &left, const Value &right) const
 {
-  ASSERT(left.attr_type() == AttrType::CHARS && right.attr_type() == AttrType::CHARS, "invalid type");
-  return common::compare_string(
-      (void *)left.value_.pointer_value_, left.length_, (void *)right.value_.pointer_value_, right.length_);
+  ASSERT(left.attr_type() == AttrType::CHARS, "left type is not char");
+
+  // 字符串与数字比较：走数值语义（与 MySQL 行为保持一致）
+  if (right.attr_type() == AttrType::INTS || right.attr_type() == AttrType::FLOATS ||
+      right.attr_type() == AttrType::BOOLEANS) {
+    float lv = left.get_float();
+    float rv = right.get_float();
+    return common::compare_float((void *)&lv, (void *)&rv);
+  }
+
+  // 字符串与字符串比较：按字典序比较（支持 CHARS <-> CHARS/TEXTS）
+  if (right.attr_type() == AttrType::CHARS || right.attr_type() == AttrType::TEXTS) {
+    // 左侧为 CHARS，直接使用其指针与长度；右侧统一取 string_t 获取精确长度
+    auto r = right.get_string_t();
+    return common::compare_string(
+        (void *)left.value_.pointer_value_, left.length_, (void *)r.data(), static_cast<int>(r.size()));
+  }
+
+  // 其他类型暂不支持
+  LOG_WARN("unsupported compare between CHARS and type=%d", right.attr_type());
+  return INT32_MAX;
 }
 
 RC CharType::set_value_from_str(Value &val, const string &data) const

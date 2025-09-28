@@ -17,10 +17,25 @@ See the Mulan PSL v2 for more details. */
 
 int TextType::compare(const Value &left, const Value &right) const
 {
-  ASSERT(left.attr_type() == AttrType::TEXTS && right.attr_type() == AttrType::TEXTS, "invalid type");
-  auto l = left.get_string_t();
-  auto r = right.get_string_t();
-  return common::compare_string((void *)l.data(), l.size(), (void *)r.data(), r.size());
+  ASSERT(left.attr_type() == AttrType::TEXTS, "left type is not text");
+
+  // 字符串与数字比较：走数值语义
+  if (right.attr_type() == AttrType::INTS || right.attr_type() == AttrType::FLOATS ||
+      right.attr_type() == AttrType::BOOLEANS) {
+    float lv = left.get_float();
+    float rv = right.get_float();
+    return common::compare_float((void *)&lv, (void *)&rv);
+  }
+
+  // 字符串与字符串比较：按字典序比较（支持 TEXTS <-> CHARS/TEXTS）
+  if (right.attr_type() == AttrType::CHARS || right.attr_type() == AttrType::TEXTS) {
+    auto l = left.get_string_t();
+    auto r = right.get_string_t();
+    return common::compare_string((void *)l.data(), static_cast<int>(l.size()), (void *)r.data(), static_cast<int>(r.size()));
+  }
+
+  LOG_WARN("unsupported compare between TEXTS and type=%d", right.attr_type());
+  return INT32_MAX;
 }
 
 RC TextType::set_value_from_str(Value &val, const string &data) const

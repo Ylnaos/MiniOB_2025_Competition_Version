@@ -454,8 +454,25 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     return RC::SUCCESS;
   }
   if (left_column.attr_type() != right_column.attr_type()) {
-    LOG_WARN("cannot compare columns with different types");
-    return RC::INTERNAL;
+    // 类型不同：退化为逐行比较，交由 compare_value 处理隐式转换
+    int rows = 0;
+    if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
+      rows = right_column.count();
+    } else {
+      rows = left_column.count();
+    }
+    for (int i = 0; i < rows; ++i) {
+      Value lv = left_column.get_value(i);
+      Value rv = right_column.get_value(i);
+      bool  res = false;
+      rc        = compare_value(lv, rv, res);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to compare tuple cells. rc=%s", strrc(rc));
+        return rc;
+      }
+      select[i] &= res ? 1 : 0;
+    }
+    return RC::SUCCESS;
   }
   if (left_column.attr_type() == AttrType::INTS) {
     rc = compare_column<int>(left_column, right_column, select);
