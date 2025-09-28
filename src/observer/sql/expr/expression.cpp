@@ -1253,9 +1253,28 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       if (arg.attr_type() != AttrType::FLOATS) {
         return RC::INVALID_ARGUMENT;
       }
-      float f = arg.get_float();
-      float rf = std::round(f);
-      value.set_float(rf);
+      int scale = 0;
+      if (child2_) {
+        Value s;
+        rc = child2_->get_value(tuple, s);
+        if (OB_FAIL(rc)) return rc;
+        if (s.attr_type() != AttrType::INTS) {
+          return RC::INVALID_ARGUMENT;
+        }
+        scale = s.get_int();
+      }
+      double f  = static_cast<double>(arg.get_float());
+      double rf;
+      if (scale == 0) {
+        rf = std::round(f);
+      } else if (scale > 0) {
+        double p = std::pow(10.0, static_cast<double>(scale));
+        rf       = std::round(f * p) / p;
+      } else { // scale < 0
+        double p = std::pow(10.0, static_cast<double>(-scale));
+        rf       = std::round(f / p) * p;
+      }
+      value.set_float(static_cast<float>(rf));
       return RC::SUCCESS;
     }
     case FuncType::DATE_FORMAT: {
@@ -1298,9 +1317,28 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       if (arg.attr_type() != AttrType::FLOATS) {
         return RC::INVALID_ARGUMENT;
       }
-      float f  = arg.get_float();
-      float rf = std::round(f);
-      value.set_float(rf);
+      int scale = 0;
+      if (child2_) {
+        Value s;
+        rc = child2_->try_get_value(s);
+        if (OB_FAIL(rc)) return rc;
+        if (s.attr_type() != AttrType::INTS) {
+          return RC::INVALID_ARGUMENT;
+        }
+        scale = s.get_int();
+      }
+      double f  = static_cast<double>(arg.get_float());
+      double rf;
+      if (scale == 0) {
+        rf = std::round(f);
+      } else if (scale > 0) {
+        double p = std::pow(10.0, static_cast<double>(scale));
+        rf       = std::round(f * p) / p;
+      } else {
+        double p = std::pow(10.0, static_cast<double>(-scale));
+        rf       = std::round(f / p) * p;
+      }
+      value.set_float(static_cast<float>(rf));
       return RC::SUCCESS;
     }
     case FuncType::DATE_FORMAT: {
@@ -1333,6 +1371,12 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
   if (OB_FAIL(rc)) {
     return rc;
   }
+  Column scale_col;
+  bool   has_scale = (func_type_ == FuncType::ROUND) && (child2_ != nullptr);
+  if (has_scale) {
+    rc = child2_->get_column(chunk, scale_col);
+    if (OB_FAIL(rc)) return rc;
+  }
 
   const int rows = arg_col.count();
   column.init(value_type(), value_length(), rows);
@@ -1349,8 +1393,24 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
       } break;
       case FuncType::ROUND: {
         if (arg.attr_type() != AttrType::FLOATS) return RC::INVALID_ARGUMENT;
-        float rf = std::round(arg.get_float());
-        out.set_float(rf);
+        int scale = 0;
+        if (has_scale) {
+          Value s2 = scale_col.get_value(i);
+          if (s2.attr_type() != AttrType::INTS) return RC::INVALID_ARGUMENT;
+          scale = s2.get_int();
+        }
+        double f = static_cast<double>(arg.get_float());
+        double rf;
+        if (scale == 0) {
+          rf = std::round(f);
+        } else if (scale > 0) {
+          double p = std::pow(10.0, static_cast<double>(scale));
+          rf       = std::round(f * p) / p;
+        } else {
+          double p = std::pow(10.0, static_cast<double>(-scale));
+          rf       = std::round(f / p) * p;
+        }
+        out.set_float(static_cast<float>(rf));
       } break;
       case FuncType::DATE_FORMAT: {
         if (arg.attr_type() != AttrType::DATES) return RC::INVALID_ARGUMENT;

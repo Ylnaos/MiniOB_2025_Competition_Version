@@ -881,10 +881,9 @@ function_expression:
       }
     | ROUND_F LBRACE expression COMMA expression RBRACE
       {
-        // 语法上支持第二个参数(保留小数位数)，语义阶段按题意忽略
-        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::ROUND, $3);
+        // 支持 ROUND(expr, scale) 第二个参数（保留小数位数）
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::ROUND, $3, $5);
         $$->set_name(token_name(sql_string, &@$));
-        delete $5;
       }
     | DATE_FORMAT_F LBRACE expression RBRACE
       {

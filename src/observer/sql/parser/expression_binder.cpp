@@ -72,6 +72,16 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       func->child().reset(child_bound[0].release());
     }
 
+    // 额外绑定 ROUND 的第二个参数（如果存在）
+    if (func->function_type() == ScalarFunctionExpr::FuncType::ROUND && func->child2()) {
+      child_bound.clear();
+      rc = bind_expression(func->child2(), child_bound);
+      if (OB_FAIL(rc)) return rc;
+      if (child_bound.size() == 1 && child_bound[0].get() != func->child2().get()) {
+        func->child2().reset(child_bound[0].release());
+      }
+    }
+
     AttrType arg_type = func->child()->value_type();
     switch (func->function_type()) {
       case ScalarFunctionExpr::FuncType::LENGTH:
@@ -86,6 +96,14 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
         if (arg_type != AttrType::FLOATS) {
           LOG_WARN("round expects float type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
+        }
+        // 若有第二个参数，要求为 INT 类型
+        if (func->child2()) {
+          AttrType s_type = func->child2()->value_type();
+          if (s_type != AttrType::INTS) {
+            LOG_WARN("round(scale) expects int type, got %d", (int)s_type);
+            return RC::INVALID_ARGUMENT;
+          }
         }
         break;
       case ScalarFunctionExpr::FuncType::DATE_FORMAT:

@@ -656,12 +656,21 @@ public:
   explicit ScalarFunctionExpr(FuncType func_type, Expression *child)
       : func_type_(func_type), child_(child)
   {}
+  // 用于支持 ROUND(expr, scale) 的双参构造
+  ScalarFunctionExpr(FuncType func_type, std::unique_ptr<Expression> child, std::unique_ptr<Expression> child2)
+      : func_type_(func_type), child_(std::move(child)), child2_(std::move(child2))
+  {}
+  ScalarFunctionExpr(FuncType func_type, Expression *child, Expression *child2)
+      : func_type_(func_type), child_(child), child2_(child2)
+  {}
 
   virtual ~ScalarFunctionExpr() = default;
 
   unique_ptr<Expression> copy() const override
   {
-    return make_unique<ScalarFunctionExpr>(func_type_, child_ ? child_->copy().release() : nullptr);
+    auto first  = child_ ? child_->copy().release() : nullptr;
+    auto second = child2_ ? child2_->copy().release() : nullptr;
+    return make_unique<ScalarFunctionExpr>(func_type_, first, second);
   }
 
   ExprType type() const override { return ExprType::FUNCTION; }
@@ -692,9 +701,15 @@ public:
 
   unique_ptr<Expression> &child() { return child_; }
   const unique_ptr<Expression> &child() const { return child_; }
+
+  // 第二个参数（仅对 ROUND 生效，表示保留小数位数）
+  unique_ptr<Expression> &child2() { return child2_; }
+  const unique_ptr<Expression> &child2() const { return child2_; }
+
   FuncType function_type() const { return func_type_; }
 
 private:
   FuncType                 func_type_;
   unique_ptr<Expression>   child_;
+  unique_ptr<Expression>   child2_;
 };
