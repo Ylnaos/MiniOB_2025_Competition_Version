@@ -317,12 +317,17 @@ int Value::get_int() const
   switch (attr_type_) {
     case AttrType::CHARS:
     case AttrType::TEXTS: {
-      try {
-        return (int)(stol(value_.pointer_value_));
-      } catch (exception const &ex) {
-        LOG_TRACE("failed to convert string to number. s=%s, ex=%s", value_.pointer_value_, ex.what());
+      if (value_.pointer_value_ == nullptr) {
         return 0;
       }
+      // 宽松解析：按前缀数字解析（兼容 '16a' -> 16）
+      char *endptr = nullptr;
+      long  v      = strtol(value_.pointer_value_, &endptr, 10);
+      if (endptr == value_.pointer_value_) {
+        // 非数字开头，按 0 处理
+        return 0;
+      }
+      return static_cast<int>(v);
     }
     case AttrType::INTS: {
       return value_.int_value_;
@@ -349,12 +354,17 @@ float Value::get_float() const
   switch (attr_type_) {
     case AttrType::CHARS:
     case AttrType::TEXTS: {
-      try {
-        return stof(value_.pointer_value_);
-      } catch (exception const &ex) {
-        LOG_TRACE("failed to convert string to float. s=%s, ex=%s", value_.pointer_value_, ex.what());
-        return 0.0;
+      if (value_.pointer_value_ == nullptr) {
+        return 0.0f;
       }
+      // 宽松解析：按前缀数字解析（兼容 '16a' -> 16.0）
+      char  *endptr = nullptr;
+      double v      = strtod(value_.pointer_value_, &endptr);
+      if (endptr == value_.pointer_value_) {
+        // 非数字开头，按 0.0 处理
+        return 0.0f;
+      }
+      return static_cast<float>(v);
     } break;
     case AttrType::INTS: {
       return float(value_.int_value_);

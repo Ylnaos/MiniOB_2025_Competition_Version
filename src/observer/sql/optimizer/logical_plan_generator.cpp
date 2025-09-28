@@ -110,9 +110,18 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     return rc;
   }
 
-  // 如果 WHERE 使用布尔表达式（支持 AND/OR），优先生成该谓词
-  if (!predicate_oper && select_stmt->where_expr()) {
-    predicate_oper = make_unique<PredicateLogicalOperator>(std::move(select_stmt->where_expr()));
+  // 同时支持两类 WHERE：
+  // - 传统 AND 链 (filter_stmt)
+  // - 布尔表达式（支持 AND/OR），通常也用于 JOIN ... ON 的展开
+  if (select_stmt->where_expr()) {
+    auto extra_pred = make_unique<PredicateLogicalOperator>(std::move(select_stmt->where_expr()));
+    if (predicate_oper) {
+      // 叠加一个谓词算子，整体等价于 AND 组合
+      extra_pred->add_child(std::move(predicate_oper));
+      predicate_oper = std::move(extra_pred);
+    } else {
+      predicate_oper = std::move(extra_pred);
+    }
   }
 
   const vector<Table *> &tables = select_stmt->tables();

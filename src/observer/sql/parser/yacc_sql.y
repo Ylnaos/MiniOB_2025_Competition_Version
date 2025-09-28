@@ -50,6 +50,9 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   return expr;
 }
 
+// 收集 JOIN ... ON 布尔表达式（使用 AND 连接）
+static Expression *g_join_on_expr = nullptr;
+
 %}
 
 %define api.pure full
@@ -118,6 +121,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         KEY
         IN
         NOT
+        JOIN
+        INNER
         IS
         ANALYZE
         FIELDS
@@ -207,6 +212,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <key_list>            primary_key
 %type <key_list>            attr_list
 %type <relation_list>       rel_list
+%type <relation_list>       join_seq
 %type <expression>          expression
 %type <expression>          function_expression
 %type <expression>          aggregate_expression
@@ -715,6 +721,19 @@ select_stmt:        /*  select 语句的语法解析树*/
         delete $5;
       }
 
+      // 合并 JOIN ... ON 条件到 where_expr（与 where 条件共同生效）
+      if (g_join_on_expr != nullptr) {
+        if ($$->selection.where_expr) {
+          vector<unique_ptr<Expression>> children;
+          children.emplace_back($$->selection.where_expr.release());
+          children.emplace_back(g_join_on_expr);
+          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, children));
+        } else {
+          $$->selection.where_expr.reset(g_join_on_expr);
+        }
+        g_join_on_expr = nullptr;
+      }
+
       if ($6 != nullptr) {
         $$->selection.group_by.swap(*$6);
         delete $6;
@@ -745,6 +764,19 @@ select_stmt:        /*  select 语句的语法解析树*/
 
       // where_bool 解析到布尔表达式
       $$->selection.where_expr.reset($5);
+
+      // 合并 JOIN ... ON 条件（AND）
+      if (g_join_on_expr != nullptr) {
+        if ($$->selection.where_expr) {
+          vector<unique_ptr<Expression>> children;
+          children.emplace_back($$->selection.where_expr.release());
+          children.emplace_back(g_join_on_expr);
+          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, children));
+        } else {
+          $$->selection.where_expr.reset(g_join_on_expr);
+        }
+        g_join_on_expr = nullptr;
+      }
 
       if ($6 != nullptr) {
         $$->selection.group_by.swap(*$6);
@@ -967,6 +999,47 @@ rel_list:
       }
       $$->emplace($$->begin(), *$1);
       delete $1;
+    }
+    | join_seq {
+      $$ = $1;
+    }
+    ;
+
+// 支持 INNER JOIN / JOIN 语法，ON 后接布尔表达式（AND/OR）
+join_seq:
+    relation {
+      $$ = new vector<RelationSqlNode>();
+      $$->push_back(*$1);
+      delete $1;
+      // 清理上次残留
+      g_join_on_expr = nullptr;
+    }
+    | join_seq INNER JOIN relation ON bool_term {
+      $$ = $1;
+      $$->push_back(*$4);
+      delete $4;
+      // 累积 ON 条件（AND 连接）
+      if (g_join_on_expr == nullptr) {
+        g_join_on_expr = $6;
+      } else {
+        vector<unique_ptr<Expression>> children;
+        children.emplace_back(g_join_on_expr);
+        children.emplace_back($6);
+        g_join_on_expr = new ConjunctionExpr(ConjunctionExpr::Type::AND, children);
+      }
+    }
+    | join_seq JOIN relation ON bool_term {
+      $$ = $1;
+      $$->push_back(*$3);
+      delete $3;
+      if (g_join_on_expr == nullptr) {
+        g_join_on_expr = $5;
+      } else {
+        vector<unique_ptr<Expression>> children;
+        children.emplace_back(g_join_on_expr);
+        children.emplace_back($5);
+        g_join_on_expr = new ConjunctionExpr(ConjunctionExpr::Type::AND, children);
+      }
     }
     ;
 
