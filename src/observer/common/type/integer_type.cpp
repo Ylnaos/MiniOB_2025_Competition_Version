@@ -40,14 +40,32 @@ int IntegerType::compare(const Column &left, const Column &right, int left_idx, 
 RC IntegerType::cast_to(const Value &val, AttrType type, Value &result) const
 {
   switch (type) {
-  case AttrType::FLOATS: {
-    float float_value = val.get_int();
-    result.set_float(float_value);
-    return RC::SUCCESS;
-  }
-  default:
-    LOG_WARN("unsupported type %d", type);
-    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    case AttrType::INTS: {
+      // 同类型：直接复制
+      result = val;
+      return RC::SUCCESS;
+    }
+    case AttrType::FLOATS: {
+      float float_value = static_cast<float>(val.get_int());
+      result.set_float(float_value);
+      return RC::SUCCESS;
+    }
+    case AttrType::CHARS: {
+      // 将整数转换为字符串（用于 CHAR 列的赋值）
+      std::string s = std::to_string(val.get_int());
+      result.set_string(s.c_str());
+      return RC::SUCCESS;
+    }
+    case AttrType::TEXTS: {
+      std::string s = std::to_string(val.get_int());
+      result.set_string(s.c_str());
+      result.set_type(AttrType::TEXTS);
+      return RC::SUCCESS;
+    }
+    default: {
+      LOG_WARN("unsupported cast from INTS to type=%d", static_cast<int>(type));
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
   }
 }
 
