@@ -29,6 +29,34 @@ See the Mulan PSL v2 for more details. */
 
 using namespace std;
 
+// 实现“银行家舍入”（ties to even）以符合官方期望：
+// - 对于精确的 .5 情况，舍入到最接近的偶数整数
+// - 其它情况按最接近整数舍入
+// 说明：不依赖于环境的浮点舍入模式，避免 std::nearbyint 的实现差异
+static inline double round_half_to_even(double x)
+{
+  // 使用 modf 分离整数与小数部分（整数部分向 0 截断）
+  double i;
+  double f = std::modf(x, &i); // x = i + f, f ∈ (-1, 1)
+
+  double af = std::fabs(f);
+  if (af < 0.5) {
+    return i;
+  }
+  if (af > 0.5) {
+    return i + (f > 0 ? 1.0 : -1.0);
+  }
+  // 精确 .5（允许极小误差）按偶数就近舍入
+  // 这里 f 的绝对值非常接近 0.5，判断 i 的奇偶性
+  // 使用 fmod 判断偶数（|i| % 2 == 0）
+  double ai = std::fabs(i);
+  bool i_is_even = (std::fmod(ai, 2.0) == 0.0);
+  if (i_is_even) {
+    return i;
+  }
+  return i + (f > 0 ? 1.0 : -1.0);
+}
+
 RC FieldExpr::get_value(const Tuple &tuple, Value &value) const
 {
   return tuple.find_cell(TupleCellSpec(table_name(), field_name()), value);
@@ -1283,13 +1311,13 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       double f  = static_cast<double>(arg.get_float());
       double rf;
       if (scale == 0) {
-        rf = std::round(f);
+        rf = round_half_to_even(f);
       } else if (scale > 0) {
         double p = std::pow(10.0, static_cast<double>(scale));
-        rf       = std::round(f * p) / p;
+        rf       = round_half_to_even(f * p) / p;
       } else { // scale < 0
         double p = std::pow(10.0, static_cast<double>(-scale));
-        rf       = std::round(f / p) * p;
+        rf       = round_half_to_even(f / p) * p;
       }
       value.set_float(static_cast<float>(rf));
       return RC::SUCCESS;
@@ -1334,6 +1362,31 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
             case 'y': snprintf(buf, sizeof(buf), "%02d", year % 100); out.append(buf); break;
             case 'm': snprintf(buf, sizeof(buf), "%02d", month); out.append(buf); break;
             case 'd': snprintf(buf, sizeof(buf), "%02d", day); out.append(buf); break;
+            case 'D': {
+              const char *suffix = "th";
+              if (day % 100 < 11 || day % 100 > 13) {
+                switch (day % 10) {
+                  case 1: suffix = "st"; break;
+                  case 2: suffix = "nd"; break;
+                  case 3: suffix = "rd"; break;
+                  default: break;
+                }
+              }
+              char buf2[16];
+              snprintf(buf2, sizeof(buf2), "%d%s", day, suffix);
+              out.append(buf2);
+            } break;
+            case 'M': {
+              static const char *months[] = {
+                "", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+              };
+              if (month >= 1 && month <= 12) {
+                out.append(months[month]);
+              } else {
+                out.append("?");
+              }
+            } break;
             case '%': out.push_back('%'); break;
             default:  // 未识别占位符，按原样输出占位符字符
               out.push_back(t);
@@ -1386,13 +1439,13 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       double f  = static_cast<double>(arg.get_float());
       double rf;
       if (scale == 0) {
-        rf = std::round(f);
+        rf = round_half_to_even(f);
       } else if (scale > 0) {
         double p = std::pow(10.0, static_cast<double>(scale));
-        rf       = std::round(f * p) / p;
+        rf       = round_half_to_even(f * p) / p;
       } else {
         double p = std::pow(10.0, static_cast<double>(-scale));
-        rf       = std::round(f / p) * p;
+        rf       = round_half_to_even(f / p) * p;
       }
       value.set_float(static_cast<float>(rf));
       return RC::SUCCESS;
@@ -1435,6 +1488,31 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
             case 'y': snprintf(buf, sizeof(buf), "%02d", year % 100); out.append(buf); break;
             case 'm': snprintf(buf, sizeof(buf), "%02d", month); out.append(buf); break;
             case 'd': snprintf(buf, sizeof(buf), "%02d", day); out.append(buf); break;
+            case 'D': {
+              const char *suffix = "th";
+              if (day % 100 < 11 || day % 100 > 13) {
+                switch (day % 10) {
+                  case 1: suffix = "st"; break;
+                  case 2: suffix = "nd"; break;
+                  case 3: suffix = "rd"; break;
+                  default: break;
+                }
+              }
+              char buf2[16];
+              snprintf(buf2, sizeof(buf2), "%d%s", day, suffix);
+              out.append(buf2);
+            } break;
+            case 'M': {
+              static const char *months[] = {
+                "", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+              };
+              if (month >= 1 && month <= 12) {
+                out.append(months[month]);
+              } else {
+                out.append("?");
+              }
+            } break;
             case '%': out.push_back('%'); break;
             default:  out.push_back(t); break;
           }
@@ -1499,13 +1577,13 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         double f = static_cast<double>(arg.get_float());
         double rf;
         if (scale == 0) {
-          rf = std::round(f);
+          rf = round_half_to_even(f);
         } else if (scale > 0) {
           double p = std::pow(10.0, static_cast<double>(scale));
-          rf       = std::round(f * p) / p;
+          rf       = round_half_to_even(f * p) / p;
         } else {
           double p = std::pow(10.0, static_cast<double>(-scale));
-          rf       = std::round(f / p) * p;
+          rf       = round_half_to_even(f / p) * p;
         }
         out.set_float(static_cast<float>(rf));
       } break;
@@ -1544,6 +1622,31 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
               case 'y': snprintf(buf, sizeof(buf), "%02d", year % 100); out_s.append(buf); break;
               case 'm': snprintf(buf, sizeof(buf), "%02d", month); out_s.append(buf); break;
               case 'd': snprintf(buf, sizeof(buf), "%02d", day); out_s.append(buf); break;
+              case 'D': {
+                const char *suffix = "th";
+                if (day % 100 < 11 || day % 100 > 13) {
+                  switch (day % 10) {
+                    case 1: suffix = "st"; break;
+                    case 2: suffix = "nd"; break;
+                    case 3: suffix = "rd"; break;
+                    default: break;
+                  }
+                }
+                char buf2[16];
+                snprintf(buf2, sizeof(buf2), "%d%s", day, suffix);
+                out_s.append(buf2);
+              } break;
+              case 'M': {
+                static const char *months[] = {
+                  "", "January", "February", "March", "April", "May", "June",
+                  "July", "August", "September", "October", "November", "December"
+                };
+                if (month >= 1 && month <= 12) {
+                  out_s.append(months[month]);
+                } else {
+                  out_s.append("?");
+                }
+              } break;
               case '%': out_s.push_back('%'); break;
               default:  out_s.push_back(t); break;
             }
