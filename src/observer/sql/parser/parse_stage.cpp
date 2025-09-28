@@ -124,9 +124,19 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     sql_node = std::move(parsed_sql_result.sql_nodes().front());
   }
 
-  // 如确有多条有效语句，仅处理第一条并提示
+  // 如确有多条有效语句：仅处理“最后一条”，与常见客户端行为保持一致
   if (valid_count > 1) {
-    LOG_WARN("got multi sql commands but only 1 will be handled");
+    int __last_valid_idx = -1;
+    for (int i = 0; i < static_cast<int>(parsed_sql_result.sql_nodes().size()); i++) {
+      auto &__node_up = parsed_sql_result.sql_nodes()[i];
+      if (__node_up && __node_up->flag != SCF_ERROR) {
+        __last_valid_idx = i;
+      }
+    }
+    if (__last_valid_idx >= 0) {
+      sql_node = std::move(parsed_sql_result.sql_nodes()[__last_valid_idx]);
+    }
+    LOG_WARN("got multi sql commands but only the last one will be handled");
   }
 
   if (sql_node->flag == SCF_ERROR) {
