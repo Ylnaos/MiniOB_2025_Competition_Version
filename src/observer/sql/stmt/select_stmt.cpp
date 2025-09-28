@@ -26,6 +26,113 @@ See the Mulan PSL v2 for more details. */
 using namespace std;
 using namespace common;
 
+// 从视图的 SELECT 列表推导列名到底层字段(表.列)的映射，仅处理未绑定字段场景
+static void build_view_output_mapping(
+    const vector<unique_ptr<Expression>> &view_exprs,
+    unordered_map<string, pair<string, string>> &name_to_relattr)
+{
+  name_to_relattr.clear();
+  for (const auto &expr : view_exprs) {
+    if (expr == nullptr) continue;
+    // 结果列名优先使用别名
+    string label;
+    if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+      label = expr->alias();
+    } else if (expr->type() == ExprType::UNBOUND_FIELD) {
+      auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
+      // 未指定别名时，对于字段表达式，派生列名=字段名
+      label = uf->field_name();
+    } else {
+      // 复杂表达式且无别名时，不参与映射
+      continue;
+    }
+
+    if (expr->type() == ExprType::UNBOUND_FIELD) {
+      auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
+      name_to_relattr[common::str_to_lower(label)] = {uf->table_name(), uf->field_name()};
+    }
+  }
+}
+
+// 在绑定前重写外层表达式树中未限定的字段引用：
+//   name -> real_table.real_field (依据视图输出列名映射)
+static void rewrite_unqualified_fields(
+    unique_ptr<Expression> &expr,
+    const unordered_map<string, pair<string, string>> &name_to_relattr)
+{
+  if (!expr) return;
+
+  switch (expr->type()) {
+    case ExprType::UNBOUND_FIELD: {
+      auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
+      const char *tbl = uf->table_name();
+      const char *col = uf->field_name();
+      if ((tbl == nullptr || tbl[0] == '\0') && col != nullptr && col[0] != '\0') {
+        string key = string(col);
+        common::str_to_lower(key);
+        auto   it  = name_to_relattr.find(key);
+        if (it != name_to_relattr.end()) {
+          // 用底层限定字段替换
+          unique_ptr<Expression> replaced = make_unique<UnboundFieldExpr>(it->second.first, it->second.second);
+          // 继承展示名称(保持简单)：设置为 "table.field"
+          string display = it->second.first;
+          if (!display.empty()) display += ".";
+          display += it->second.second;
+          replaced->set_name(display);
+          if (expr->alias() != nullptr) {
+            replaced->set_alias(expr->alias());
+          }
+          expr.swap(replaced);
+        }
+      }
+    } break;
+
+    case ExprType::UNBOUND_AGGREGATION: {
+      auto *agg = static_cast<UnboundAggregateExpr *>(expr.get());
+      rewrite_unqualified_fields(agg->child(), name_to_relattr);
+    } break;
+
+    case ExprType::ARITHMETIC: {
+      auto *arith = static_cast<ArithmeticExpr *>(expr.get());
+      rewrite_unqualified_fields(arith->left(), name_to_relattr);
+      if (arith->right()) rewrite_unqualified_fields(arith->right(), name_to_relattr);
+    } break;
+
+    case ExprType::COMPARISON: {
+      auto *cmp = static_cast<ComparisonExpr *>(expr.get());
+      rewrite_unqualified_fields(cmp->left(), name_to_relattr);
+      rewrite_unqualified_fields(cmp->right(), name_to_relattr);
+    } break;
+
+    case ExprType::CONJUNCTION: {
+      auto *conj = static_cast<ConjunctionExpr *>(expr.get());
+      for (auto &child : conj->children()) {
+        rewrite_unqualified_fields(child, name_to_relattr);
+      }
+    } break;
+
+    case ExprType::CAST: {
+      auto *c = static_cast<CastExpr *>(expr.get());
+      rewrite_unqualified_fields(c->child(), name_to_relattr);
+    } break;
+
+    case ExprType::FUNCTION: {
+      auto *fn = static_cast<ScalarFunctionExpr *>(expr.get());
+      rewrite_unqualified_fields(fn->child(), name_to_relattr);
+    } break;
+
+    case ExprType::IN_LIST: {
+      auto *in = static_cast<InExpr *>(expr.get());
+      rewrite_unqualified_fields(in->test_expr(), name_to_relattr);
+      rewrite_unqualified_fields(in->set_expr(), name_to_relattr);
+    } break;
+
+    default:
+      // 其它类型无需处理或在binder中处理
+      break;
+  }
+}
+
 SelectStmt::~SelectStmt()
 {
   if (nullptr != filter_stmt_) {
@@ -82,6 +189,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             select_sql.relations.swap(node->selection.relations);
             for (auto &cond : node->selection.conditions) {
               select_sql.conditions.emplace_back(std::move(cond));
+            }
+            // simple_aggregate 情况下：根据视图输出列名映射，重写外层未限定字段
+            unordered_map<string, pair<string, string>> name_to_relattr;
+            build_view_output_mapping(node->selection.expressions, name_to_relattr);
+            for (auto &outer_expr : select_sql.expressions) {
+              rewrite_unqualified_fields(outer_expr, name_to_relattr);
             }
           }
         }
