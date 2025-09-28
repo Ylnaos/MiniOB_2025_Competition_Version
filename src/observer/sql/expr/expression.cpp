@@ -1295,16 +1295,55 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       return RC::SUCCESS;
     }
     case FuncType::DATE_FORMAT: {
-      if (arg.attr_type() != AttrType::DATES) {
+      // 支持第一个参数为 DATE 或 CHAR(可解析为日期)
+      Value date_val;
+      if (arg.attr_type() == AttrType::DATES) {
+        date_val = arg;
+      } else if (arg.attr_type() == AttrType::CHARS) {
+        RC rc2 = Value::cast_to(arg, AttrType::DATES, date_val);
+        if (OB_FAIL(rc2)) return rc2;
+      } else {
         return RC::INVALID_ARGUMENT;
       }
-      int32_t d = arg.get_date();
-      int year = d / 10000;
+
+      int32_t d = date_val.get_date();
+      int year  = d / 10000;
       int month = (d / 100) % 100;
-      int day = d % 100;
-      char buf[16];
-      snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
-      value.set_string(buf);
+      int day   = d % 100;
+
+      // 默认格式：%Y-%m-%d
+      string fmt = "%Y-%m-%d";
+      if (child2_) {
+        Value fmt_val;
+        RC rc2 = child2_->get_value(tuple, fmt_val);
+        if (OB_FAIL(rc2)) return rc2;
+        if (fmt_val.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
+        fmt = fmt_val.get_string();
+      }
+
+      // 仅实现必要子集：%Y/%y/%m/%d 及普通字符透传
+      string out;
+      out.reserve(fmt.size() + 8);
+      for (size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] == '%' && i + 1 < fmt.size()) {
+          char t = fmt[i + 1];
+          i++;
+          char buf[8];
+          switch (t) {
+            case 'Y': snprintf(buf, sizeof(buf), "%04d", year); out.append(buf); break;
+            case 'y': snprintf(buf, sizeof(buf), "%02d", year % 100); out.append(buf); break;
+            case 'm': snprintf(buf, sizeof(buf), "%02d", month); out.append(buf); break;
+            case 'd': snprintf(buf, sizeof(buf), "%02d", day); out.append(buf); break;
+            case '%': out.push_back('%'); break;
+            default:  // 未识别占位符，按原样输出占位符字符
+              out.push_back(t);
+              break;
+          }
+        } else {
+          out.push_back(fmt[i]);
+        }
+      }
+      value.set_string(out.c_str());
       return RC::SUCCESS;
     }
   }
@@ -1359,16 +1398,51 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       return RC::SUCCESS;
     }
     case FuncType::DATE_FORMAT: {
-      if (arg.attr_type() != AttrType::DATES) {
+      // 支持常量折叠
+      Value date_val;
+      if (arg.attr_type() == AttrType::DATES) {
+        date_val = arg;
+      } else if (arg.attr_type() == AttrType::CHARS) {
+        RC rc2 = Value::cast_to(arg, AttrType::DATES, date_val);
+        if (OB_FAIL(rc2)) return rc2;
+      } else {
         return RC::INVALID_ARGUMENT;
       }
-      int32_t d = arg.get_date();
+
+      int32_t d = date_val.get_date();
       int year  = d / 10000;
       int month = (d / 100) % 100;
       int day   = d % 100;
-      char buf[16];
-      snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
-      value.set_string(buf);
+
+      string fmt = "%Y-%m-%d";
+      if (child2_) {
+        Value fmt_val;
+        RC rc2 = child2_->try_get_value(fmt_val);
+        if (OB_FAIL(rc2)) return rc2;
+        if (fmt_val.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
+        fmt = fmt_val.get_string();
+      }
+
+      string out;
+      out.reserve(fmt.size() + 8);
+      for (size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] == '%' && i + 1 < fmt.size()) {
+          char t = fmt[i + 1];
+          i++;
+          char buf[8];
+          switch (t) {
+            case 'Y': snprintf(buf, sizeof(buf), "%04d", year); out.append(buf); break;
+            case 'y': snprintf(buf, sizeof(buf), "%02d", year % 100); out.append(buf); break;
+            case 'm': snprintf(buf, sizeof(buf), "%02d", month); out.append(buf); break;
+            case 'd': snprintf(buf, sizeof(buf), "%02d", day); out.append(buf); break;
+            case '%': out.push_back('%'); break;
+            default:  out.push_back(t); break;
+          }
+        } else {
+          out.push_back(fmt[i]);
+        }
+      }
+      value.set_string(out.c_str());
       return RC::SUCCESS;
     }
   }
@@ -1388,10 +1462,16 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
   if (OB_FAIL(rc)) {
     return rc;
   }
-  Column scale_col;
+  Column scale_col; // for ROUND scale
   bool   has_scale = (func_type_ == FuncType::ROUND) && (child2_ != nullptr);
   if (has_scale) {
     rc = child2_->get_column(chunk, scale_col);
+    if (OB_FAIL(rc)) return rc;
+  }
+  Column fmt_col; // for DATE_FORMAT format string
+  bool   has_fmt = (func_type_ == FuncType::DATE_FORMAT) && (child2_ != nullptr);
+  if (has_fmt) {
+    rc = child2_->get_column(chunk, fmt_col);
     if (OB_FAIL(rc)) return rc;
   }
 
@@ -1430,14 +1510,48 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         out.set_float(static_cast<float>(rf));
       } break;
       case FuncType::DATE_FORMAT: {
-        if (arg.attr_type() != AttrType::DATES) return RC::INVALID_ARGUMENT;
-        int32_t d = arg.get_date();
-        int year = d / 10000;
+        // 取日期参数，容忍字符串可解析为日期
+        Value date_val;
+        if (arg.attr_type() == AttrType::DATES) {
+          date_val = arg;
+        } else if (arg.attr_type() == AttrType::CHARS) {
+          RC rc2 = Value::cast_to(arg, AttrType::DATES, date_val);
+          if (OB_FAIL(rc2)) return rc2;
+        } else {
+          return RC::INVALID_ARGUMENT;
+        }
+        int32_t d = date_val.get_date();
+        int year  = d / 10000;
         int month = (d / 100) % 100;
-        int day = d % 100;
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
-        out.set_string(buf);
+        int day   = d % 100;
+
+        string fmt = "%Y-%m-%d";
+        if (has_fmt) {
+          Value f2 = fmt_col.get_value(i);
+          if (f2.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
+          fmt = f2.get_string();
+        }
+
+        string out_s;
+        out_s.reserve(fmt.size() + 8);
+        for (size_t j = 0; j < fmt.size(); ++j) {
+          if (fmt[j] == '%' && j + 1 < fmt.size()) {
+            char t = fmt[j + 1];
+            j++;
+            char buf[8];
+            switch (t) {
+              case 'Y': snprintf(buf, sizeof(buf), "%04d", year); out_s.append(buf); break;
+              case 'y': snprintf(buf, sizeof(buf), "%02d", year % 100); out_s.append(buf); break;
+              case 'm': snprintf(buf, sizeof(buf), "%02d", month); out_s.append(buf); break;
+              case 'd': snprintf(buf, sizeof(buf), "%02d", day); out_s.append(buf); break;
+              case '%': out_s.push_back('%'); break;
+              default:  out_s.push_back(t); break;
+            }
+          } else {
+            out_s.push_back(fmt[j]);
+          }
+        }
+        out.set_string(out_s.c_str());
       } break;
     }
     column.append_value(out);

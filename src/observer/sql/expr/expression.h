@@ -690,7 +690,7 @@ public:
     switch (func_type_) {
       case FuncType::LENGTH: return sizeof(int);
       case FuncType::ROUND: return sizeof(float);
-      case FuncType::DATE_FORMAT: return 10; // YYYY-MM-DD
+      case FuncType::DATE_FORMAT: return 32; // 足够覆盖常见格式，如 %Y-%m-%d 等
     }
     return -1;
   }

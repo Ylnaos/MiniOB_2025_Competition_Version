@@ -72,8 +72,9 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       func->child().reset(child_bound[0].release());
     }
 
-    // 额外绑定 ROUND 的第二个参数（如果存在）
-    if (func->function_type() == ScalarFunctionExpr::FuncType::ROUND && func->child2()) {
+    // 额外绑定 ROUND/DATE_FORMAT 的第二个参数（如果存在）
+    if ((func->function_type() == ScalarFunctionExpr::FuncType::ROUND ||
+         func->function_type() == ScalarFunctionExpr::FuncType::DATE_FORMAT) && func->child2()) {
       child_bound.clear();
       rc = bind_expression(func->child2(), child_bound);
       if (OB_FAIL(rc)) return rc;
@@ -106,13 +107,25 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
           }
         }
         break;
-      case ScalarFunctionExpr::FuncType::DATE_FORMAT:
-        // 题目约束：date_format 仅支持 DATE 类型
-        if (arg_type != AttrType::DATES) {
-          LOG_WARN("date_format expects date type, got %d", (int)arg_type);
+      case ScalarFunctionExpr::FuncType::DATE_FORMAT: {
+        // 允许第一个参数为 DATE 或可解析为 DATE 的字符串
+        if (arg_type == AttrType::CHARS) {
+          // 隐式转换为 DATE，以复用后续执行逻辑
+          auto cast = make_unique<CastExpr>(func->child()->copy(), AttrType::DATES);
+          func->child().reset(cast.release());
+        } else if (arg_type != AttrType::DATES) {
+          LOG_WARN("date_format expects date or char type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
         }
-        break;
+        // 如存在第二个参数，要求其为字符串（格式串）
+        if (func->child2()) {
+          AttrType fmt_type = func->child2()->value_type();
+          if (fmt_type != AttrType::CHARS) {
+            LOG_WARN("date_format format expects char type, got %d", (int)fmt_type);
+            return RC::INVALID_ARGUMENT;
+          }
+        }
+      } break;
     }
     // 落入常规绑定，便于后续统一处理列位置等
     return bind_field_expression(expr, bound_expressions);

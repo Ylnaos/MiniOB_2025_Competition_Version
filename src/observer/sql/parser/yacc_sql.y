@@ -892,10 +892,10 @@ function_expression:
       }
     | DATE_FORMAT_F LBRACE expression COMMA expression RBRACE
       {
-        // 语法上支持格式串参数，语义阶段按题意忽略
-        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DATE_FORMAT, $3);
+        // DATE_FORMAT(date_expr, format_expr)
+        // 保留第二个参数(format)传入表达式，供执行阶段使用
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DATE_FORMAT, $3, $5);
         $$->set_name(token_name(sql_string, &@$));
-        delete $5;
       }
     ;
 
