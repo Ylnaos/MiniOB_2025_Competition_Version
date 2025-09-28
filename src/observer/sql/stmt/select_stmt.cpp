@@ -26,30 +26,73 @@ See the Mulan PSL v2 for more details. */
 using namespace std;
 using namespace common;
 
-// 从视图的 SELECT 列表推导列名到底层字段(表.列)的映射，仅处理未绑定字段场景
+// 从视图的 SELECT 列表推导列名到底层字段(表.列)的映射
+// 支持两类：
+// 1) 未绑定字段（直接映射 列名 -> 表.列）
+// 2) 星号(*)：当且仅当能唯一定位到一个底层表时，将该表所有可见列加入映射
 static void build_view_output_mapping(
+    Db *db,
+    const vector<RelationSqlNode> &view_rels,
     const vector<unique_ptr<Expression>> &view_exprs,
     unordered_map<string, pair<string, string>> &name_to_relattr)
 {
   name_to_relattr.clear();
+
+  auto add_table_columns = [&](const RelationSqlNode &rel) {
+    Table *tbl = db->find_table(rel.relation_name.c_str());
+    if (tbl == nullptr) return;  // 底层不是物理表，忽略
+
+    const TableMeta &tm = tbl->table_meta();
+    const string     qn = rel.alias.empty() ? rel.relation_name : rel.alias; // 使用别名优先
+    for (int i = tm.sys_field_num(); i < tm.field_num(); ++i) {
+      const FieldMeta *fm = tm.field(i);
+      if (fm == nullptr) continue;
+      string key = fm->name();
+      common::str_to_lower(key);
+      name_to_relattr[key] = {qn, fm->name()};
+    }
+  };
+
   for (const auto &expr : view_exprs) {
     if (expr == nullptr) continue;
-    // 结果列名优先使用别名
-    string label;
-    if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
-      label = expr->alias();
-    } else if (expr->type() == ExprType::UNBOUND_FIELD) {
-      auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
-      // 未指定别名时，对于字段表达式，派生列名=字段名
-      label = uf->field_name();
-    } else {
-      // 复杂表达式且无别名时，不参与映射
-      continue;
-    }
 
     if (expr->type() == ExprType::UNBOUND_FIELD) {
+      // 结果列名优先使用别名
+      string label = expr->alias() && expr->alias()[0] != '\0'
+                         ? string(expr->alias())
+                         : string(static_cast<UnboundFieldExpr *>(expr.get())->field_name());
+
       auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
-      name_to_relattr[common::str_to_lower(label)] = {uf->table_name(), uf->field_name()};
+      string key = label;
+      common::str_to_lower(key);
+      name_to_relattr[key] = {uf->table_name(), uf->field_name()};
+    } else if (expr->type() == ExprType::STAR) {
+      // 仅当能唯一确定底层表时，展开映射
+      const char *star_tbl = static_cast<const StarExpr *>(expr.get())->table_name();
+      if (star_tbl != nullptr && star_tbl[0] != '\0') {
+        // 优先用别名匹配，否则用表名匹配
+        bool matched = false;
+        for (const auto &rel : view_rels) {
+          if ((!rel.alias.empty() && 0 == strcasecmp(rel.alias.c_str(), star_tbl)) ||
+              0 == strcasecmp(rel.relation_name.c_str(), star_tbl)) {
+            add_table_columns(rel);
+            matched = true;
+            break;
+          }
+        }
+        (void)matched; // 未匹配到则忽略
+      } else if (view_rels.size() == 1) {
+        add_table_columns(view_rels[0]);
+      }
+    } else {
+      // 复杂表达式：只有在有别名时才作为输出列名参与映射（此处不处理）
+      if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+        // 无法反推到底层字段，仅占位，避免误将缺失视为未输出列
+        string key = expr->alias();
+        common::str_to_lower(key);
+        // 使用空表名占位，后续 rewrite 找不到再交由 binder 处理
+        name_to_relattr.emplace(key, make_pair(string(), string()));
+      }
     }
   }
 }
@@ -207,7 +250,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         } else {
           // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
           unordered_map<string, pair<string, string>> name_to_relattr;
-          build_view_output_mapping(node->selection.expressions, name_to_relattr);
+          build_view_output_mapping(db, node->selection.relations, node->selection.expressions, name_to_relattr);
           for (auto &outer_expr : select_sql.expressions) {
             RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr);
             if (OB_FAIL(rc)) return rc;
