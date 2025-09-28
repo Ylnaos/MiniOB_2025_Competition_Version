@@ -22,6 +22,7 @@ See the Mulan PSL v2 for more details. */
 #include <cstring>
 #include <cstdint>
 #include "storage/record/record.h"
+#include "storage/record/lob_ref.h"
 #include "storage/table/table.h"
 
 class Table;
@@ -214,12 +215,15 @@ public:
     }
     // TEXTS are stored as LobRef in record; need to fetch from LOB file
     if (field_meta->type() == AttrType::TEXTS) {
-      // decode LobRef {int32 length, int64 offset}
+      // Decode LobRef in a layout-safe way to avoid padding issues
       const char *p = this->record_->data() + field_meta->offset();
-      int32_t length = 0;
-      int64_t offset = 0;
-      memcpy(&length, p, sizeof(int32_t));
-      memcpy(&offset, p + sizeof(int32_t), sizeof(int64_t));
+      LobRef ref;
+      static_assert(sizeof(LobRef) == sizeof(int32_t) + sizeof(int64_t) || sizeof(LobRef) == 16,
+                    "Unexpected LobRef size");
+      memcpy(&ref, p, sizeof(LobRef));
+
+      const int32_t length = ref.length;
+      const int64_t offset = ref.offset;
 
       if (length <= 0) {
         // empty text
