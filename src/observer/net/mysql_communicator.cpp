@@ -1033,6 +1033,10 @@ RC MysqlCommunicator::write_tuple_result(SqlResult *sql_result, vector<char> &pa
       return rc;
     }
   }
+  // 将正常读到末尾(RECORD_EOF)视为成功，避免对外暴露为 FAILURE
+  if (rc == RC::RECORD_EOF) {
+    rc = RC::SUCCESS;
+  }
   return rc;
 }
 RC MysqlCommunicator::write_chunk_result(SqlResult *sql_result, vector<char> &packet, int &affected_rows, bool &need_disconnect)
@@ -1070,6 +1074,10 @@ RC MysqlCommunicator::write_chunk_result(SqlResult *sql_result, vector<char> &pa
         return rc;
       }
     }
+  }
+  // 统一行为：将读到末尾视为成功
+  if (rc == RC::RECORD_EOF) {
+    rc = RC::SUCCESS;
   }
   return rc;
 }

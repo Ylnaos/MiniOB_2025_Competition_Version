@@ -64,6 +64,10 @@ RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt 
         if (pos != string::npos && pos + 1 < name.size()) {
           name = name.substr(pos + 1);
         }
+        // normalize: column identifiers在本项目中按小写存储，便于大小写不敏感匹配
+        for (auto &ch : name) {
+          ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+        }
         // ensure uniqueness
         if (!used.count(name)) {
           used.insert(name);
