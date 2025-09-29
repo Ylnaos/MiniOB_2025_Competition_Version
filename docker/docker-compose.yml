@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  miniob-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      cache_from:
+        - miniob:builder
+        - miniob:latest
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: miniob:latest
+    container_name: miniob-dev
+    hostname: miniob
+    environment:
+      # REPO_ADDR format for private repo: https://<username>:<password>@github.com/oceanbase/miniob.git
+      # '@' in username must be escaped to '%40'
+      # How to run:
+      #   Linux shell: export PRIVATE_KEY=$(cat ~/.ssh/id_rsa) && docker-compose up -d --build
+      #   Windows PowerShell: $env:PRIVATE_KEY=$(cat ~/.ssh/id_rsa); docker-compose up -d --build
+      - REPO_ADDR=${REPO_ADDR:-https://github.com/oceanbase/miniob.git}
+      - PRIVATE_KEY=${PRIVATE_KEY:-}
+      - TZ=Asia/Shanghai
+    ports:
+      - "10000:22"      # SSH
+      - "6789:6789"     # MiniOB server port (optional)
+    volumes:
+      - miniob-data:/data
+      - ../src:/workspace/src:cached           # Source code mount for development
+      - ../build:/workspace/build:delegated     # Build directory mount
+    networks:
+      - miniob-network
+    privileged: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-f", "/opt/miniob/bin/observer"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+
+volumes:
+  miniob-data:
+    driver: local
+
+networks:
+  miniob-network:
+    driver: bridge
