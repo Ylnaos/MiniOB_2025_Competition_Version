@@ -72,7 +72,7 @@ static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &def
         def_val.set_float(0.0f);
       } break;
       case AttrType::CHARS: {
-        def_val.set_null();
+        def_val.set_string("");  // 设置为空字符串而不是NULL
       } break;
       case AttrType::TEXTS: {
         def_val.set_null();
