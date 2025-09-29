@@ -45,26 +45,16 @@ RC UpdatePhysicalOperator::open(Trx *trx)
 
   // Pre-validate subqueries in SET expressions so schema errors are surfaced
   // even when no rows match the WHERE clause (e.g., subquery references a non-existent table).
-  // Use a dummy tuple for correlated subqueries; non-correlated ones will be cached via execute_once().
+  // 注意：这里只做语法和schema验证，不需要传递外层元组上下文
   if (!value_expressions_.empty()) {
-    const TableMeta &table_meta  = table_->table_meta();
-    const int        record_size = table_meta.record_size();
-    // prepare a zero-filled dummy record of current table schema
-    char  *dummy_buf = static_cast<char *>(calloc(1, record_size));
-    Record dummy_rec;
-    if (dummy_buf != nullptr) {
-      dummy_rec.set_data_owner(dummy_buf, record_size);
-    }
-    RowTuple dummy_tuple;
-    dummy_tuple.set_record(&dummy_rec);
-    dummy_tuple.set_schema(table_, table_meta.field_metas());
-
     std::function<RC(Expression *)> precheck_expr;
     precheck_expr = [&](Expression *expr) -> RC {
       if (expr == nullptr) return RC::SUCCESS;
       if (expr->type() == ExprType::SUBQUERY) {
         auto *subq = static_cast<SubqueryExpr *>(expr);
-        return subq->execute_with_context(&dummy_tuple);
+        // 对于非相关子查询，execute_with_context(nullptr) 会执行并缓存结果
+        // 对于相关子查询，这里不做预验证，等实际执行时再处理
+        return subq->execute_with_context(nullptr);
       }
       RC inner_rc = ExpressionIterator::iterate_child_expr(*expr, [&](std::unique_ptr<Expression> &child) -> RC {
         return precheck_expr(child.get());
