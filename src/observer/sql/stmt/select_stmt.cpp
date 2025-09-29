@@ -250,7 +250,9 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         } else {
           // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
           unordered_map<string, pair<string, string>> name_to_relattr;
-          build_view_output_mapping(db, node->selection.relations, node->selection.expressions, name_to_relattr);
+          // 注意：上面已经将视图内部的 relation 列表 swap 到 select_sql.relations 中
+          // 此处必须使用新的 relations，否则会拿到原外层的视图名，导致无法建立字段映射
+          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, name_to_relattr);
           for (auto &outer_expr : select_sql.expressions) {
             RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr);
             if (OB_FAIL(rc)) return rc;
