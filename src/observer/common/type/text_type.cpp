@@ -60,23 +60,17 @@ RC TextType::cast_to(const Value &val, AttrType type, Value &result) const
       result.set_type(AttrType::CHARS);
       return RC::SUCCESS;
     }
-    case AttrType::INTS: {
-      try {
-        int v = std::stoi(val.get_string());
-        result.set_int(v);
-        return RC::SUCCESS;
-      } catch (...) {
-        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
-      }
+    case AttrType::INTS:
+    {
+      // 宽松解析字符串到整数，与 CHAR 行为保持一致
+      result.set_int(val.get_int());
+      return RC::SUCCESS;
     }
-    case AttrType::FLOATS: {
-      try {
-        float v = std::stof(val.get_string());
-        result.set_float(v);
-        return RC::SUCCESS;
-      } catch (...) {
-        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
-      }
+    case AttrType::FLOATS:
+    {
+      // 同上，按前缀数字解析为浮点数
+      result.set_float(val.get_float());
+      return RC::SUCCESS;
     }
     default: return RC::UNIMPLEMENTED;
   }

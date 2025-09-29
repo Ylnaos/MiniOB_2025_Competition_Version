@@ -58,27 +58,17 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       result.set_type(AttrType::TEXTS);
       return RC::SUCCESS;
     }
-    case AttrType::INTS: {
-      // 允许将可解析的字符串转换为整数
-      // 使用 Value::get_int 的语义做兜底解析，和比较路径保持一致
-      // 无法解析时返回类型不匹配错误
-      try {
-        int v = std::stoi(val.get_string());
-        result.set_int(v);
-        return RC::SUCCESS;
-      } catch (...) {
-        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
-      }
+    case AttrType::INTS:
+    {
+      // 宽松解析：与比较语义保持一致，无法解析时按前缀数字转换
+      result.set_int(val.get_int());
+      return RC::SUCCESS;
     }
-    case AttrType::FLOATS: {
-      // 同上，支持字符串到浮点
-      try {
-        float v = std::stof(val.get_string());
-        result.set_float(v);
-        return RC::SUCCESS;
-      } catch (...) {
-        return RC::SCHEMA_FIELD_TYPE_MISMATCH;
-      }
+    case AttrType::FLOATS:
+    {
+      // 同上，使用 Value::get_float 处理非数字时回退为 0.0
+      result.set_float(val.get_float());
+      return RC::SUCCESS;
     }
     case AttrType::DATES: {
       // 从字符串转换为日期类型
