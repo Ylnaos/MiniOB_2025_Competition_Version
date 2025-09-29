@@ -3,6 +3,7 @@
 #include "common/value.h"
 #include "common/lang/sstream.h"
 #include "common/lang/string.h"
+#include <cmath>
 
 RC FloatType::cast_to(const Value &val, AttrType type, Value &result) const
 {
@@ -12,7 +13,9 @@ RC FloatType::cast_to(const Value &val, AttrType type, Value &result) const
       return RC::SUCCESS;
     }
     case AttrType::INTS: {
-      int int_value = static_cast<int>(val.get_float());
+      // 四舍五入到最接近的整数，保证与题目期望一致
+      float float_value = val.get_float();
+      int   int_value   = static_cast<int>(std::round(float_value));
       result.set_int(int_value);
       return RC::SUCCESS;
     }
@@ -36,4 +39,3 @@ RC FloatType::cast_to(const Value &val, AttrType type, Value &result) const
     }
   }
 }
-
