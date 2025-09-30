@@ -314,7 +314,7 @@ RC LogicalPlanGenerator::create_plan(InsertStmt *insert_stmt, unique_ptr<Logical
 {
   Table *table = insert_stmt->table();
 
-  InsertLogicalOperator *insert_operator = new InsertLogicalOperator(table, insert_stmt->values_rows());
+  InsertLogicalOperator *insert_operator = new InsertLogicalOperator(table, insert_stmt->values_rows(), insert_stmt->from_view());
   logical_operator.reset(insert_operator);
   return RC::SUCCESS;
 }

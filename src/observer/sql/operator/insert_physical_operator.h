@@ -26,7 +26,7 @@ class InsertStmt;
 class InsertPhysicalOperator : public PhysicalOperator
 {
 public:
-  InsertPhysicalOperator(Table *table, vector<vector<Value>> &&values_rows);
+  InsertPhysicalOperator(Table *table, vector<vector<Value>> &&values_rows, bool from_view = false);
 
   virtual ~InsertPhysicalOperator() = default;
 
@@ -43,4 +43,5 @@ public:
 private:
   Table                              *table_ = nullptr;
   vector<vector<Value>>               values_rows_;
+  bool                                from_view_ = false;  // 标识是否来自视图插入
 };

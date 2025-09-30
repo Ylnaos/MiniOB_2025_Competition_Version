@@ -232,8 +232,8 @@ static RC rewrite_insert_for_view(
 }
 }
 
-InsertStmt::InsertStmt(Table *table, vector<vector<Value>> values_rows)
-    : table_(table), values_rows_(std::move(values_rows))
+InsertStmt::InsertStmt(Table *table, vector<vector<Value>> values_rows, bool from_view)
+    : table_(table), values_rows_(std::move(values_rows)), from_view_(from_view)
 {}
 
 RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
@@ -248,6 +248,7 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
   // check whether the table exists; if not, try view rewrite (insert into view -> base table)
   Table *table = db->find_table(table_name);
   vector<vector<Value>> normalized_rows;
+  bool from_view = false;
 
   if (nullptr == table) {
     RC rewrite_rc = rewrite_insert_for_view(db, table_name, inserts, table, normalized_rows);
@@ -255,6 +256,7 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
       LOG_WARN("failed to rewrite insert into view. db=%s, view=%s, rc=%s", db->name(), table_name, strrc(rewrite_rc));
       return rewrite_rc;
     }
+    from_view = true;  // 标记为视图插入
   } else {
     normalized_rows = inserts.rows;
   }
@@ -276,6 +278,6 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
   }
 
   // everything alright
-  stmt = new InsertStmt(table, std::move(normalized_rows));
+  stmt = new InsertStmt(table, std::move(normalized_rows), from_view);
   return RC::SUCCESS;
 }

@@ -28,7 +28,7 @@ class InsertStmt : public Stmt
 {
 public:
   InsertStmt() = default;
-  InsertStmt(Table *table, vector<vector<Value>> values_rows);
+  InsertStmt(Table *table, vector<vector<Value>> values_rows, bool from_view = false);
 
   StmtType type() const override { return StmtType::INSERT; }
 
@@ -38,8 +38,10 @@ public:
 public:
   Table       *table() const { return table_; }
   const vector<vector<Value>> &values_rows() const { return values_rows_; }
+  bool         from_view() const { return from_view_; }
 
 private:
   Table                      *table_ = nullptr;
   vector<vector<Value>>       values_rows_;
+  bool                        from_view_ = false;  // 标识是否来自视图插入重写
 };

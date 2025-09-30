@@ -18,8 +18,8 @@ See the Mulan PSL v2 for more details. */
 
 using namespace std;
 
-InsertPhysicalOperator::InsertPhysicalOperator(Table *table, vector<vector<Value>> &&values_rows)
-    : table_(table), values_rows_(std::move(values_rows))
+InsertPhysicalOperator::InsertPhysicalOperator(Table *table, vector<vector<Value>> &&values_rows, bool from_view)
+    : table_(table), values_rows_(std::move(values_rows)), from_view_(from_view)
 {}
 
 RC InsertPhysicalOperator::open(Trx *trx)
@@ -29,7 +29,7 @@ RC InsertPhysicalOperator::open(Trx *trx)
 
   for (const auto &row_values : values_rows_) {
     Record record;
-    rc = table_->make_record(static_cast<int>(row_values.size()), row_values.data(), record);
+    rc = table_->make_record(static_cast<int>(row_values.size()), row_values.data(), record, from_view_);
     if (rc != RC::SUCCESS) {
       LOG_WARN("failed to make record. rc=%s", strrc(rc));
       break;

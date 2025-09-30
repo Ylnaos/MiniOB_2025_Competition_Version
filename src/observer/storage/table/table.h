@@ -75,8 +75,9 @@ public:
    * @param value_num 字段的个数
    * @param values    每个字段的值
    * @param record    生成的记录数据
+   * @param skip_not_null_check 是否跳过 NOT NULL 检查（用于视图插入）
    */
-  RC make_record(int value_num, const Value *values, Record &record);
+  RC make_record(int value_num, const Value *values, Record &record, bool skip_not_null_check = false);
 
   /**
    * @brief 在当前的表中插入一条记录
@@ -123,7 +124,7 @@ public:
 
 public:
   // 提升为公共接口，供 UPDATE/INSERT 等路径统一安全落盘字段值
-  RC set_value_to_record(char *record_data, const Value &value, const FieldMeta *field);
+  RC set_value_to_record(char *record_data, const Value &value, const FieldMeta *field, bool skip_not_null_check = false);
 
 private:
   // RC init_record_handler(const char *base_dir);

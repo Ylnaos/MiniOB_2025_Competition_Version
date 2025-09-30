@@ -235,7 +235,7 @@ const char *Table::name() const { return table_meta_.name(); }
 
 const TableMeta &Table::table_meta() const { return table_meta_; }
 
-RC Table::make_record(int value_num, const Value *values, Record &record)
+RC Table::make_record(int value_num, const Value *values, Record &record, bool skip_not_null_check)
 {
   RC rc = RC::SUCCESS;
   // 检查字段类型是否一致
@@ -254,7 +254,7 @@ RC Table::make_record(int value_num, const Value *values, Record &record)
     const FieldMeta *field = table_meta_.field(i + normal_field_start_index);
     const Value &    value = values[i];
     // 交由 set_value_to_record 统一处理 NULL 与类型转换
-    rc = set_value_to_record(record_data, value, field);
+    rc = set_value_to_record(record_data, value, field, skip_not_null_check);
   }
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to make record. table name:%s", table_meta_.name());
@@ -266,16 +266,16 @@ RC Table::make_record(int value_num, const Value *values, Record &record)
   return RC::SUCCESS;
 }
 
-RC Table::set_value_to_record(char *record_data, const Value &value, const FieldMeta *field)
+RC Table::set_value_to_record(char *record_data, const Value &value, const FieldMeta *field, bool skip_not_null_check)
 {
   // 处理 NULL 值
   if (value.is_null()) {
-    // 注意：即使字段标记为不允许NULL，在某些场景（如视图插入）下仍然需要允许NULL值
-    // 这里放宽检查，允许将NULL写入记录（通过null bitmap标记）
-    // if (!field->nullable()) {
-    //   LOG_WARN("field not nullable. field=%s", field->name());
-    //   return RC::INVALID_ARGUMENT;
-    // }
+    // 检查字段是否允许 NULL（视图插入时可以跳过此检查）
+    if (!skip_not_null_check && !field->nullable()) {
+      // 对于 NOT NULL 字段，不允许插入 NULL 值
+      LOG_WARN("field not nullable. field=%s", field->name());
+      return RC::INVALID_ARGUMENT;
+    }
     int nb_off = table_meta_.null_bitmap_offset();
     int fid    = field->field_id();
     if (nb_off >= 0 && fid >= 0) {

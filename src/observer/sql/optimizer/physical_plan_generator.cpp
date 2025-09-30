@@ -274,7 +274,7 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
 RC PhysicalPlanGenerator::create_plan(InsertLogicalOperator &insert_oper, unique_ptr<PhysicalOperator> &oper, Session* session)
 {
   Table *table = insert_oper.table();
-  InsertPhysicalOperator *insert_phy_oper = new InsertPhysicalOperator(table, std::move(insert_oper.values_rows()));
+  InsertPhysicalOperator *insert_phy_oper = new InsertPhysicalOperator(table, std::move(insert_oper.values_rows()), insert_oper.from_view());
   oper.reset(insert_phy_oper);
   return RC::SUCCESS;
 }
