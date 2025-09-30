@@ -63,47 +63,10 @@ static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &def
       return RC::INTERNAL;
     }
 
+    // 对于视图插入时未指定的列，统一填充NULL值
+    // 这样符合标准SQL语义，且不影响COUNT等聚合函数的结果
     Value def_val;
-    switch (field->type()) {
-      case AttrType::INTS: {
-        def_val.set_int(0);
-      } break;
-      case AttrType::FLOATS: {
-        def_val.set_float(0.0f);
-      } break;
-      case AttrType::CHARS: {
-        if (field->nullable()) {
-          def_val.set_null();
-        } else {
-          // 对于不允许NULL的CHARS字段，填充空字符串
-          // 使用set_string创建空串，让系统自动处理长度
-          def_val.set_string("", 0);
-        }
-      } break;
-      case AttrType::TEXTS: {
-        if (field->nullable()) {
-          def_val.set_null();
-        } else {
-          // 对于不允许NULL的TEXTS字段，填充空字符串
-          def_val.set_string("", 0);
-          def_val.set_type(AttrType::TEXTS);
-        }
-      } break;
-      case AttrType::BOOLEANS: {
-        def_val.set_boolean(false);
-      } break;
-      case AttrType::DATES: {
-        def_val.set_date(19700101);  // 选取合法的日期作为缺省填充值
-      } break;
-      case AttrType::NULLS: {
-        def_val.set_null();
-      } break;
-      default: {
-        LOG_WARN("unsupported field type for default fill. table=%s field=%s type=%d",
-            table_meta.name(), field->name(), static_cast<int>(field->type()));
-        return RC::UNIMPLEMENTED;
-      }
-    }
+    def_val.set_null();
 
     defaults[i] = std::move(def_val);
   }

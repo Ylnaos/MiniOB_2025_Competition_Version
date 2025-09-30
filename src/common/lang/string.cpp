@@ -271,8 +271,9 @@ char *substr(const char *s, int n1, int n2)
 string double_to_str(double v)
 {
   char buf[256];
-  double rounded_v = round(v * 100.0) / 100.0;
-  snprintf(buf, sizeof(buf), "%.2f", rounded_v);
+  // 使用snprintf的%.2f会自动进行四舍五入
+  // 不需要手动round，避免多次舍入导致精度问题
+  snprintf(buf, sizeof(buf), "%.2f", v);
   size_t len = strlen(buf);
   while (buf[len - 1] == '0') {
     len--;
