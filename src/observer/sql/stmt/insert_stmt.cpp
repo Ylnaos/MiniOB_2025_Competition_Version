@@ -75,14 +75,17 @@ static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &def
         if (field->nullable()) {
           def_val.set_null();
         } else {
-          def_val.set_string("");
+          // 对于不允许NULL的CHARS字段，填充空字符串
+          // 使用set_string创建空串，让系统自动处理长度
+          def_val.set_string("", 0);
         }
       } break;
       case AttrType::TEXTS: {
         if (field->nullable()) {
           def_val.set_null();
         } else {
-          def_val.set_string("");
+          // 对于不允许NULL的TEXTS字段，填充空字符串
+          def_val.set_string("", 0);
           def_val.set_type(AttrType::TEXTS);
         }
       } break;

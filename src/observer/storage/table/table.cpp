@@ -372,7 +372,15 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
 
     if (field->type() == AttrType::CHARS) {
       // CHARS：尽量包含末尾'\0'
-      copy_len = std::min(writable_size, data_len + 1);
+      if (data_len == 0) {
+        // 空字符串特殊处理：只写入'\0'，不调用memcpy
+        if (writable_size > 0) {
+          record_data[field_offset] = '\0';
+        }
+        copy_len = 0;
+      } else {
+        copy_len = std::min(writable_size, data_len + 1);
+      }
     } else if (field->type() == AttrType::TEXTS) {
       // TEXT：仅按长度截断，不强制添加'\0'
       copy_len = std::min(writable_size, data_len);
@@ -382,7 +390,13 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     }
 
     if (copy_len > 0) {
-      memcpy(record_data + field_offset, src->data(), copy_len);
+      char *src_data = src->data();
+      if (src_data == nullptr) {
+        LOG_WARN("src->data() is nullptr when copying field data. field=%s, type=%d, length=%d",
+            field->name(), static_cast<int>(src->attr_type()), src->length());
+        return RC::INTERNAL;
+      }
+      memcpy(record_data + field_offset, src_data, copy_len);
     }
     return RC::SUCCESS;
   }
