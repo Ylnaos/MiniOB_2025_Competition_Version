@@ -72,10 +72,19 @@ static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &def
         def_val.set_float(0.0f);
       } break;
       case AttrType::CHARS: {
-        def_val.set_null();
+        if (field->nullable()) {
+          def_val.set_null();
+        } else {
+          def_val.set_string("");
+        }
       } break;
       case AttrType::TEXTS: {
-        def_val.set_null();
+        if (field->nullable()) {
+          def_val.set_null();
+        } else {
+          def_val.set_string("");
+          def_val.set_type(AttrType::TEXTS);
+        }
       } break;
       case AttrType::BOOLEANS: {
         def_val.set_boolean(false);
