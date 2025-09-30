@@ -36,7 +36,8 @@ class IndexMeta
 public:
   IndexMeta() = default;
 
-  RC init(const char *name, span<const FieldMeta> fields, bool unique = false);
+  RC init(const char *name, span<const FieldMeta> fields, bool unique = false, bool is_vector = false,
+      const string &distance = string(), const string &index_type = string(), int lists = 0, int probes = 0);
 
 public:
   const char          *name() const;
@@ -44,6 +45,11 @@ public:
   const char          *field() const;
   const vector<string> &fields() const { return fields_; }
   bool                  unique() const { return unique_; }
+  bool                  is_vector_index() const { return is_vector_index_; }
+  const string         &distance_func() const { return distance_func_; }
+  const string         &vector_index_type() const { return vector_index_type_; }
+  int                    lists() const { return lists_; }
+  int                    probes() const { return probes_; }
 
   void desc(ostream &os) const;
 
@@ -55,4 +61,9 @@ protected:
   string         name_;    // index's name
   vector<string> fields_;  // field names (ordered)
   bool           unique_ = false; // unique index flag
+  bool           is_vector_index_ = false;
+  string         distance_func_;
+  string         vector_index_type_;
+  int            lists_  = 0;
+  int            probes_ = 0;
 };

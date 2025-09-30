@@ -16,6 +16,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/type/attr_type.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_iterator.h"
+#include "common/type/vector_type.h"
+#include <algorithm>
 #include <cmath>
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
@@ -622,17 +624,18 @@ bool ArithmeticExpr::equal(const Expression &other) const
 AttrType ArithmeticExpr::value_type() const
 {
   if (!right_) {
-    // 一元负号：结果类型与子表达式一致
     return left_->value_type();
   }
 
-  // 除法：即使左右都是 INT，也返回 FLOATS，避免整数截断
+  if (left_->value_type() == AttrType::VECTORS && right_->value_type() == AttrType::VECTORS) {
+    return AttrType::VECTORS;
+  }
+
   if (arithmetic_type_ == Type::DIV) {
     return AttrType::FLOATS;
   }
 
-  // 其余运算：双 INT 产出 INT，否则 FLOAT
-  if ((left_->value_type() == AttrType::INTS) && (right_->value_type() == AttrType::INTS)) {
+  if (left_->value_type() == AttrType::INTS && right_->value_type() == AttrType::INTS) {
     return AttrType::INTS;
   }
 
@@ -943,6 +946,39 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
 
   const AttrType target_type = value_type();
 
+  if (target_type == AttrType::VECTORS) {
+    if (arithmetic_type_ == Type::NEGATIVE) {
+      return RC::UNIMPLEMENTED;
+    }
+    int rows = std::max(left_column.count(), right_column.count());
+    if (rows <= 0) {
+      rows = left_column.count();
+    }
+    if (rows <= 0) {
+      rows = right_column.count();
+    }
+    if (rows <= 0) {
+      rows = 1;
+    }
+    column.init(target_type, left_column.attr_len(), rows);
+    column.set_column_type(Column::Type::NORMAL_COLUMN);
+    for (int i = 0; i < rows; ++i) {
+      Value left_value = left_column.get_value(i);
+      Value right_value = right_column.get_value(i);
+      Value result;
+      result.set_type(AttrType::VECTORS);
+      rc = calc_value(left_value, right_value, result);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      rc = column.append_value(result);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
+    return RC::SUCCESS;
+  }
+
   if (arithmetic_type_ == Type::NEGATIVE) {
     const bool left_const = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
     column.init(target_type, left_column.attr_len(), left_column.count());
@@ -952,7 +988,6 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
     } else {
       rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
     }
-    // 结果行数与左列一致
     column.set_count(left_column.count());
   } else {
     const bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
@@ -972,7 +1007,6 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
       column.set_column_type(Column::Type::NORMAL_COLUMN);
       rc = execute_calc<false, false>(left_column, right_column, column, arithmetic_type_, target_type);
     }
-    // 设置结果行数
     if (left_const && !right_const) {
       column.set_count(right_column.count());
     } else {
@@ -1105,7 +1139,7 @@ RC AggregateExpr::type_from_string(const char *type_str, AggregateExpr::Type &ty
 // SubqueryExpr
 
 SubqueryExpr::SubqueryExpr(std::unique_ptr<ParsedSqlNode> subquery_node)
-    : subquery_node_(std::move(subquery_node))
+    : executed_(false), subquery_node_(std::move(subquery_node))
 {
 }
 
@@ -1399,6 +1433,54 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       value.set_string(out.c_str());
       return RC::SUCCESS;
     }
+    case FuncType::L2_DISTANCE:
+    case FuncType::COSINE_DISTANCE:
+    case FuncType::INNER_PRODUCT: {
+      if (child2_ == nullptr) {
+        return RC::INVALID_ARGUMENT;
+      }
+      Value rhs;
+      rc = child2_->get_value(tuple, rhs);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      if (arg.attr_type() != AttrType::VECTORS || rhs.attr_type() != AttrType::VECTORS) {
+        return RC::INVALID_ARGUMENT;
+      }
+
+      float result_val = 0.0f;
+      switch (func_type_) {
+        case FuncType::L2_DISTANCE: {
+          result_val = VectorType::l2_distance(arg, rhs);
+          if (result_val < 0.0f) {
+            return RC::INVALID_ARGUMENT;
+          }
+        } break;
+        case FuncType::COSINE_DISTANCE: {
+          result_val = VectorType::cosine_distance(arg, rhs);
+          if (result_val < 0.0f) {
+            return RC::INVALID_ARGUMENT;
+          }
+        } break;
+        case FuncType::INNER_PRODUCT: {
+          const char *left_data  = arg.data();
+          const char *right_data = rhs.data();
+          if (left_data == nullptr || right_data == nullptr) {
+            return RC::INVALID_ARGUMENT;
+          }
+          int32_t left_dim  = *(const int32_t *)left_data;
+          int32_t right_dim = *(const int32_t *)right_data;
+          if (left_dim != right_dim) {
+            return RC::INVALID_ARGUMENT;
+          }
+          result_val = VectorType::inner_product(arg, rhs);
+        } break;
+        default: break;
+      }
+
+      value.set_float(result_val);
+      return RC::SUCCESS;
+    }
   }
   return RC::UNIMPLEMENTED;
 }
@@ -1523,6 +1605,54 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       value.set_string(out.c_str());
       return RC::SUCCESS;
     }
+    case FuncType::L2_DISTANCE:
+    case FuncType::COSINE_DISTANCE:
+    case FuncType::INNER_PRODUCT: {
+      if (child2_ == nullptr) {
+        return RC::INVALID_ARGUMENT;
+      }
+      Value rhs;
+      rc = child2_->try_get_value(rhs);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      if (arg.attr_type() != AttrType::VECTORS || rhs.attr_type() != AttrType::VECTORS) {
+        return RC::INVALID_ARGUMENT;
+      }
+
+      float result_val = 0.0f;
+      switch (func_type_) {
+        case FuncType::L2_DISTANCE: {
+          result_val = VectorType::l2_distance(arg, rhs);
+          if (result_val < 0.0f) {
+            return RC::INVALID_ARGUMENT;
+          }
+        } break;
+        case FuncType::COSINE_DISTANCE: {
+          result_val = VectorType::cosine_distance(arg, rhs);
+          if (result_val < 0.0f) {
+            return RC::INVALID_ARGUMENT;
+          }
+        } break;
+        case FuncType::INNER_PRODUCT: {
+          const char *left_data  = arg.data();
+          const char *right_data = rhs.data();
+          if (left_data == nullptr || right_data == nullptr) {
+            return RC::INVALID_ARGUMENT;
+          }
+          int32_t left_dim  = *(const int32_t *)left_data;
+          int32_t right_dim = *(const int32_t *)right_data;
+          if (left_dim != right_dim) {
+            return RC::INVALID_ARGUMENT;
+          }
+          result_val = VectorType::inner_product(arg, rhs);
+        } break;
+        default: break;
+      }
+
+      value.set_float(result_val);
+      return RC::SUCCESS;
+    }
   }
   return RC::UNIMPLEMENTED;
 }
@@ -1539,6 +1669,74 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
   RC rc = child_->get_column(chunk, arg_col);
   if (OB_FAIL(rc)) {
     return rc;
+  }
+  if (func_type_ == FuncType::L2_DISTANCE || func_type_ == FuncType::COSINE_DISTANCE || func_type_ == FuncType::INNER_PRODUCT) {
+    if (child2_ == nullptr) {
+      return RC::INVALID_ARGUMENT;
+    }
+    Column rhs_col;
+    rc = child2_->get_column(chunk, rhs_col);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+
+    int chunk_rows = chunk.rows();
+    if (chunk_rows <= 0) {
+      chunk_rows = std::max(arg_col.count(), rhs_col.count());
+    }
+    int rows = std::max(chunk_rows, std::max(arg_col.count(), rhs_col.count()));
+    if (rows <= 0) {
+      rows = 1;
+    }
+
+    column.init(value_type(), value_length(), rows);
+    column.set_column_type(Column::Type::NORMAL_COLUMN);
+
+    for (int i = 0; i < rows; ++i) {
+      Value left_val  = arg_col.get_value(i);
+      Value right_val = rhs_col.get_value(i);
+      if (left_val.attr_type() != AttrType::VECTORS || right_val.attr_type() != AttrType::VECTORS) {
+        return RC::INVALID_ARGUMENT;
+      }
+
+      float result_val = 0.0f;
+      switch (func_type_) {
+        case FuncType::L2_DISTANCE: {
+          result_val = VectorType::l2_distance(left_val, right_val);
+          if (result_val < 0.0f) {
+            return RC::INVALID_ARGUMENT;
+          }
+        } break;
+        case FuncType::COSINE_DISTANCE: {
+          result_val = VectorType::cosine_distance(left_val, right_val);
+          if (result_val < 0.0f) {
+            return RC::INVALID_ARGUMENT;
+          }
+        } break;
+        case FuncType::INNER_PRODUCT: {
+          const char *left_data  = left_val.data();
+          const char *right_data = right_val.data();
+          if (left_data == nullptr || right_data == nullptr) {
+            return RC::INVALID_ARGUMENT;
+          }
+          int32_t left_dim  = *(const int32_t *)left_data;
+          int32_t right_dim = *(const int32_t *)right_data;
+          if (left_dim != right_dim) {
+            return RC::INVALID_ARGUMENT;
+          }
+          result_val = VectorType::inner_product(left_val, right_val);
+        } break;
+        default: break;
+      }
+
+      Value out;
+      out.set_float(result_val);
+      rc = column.append_value(out);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
+    return RC::SUCCESS;
   }
   Column scale_col; // for ROUND scale
   bool   has_scale = (func_type_ == FuncType::ROUND) && (child2_ != nullptr);
@@ -1656,6 +1854,11 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         }
         out.set_string(out_s.c_str());
       } break;
+      case FuncType::L2_DISTANCE:
+      case FuncType::COSINE_DISTANCE:
+      case FuncType::INNER_PRODUCT: {
+        return RC::INVALID_ARGUMENT;
+      } break;
     }
     column.append_value(out);
   }
@@ -1737,8 +1940,8 @@ if (!did_substitute) {
     return rc;
   }
 
-  // 娓呯┖骞舵敹闆嗙粨鏋?
-results_.clear();
+  // 娓呯┖骞舵敹闆嗙粨鏋滐紙浠呬负鐩稿叧瀛愭煡璇㈡竻绌猴級
+  results_.clear();
   result_type_ = AttrType::UNDEFINED;
   result_len_  = -1;
 

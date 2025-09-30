@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <utility>
 
 #include "common/log/log.h"
 #include "common/lang/string.h"
@@ -119,6 +120,11 @@ static Expression *g_join_on_expr = nullptr;
         FORMAT
         PRIMARY
         KEY
+        WITH
+        DISTANCE_KW
+        TYPE_KW
+        LISTS_KW
+        PROBES_KW
         IN
         NOT
         JOIN
@@ -140,6 +146,9 @@ static Expression *g_join_on_expr = nullptr;
         LENGTH_F
         ROUND_F
         DATE_FORMAT_F
+        L2_DISTANCE_F
+        COSINE_DISTANCE_F
+        INNER_PRODUCT_F
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -165,6 +174,7 @@ static Expression *g_join_on_expr = nullptr;
   char *                                     cstring;
   int                                        number;
   float                                      floats;
+  VectorIndexOptions *                       vector_index_options;
 }
 
 %destructor { delete $$; } <condition>
@@ -184,6 +194,7 @@ static Expression *g_join_on_expr = nullptr;
 %token <floats> FLOAT
 %token <cstring> ID
 %token <cstring> SSS
+%token <cstring> VECTOR_LITERAL
 //非终结符
 
 /** type 定义了各种解析后的结果输出的是什么类型。类型对应了 union 中的定义的成员变量名称 **/
@@ -216,6 +227,9 @@ static Expression *g_join_on_expr = nullptr;
 %type <expression>          expression
 %type <expression>          function_expression
 %type <expression>          aggregate_expression
+%type <vector_index_options> vector_index_with_opt
+%type <vector_index_options> vector_index_option_list
+%type <vector_index_options> vector_index_option
 %type <expression_list>     expression_list
 %type <expression>          select_item
 %type <expression_list>     group_by
@@ -369,7 +383,35 @@ desc_table_stmt:
     ;
 
 create_index_stmt:    /*create index 语句的语法解析树*/
-    CREATE INDEX ID ON ID LBRACE attr_list RBRACE
+    CREATE VECTOR_T INDEX ID ON ID LBRACE attr_list RBRACE vector_index_with_opt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      if ($8 != nullptr) {
+        create_index.attribute_names.swap(*$8);
+        delete $8;
+      }
+      create_index.unique = false;
+      create_index.vector_index = true;
+      if ($10 != nullptr) {
+        if ($10->has_distance) {
+          create_index.distance_func = std::move($10->distance);
+        }
+        if ($10->has_type) {
+          create_index.vector_index_type = std::move($10->index_type);
+        }
+        if ($10->has_lists) {
+          create_index.lists = $10->lists;
+        }
+        if ($10->has_probes) {
+          create_index.probes = $10->probes;
+        }
+        delete $10;
+      }
+    }
+    | CREATE INDEX ID ON ID LBRACE attr_list RBRACE
     {
       $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
       CreateIndexSqlNode &create_index = $$->create_index;
@@ -392,6 +434,109 @@ create_index_stmt:    /*create index 语句的语法解析树*/
         delete $8;
       }
       create_index.unique = true;
+    }
+    ;
+
+vector_index_with_opt:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | WITH LBRACE vector_index_option_list RBRACE
+    {
+      $$ = $3;
+    }
+    ;
+
+vector_index_option_list:
+    vector_index_option
+    {
+      $$ = $1;
+    }
+    | vector_index_option_list COMMA vector_index_option
+    {
+      if ($1 == nullptr) {
+        $$ = $3;
+      } else {
+        if ($3 != nullptr) {
+          if ($3->has_distance) {
+            $1->has_distance = true;
+            $1->distance = std::move($3->distance);
+          }
+          if ($3->has_type) {
+            $1->has_type = true;
+            $1->index_type = std::move($3->index_type);
+          }
+          if ($3->has_lists) {
+            $1->has_lists = true;
+            $1->lists = $3->lists;
+          }
+          if ($3->has_probes) {
+            $1->has_probes = true;
+            $1->probes = $3->probes;
+          }
+          delete $3;
+        }
+        $$ = $1;
+      }
+    }
+    ;
+
+vector_index_option:
+    DISTANCE_KW EQ L2_DISTANCE_F
+    {
+      auto *opt = new VectorIndexOptions();
+      opt->has_distance = true;
+      opt->distance = "l2_distance";
+      $$ = opt;
+    }
+    | DISTANCE_KW EQ COSINE_DISTANCE_F
+    {
+      auto *opt = new VectorIndexOptions();
+      opt->has_distance = true;
+      opt->distance = "cosine_distance";
+      $$ = opt;
+    }
+    | DISTANCE_KW EQ INNER_PRODUCT_F
+    {
+      auto *opt = new VectorIndexOptions();
+      opt->has_distance = true;
+      opt->distance = "inner_product";
+      $$ = opt;
+    }
+    | DISTANCE_KW EQ ID
+    {
+      auto *opt = new VectorIndexOptions();
+      opt->has_distance = true;
+      string tmp($3);
+      free($3);
+      common::str_to_lower(tmp);
+      opt->distance = std::move(tmp);
+      $$ = opt;
+    }
+    | TYPE_KW EQ ID
+    {
+      auto *opt = new VectorIndexOptions();
+      opt->has_type = true;
+      string tmp($3);
+      free($3);
+      common::str_to_lower(tmp);
+      opt->index_type = std::move(tmp);
+      $$ = opt;
+    }
+    | LISTS_KW EQ number
+    {
+      auto *opt = new VectorIndexOptions();
+      opt->has_lists = true;
+      opt->lists = $3;
+      $$ = opt;
+    }
+    | PROBES_KW EQ number
+    {
+      auto *opt = new VectorIndexOptions();
+      opt->has_probes = true;
+      opt->probes = $3;
+      $$ = opt;
     }
     ;
 
@@ -623,6 +768,10 @@ value:
       char *tmp = common::substr($1,1,strlen($1)-2);
       $$ = new Value(tmp);
       free(tmp);
+    }
+    | VECTOR_LITERAL {
+      $$ = new Value($1);
+      @$ = @1;
     }
     ;
 nullable_opt:
@@ -927,6 +1076,21 @@ function_expression:
         // DATE_FORMAT(date_expr, format_expr)
         // 保留第二个参数(format)传入表达式，供执行阶段使用
         $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DATE_FORMAT, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | L2_DISTANCE_F LBRACE expression COMMA expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::L2_DISTANCE, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | COSINE_DISTANCE_F LBRACE expression COMMA expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::COSINE_DISTANCE, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | INNER_PRODUCT_F LBRACE expression COMMA expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::INNER_PRODUCT, $3, $5);
         $$->set_name(token_name(sql_string, &@$));
       }
     ;

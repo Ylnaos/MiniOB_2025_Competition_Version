@@ -352,6 +352,22 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     return RC::SUCCESS;
   }
 
+  if (field->type() == AttrType::VECTORS) {
+    if (src->attr_type() != AttrType::VECTORS) {
+      LOG_WARN("vector field expects vector value. field=%s", field->name());
+      return RC::INVALID_ARGUMENT;
+    }
+    const size_t expected_len = static_cast<size_t>(field->len());
+    const size_t actual_len   = static_cast<size_t>(src->length());
+    if (expected_len != actual_len) {
+      LOG_WARN("vector dimension mismatch. field=%s, expect bytes=%zu, actual=%zu",
+          field->name(), expected_len, actual_len);
+      return RC::INVALID_ARGUMENT;
+    }
+    memcpy(record_data + field->offset(), src->data(), expected_len);
+    return RC::SUCCESS;
+  }
+
   // 安全写入：计算该字段在记录缓冲区内的可写范围，避免越界
   {
     const size_t record_size   = table_meta_.record_size();
@@ -415,9 +431,10 @@ RC Table::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode m
   return engine_->get_chunk_scanner(scanner, trx, mode);
 }
 
-RC Table::create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique)
+RC Table::create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique,
+    bool vector_index, const string &distance_func, const string &index_type, int lists, int probes)
 {
-  return engine_->create_index(trx, field_metas, index_name, unique);
+  return engine_->create_index(trx, field_metas, index_name, unique, vector_index, distance_func, index_type, lists, probes);
 }
 
 RC Table::delete_record(const Record &record)

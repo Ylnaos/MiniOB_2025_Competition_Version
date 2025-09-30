@@ -19,6 +19,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/sstream.h"
 #include "common/lang/string.h"
 #include "common/log/log.h"
+#include "common/type/vector_type.h"
 
 Value::Value(int val) { set_int(val); }
 
@@ -26,7 +27,13 @@ Value::Value(float val) { set_float(val); }
 
 Value::Value(bool val) { set_boolean(val); }
 
-Value::Value(const char *s, int len /*= 0*/) { set_string(s, len); }
+Value::Value(const char *s, int len /*= 0*/) {
+  if (is_vector_string(s)) {
+    set_vector(s);
+  } else {
+    set_string(s, len);
+  }
+}
 
 Value::Value(const string_t& s) { set_string(s.data(), s.size()); }
 
@@ -38,7 +45,8 @@ Value::Value(const Value &other)
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
     case AttrType::CHARS:
-    case AttrType::TEXTS: {
+    case AttrType::TEXTS:
+    case AttrType::VECTORS: {
       set_string_from_other(other);
     } break;
 
@@ -69,7 +77,8 @@ Value &Value::operator=(const Value &other)
   this->own_data_  = other.own_data_;
   switch (this->attr_type_) {
     case AttrType::CHARS:
-    case AttrType::TEXTS: {
+    case AttrType::TEXTS:
+    case AttrType::VECTORS: {
       set_string_from_other(other);
     } break;
 
@@ -100,6 +109,7 @@ void Value::reset()
   switch (attr_type_) {
     case AttrType::CHARS:
     case AttrType::TEXTS:
+    case AttrType::VECTORS:
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
         value_.pointer_value_ = nullptr;
@@ -138,6 +148,16 @@ void Value::set_data(char *data, int length)
     case AttrType::DATES: {
       value_.int_value_ = *(int32_t *)data;
       length_           = length;
+    } break;
+    case AttrType::VECTORS: {
+      // Vectors are stored as pointer data with variable length
+      int dimension = *(int32_t*)data;
+      int total_size = sizeof(int32_t) + dimension * sizeof(float);
+      char *buffer = new char[total_size];
+      memcpy(buffer, data, total_size);
+      value_.pointer_value_ = buffer;
+      length_ = total_size;
+      own_data_ = true;
     } break;
     default: {
       LOG_WARN("unknown data type: %d", attr_type_);
@@ -238,6 +258,10 @@ void Value::set_value(const Value &value)
     case AttrType::NULLS: {
       set_null();
     } break;
+    case AttrType::VECTORS: {
+      // Copy vector data
+      *this = value;
+    } break;
     default: {
       ASSERT(false, "got an invalid value type");
     } break;
@@ -247,10 +271,18 @@ void Value::set_value(const Value &value)
 void Value::set_string_from_other(const Value &other)
 {
   ASSERT(attr_type_ == AttrType::CHARS || attr_type_ == AttrType::TEXTS, "attr type is not string type");
-  if (own_data_ && other.value_.pointer_value_ != nullptr && length_ != 0) {
-    this->value_.pointer_value_ = new char[this->length_ + 1];
-    memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
-    this->value_.pointer_value_[this->length_] = '\0';
+  if (own_data_ && other.value_.pointer_value_ != nullptr) {
+    if (length_ != 0) {
+      this->value_.pointer_value_ = new char[this->length_ + 1];
+      memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
+      this->value_.pointer_value_[this->length_] = '\0';
+    } else {
+      // 处理空字符串的情况
+      this->value_.pointer_value_ = new char[1];
+      this->value_.pointer_value_[0] = '\0';
+    }
+  } else {
+    this->value_.pointer_value_ = other.value_.pointer_value_;
   }
 }
 
@@ -260,7 +292,8 @@ char *Value::data() const
     case AttrType::CHARS: {
       return value_.pointer_value_;
     } break;
-    case AttrType::TEXTS: {
+    case AttrType::TEXTS:
+    case AttrType::VECTORS: {
       return value_.pointer_value_;
     } break;
     default: {
@@ -443,4 +476,67 @@ int32_t Value::get_date() const
     }
   }
   return 0;
+}
+
+void Value::set_vector(const char *s)
+{
+  reset();
+  if (s == nullptr) {
+    attr_type_ = AttrType::NULLS;
+    return;
+  }
+
+  string literal(s);
+  common::strip(literal);
+
+  VectorType vector_type;
+  RC rc = vector_type.set_value_from_str(*this, literal);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to parse vector literal: %s", literal.c_str());
+    set_string(s);
+  }
+}
+
+bool Value::is_vector_string(const char *s)
+{
+  if (s == nullptr) {
+    return false;
+  }
+
+  string literal(s);
+  common::strip(literal);
+  if (literal.size() < 2 || literal.front() != '[' || literal.back() != ']') {
+    return false;
+  }
+
+  string inner = literal.substr(1, literal.size() - 2);
+  common::strip(inner);
+  if (inner.empty()) {
+    return false;
+  }
+
+  stringstream ss(inner);
+  string       token;
+  size_t       count = 0;
+  while (std::getline(ss, token, ',')) {
+    common::strip(token);
+    if (token.empty()) {
+      return false;
+    }
+    try {
+      size_t parsed = 0;
+      std::stof(token, &parsed);
+      if (parsed != token.size()) {
+        return false;
+      }
+    } catch (...) {
+      return false;
+    }
+    count++;
+    if (count > 16000) {
+      return false;
+    }
+  }
+
+  return count > 0;
 }

@@ -73,8 +73,12 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     }
 
     // 额外绑定 ROUND/DATE_FORMAT 的第二个参数（如果存在）
-    if ((func->function_type() == ScalarFunctionExpr::FuncType::ROUND ||
-         func->function_type() == ScalarFunctionExpr::FuncType::DATE_FORMAT) && func->child2()) {
+    if (func->child2() &&
+        (func->function_type() == ScalarFunctionExpr::FuncType::ROUND ||
+         func->function_type() == ScalarFunctionExpr::FuncType::DATE_FORMAT ||
+         func->function_type() == ScalarFunctionExpr::FuncType::L2_DISTANCE ||
+         func->function_type() == ScalarFunctionExpr::FuncType::COSINE_DISTANCE ||
+         func->function_type() == ScalarFunctionExpr::FuncType::INNER_PRODUCT)) {
       child_bound.clear();
       rc = bind_expression(func->child2(), child_bound);
       if (OB_FAIL(rc)) return rc;
@@ -124,6 +128,19 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
             LOG_WARN("date_format format expects char type, got %d", (int)fmt_type);
             return RC::INVALID_ARGUMENT;
           }
+        }
+      } break;
+      case ScalarFunctionExpr::FuncType::L2_DISTANCE:
+      case ScalarFunctionExpr::FuncType::COSINE_DISTANCE:
+      case ScalarFunctionExpr::FuncType::INNER_PRODUCT: {
+        if (func->child2() == nullptr) {
+          LOG_WARN("vector distance function requires two arguments");
+          return RC::INVALID_ARGUMENT;
+        }
+        AttrType rhs_type = func->child2()->value_type();
+        if (arg_type != AttrType::VECTORS || rhs_type != AttrType::VECTORS) {
+          LOG_WARN("vector function expects vector arguments, got %d and %d", (int)arg_type, (int)rhs_type);
+          return RC::INVALID_ARGUMENT;
         }
       } break;
     }

@@ -110,7 +110,17 @@ RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt 
             len = 0;
           } break;
           case AttrType::VECTORS: {
-            len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(16);
+            size_t dim = 0;
+            if (vlen > static_cast<int>(sizeof(int32_t))) {
+              int payload = vlen - static_cast<int>(sizeof(int32_t));
+              if (payload > 0) {
+                dim = static_cast<size_t>(payload / static_cast<int>(sizeof(float)));
+              }
+            }
+            if (dim == 0) {
+              dim = 4; // default dimension when inference fails
+            }
+            len = dim;
           } break;
           default: {
             len = (vlen > 0) ? static_cast<size_t>(vlen) : static_cast<size_t>(4);

@@ -53,6 +53,53 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     field_metas.push_back(field_meta);
   }
 
+  bool vector_index = create_index.vector_index;
+  if (vector_index) {
+    if (create_index.unique) {
+      LOG_WARN("vector index cannot be unique. table=%s index=%s", table_name, create_index.index_name.c_str());
+      return RC::INVALID_ARGUMENT;
+    }
+    if (field_metas.size() != 1) {
+      LOG_WARN("vector index must reference exactly one column. table=%s index=%s", table_name, create_index.index_name.c_str());
+      return RC::INVALID_ARGUMENT;
+    }
+    if (field_metas[0]->type() != AttrType::VECTORS) {
+      LOG_WARN("vector index column must be vector type. table=%s index=%s", table_name, create_index.index_name.c_str());
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
+  string distance_func = create_index.distance_func;
+  string index_type    = create_index.vector_index_type;
+  int    lists         = create_index.lists;
+  int    probes        = create_index.probes;
+
+  if (vector_index) {
+    if (distance_func.empty()) {
+      distance_func = "l2_distance";
+    }
+    if (index_type.empty()) {
+      index_type = "ivfflat";
+    }
+    common::str_to_lower(distance_func);
+    common::str_to_lower(index_type);
+
+    if (lists <= 0) {
+      lists = 1;
+    }
+    if (probes <= 0) {
+      probes = 1;
+    }
+    if (probes > lists) {
+      probes = lists;
+    }
+  } else {
+    distance_func.clear();
+    index_type.clear();
+    lists  = 0;
+    probes = 0;
+  }
+
   // 幂等处理：若已存在同名索引，且字段列表、唯一性与本次请求一致，则视为成功
   // 否则保持与现有行为一致，返回索引名重复错误
   if (Index *exist = table->find_index(create_index.index_name.c_str()); exist != nullptr) {
@@ -60,6 +107,7 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     const vector<string>       &exist_fields  = meta.fields();
     const vector<string>       &req_fields    = create_index.attribute_names;
     const bool                  same_unique   = (meta.unique() == create_index.unique);
+    const bool                  same_vector   = (meta.is_vector_index() == vector_index);
     const bool                  same_field_sz = (exist_fields.size() == req_fields.size());
     bool                        same_fields   = same_field_sz;
     if (same_field_sz) {
@@ -70,7 +118,15 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
         }
       }
     }
-    if (same_fields && same_unique) {
+    bool vector_params_same = true;
+    if (same_fields && same_unique && same_vector && vector_index) {
+      vector_params_same = (0 == strcasecmp(meta.distance_func().c_str(), distance_func.c_str()) &&
+                            0 == strcasecmp(meta.vector_index_type().c_str(), index_type.c_str()) &&
+                            meta.lists() == lists &&
+                            meta.probes() == probes);
+    }
+
+    if (same_fields && same_unique && same_vector && vector_params_same) {
       // 已存在完全相同定义的索引：幂等返回成功，符合官方期望
       return RC::SUCCESS;
     }
@@ -79,6 +135,7 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     return RC::SCHEMA_INDEX_NAME_REPEAT;
   }
 
-  stmt = new CreateIndexStmt(table, std::move(field_metas), create_index.index_name, create_index.unique);
+  stmt = new CreateIndexStmt(table, std::move(field_metas), create_index.index_name, create_index.unique,
+      vector_index, std::move(distance_func), std::move(index_type), lists, probes);
   return RC::SUCCESS;
 }

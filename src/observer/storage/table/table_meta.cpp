@@ -94,6 +94,14 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     int field_len = static_cast<int>(attr_info.length);
     if (attr_info.type == AttrType::TEXTS) {
       field_len = static_cast<int>(sizeof(LobRef));
+    } else if (attr_info.type == AttrType::VECTORS) {
+      int dimension = static_cast<int>(attr_info.length);
+      if (dimension <= 0 || dimension > 16000) {
+        LOG_WARN("invalid vector dimension. table=%s field=%s dim=%d",
+            name, attr_info.name.c_str(), dimension);
+        return RC::INVALID_ARGUMENT;
+      }
+      field_len = static_cast<int>(sizeof(int32_t) + dimension * static_cast<int>(sizeof(float)));
     }
     rc = fields_[i + trx_field_num].init(
       attr_info.name.c_str(), attr_info.type, field_offset, field_len, true /*visible*/, static_cast<int>(i), attr_info.nullable);

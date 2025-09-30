@@ -240,18 +240,35 @@ struct AnalyzeTableSqlNode
   string relation_name;  ///< 要分析的表名
 };
 
+struct VectorIndexOptions
+{
+  bool   has_distance = false;
+  bool   has_type     = false;
+  bool   has_lists    = false;
+  bool   has_probes   = false;
+  string distance;
+  string index_type;
+  int    lists  = -1;
+  int    probes = -1;
+};
+
 /**
  * @brief 描述一个create index语句
  * @ingroup SQLParser
  * @details 创建索引时，需要指定索引名，表名，字段名。
  * 正常的SQL语句中，一个索引可能包含了多个字段，这里仅支持一个字段。
- */
+*/
 struct CreateIndexSqlNode
 {
   string              index_name;     ///< Index name
   string              relation_name;  ///< Relation name
   vector<string>      attribute_names;///< Attribute names (support multi-column)
   bool                unique = false; ///< Whether the index is UNIQUE
+  bool                vector_index = false; ///< Whether this is a vector index
+  string              distance_func;        ///< Vector distance function name
+  string              vector_index_type;    ///< Vector index algorithm type
+  int                 lists = -1;           ///< IVF list count or similar parameter
+  int                 probes = -1;          ///< IVF probe count for query
 };
 
 /**

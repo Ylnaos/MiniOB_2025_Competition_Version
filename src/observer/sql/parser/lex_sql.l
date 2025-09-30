@@ -149,6 +149,14 @@ NULL                                    RETURN_TOKEN(NULL_T);
   LENGTH                                  RETURN_TOKEN(LENGTH_F);
   ROUND                                   RETURN_TOKEN(ROUND_F);
   DATE_FORMAT                             RETURN_TOKEN(DATE_FORMAT_F);
+  WITH                                    RETURN_TOKEN(WITH);
+  DISTANCE                                RETURN_TOKEN(DISTANCE_KW);
+  TYPE                                    RETURN_TOKEN(TYPE_KW);
+  LISTS                                   RETURN_TOKEN(LISTS_KW);
+  PROBES                                  RETURN_TOKEN(PROBES_KW);
+  L2_DISTANCE                             RETURN_TOKEN(L2_DISTANCE_F);
+  COSINE_DISTANCE                         RETURN_TOKEN(COSINE_DISTANCE_F);
+  INNER_PRODUCT                           RETURN_TOKEN(INNER_PRODUCT_F);
   {ID}                                    yylval->cstring=strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(ID);
 "("                                     RETURN_TOKEN(LBRACE);
 ")"                                     RETURN_TOKEN(RBRACE);
@@ -166,6 +174,7 @@ NULL                                    RETURN_TOKEN(NULL_T);
 "-" |
 "*" |
 "/"                                     { return yytext[0]; }
+\[[^\]]*\]                               yylval->cstring = strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(VECTOR_LITERAL);
 \"[^"]*\"                               yylval->cstring = strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(SSS);
 '[^']*\'                                yylval->cstring = strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(SSS);
 

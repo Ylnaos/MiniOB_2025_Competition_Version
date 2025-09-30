@@ -46,7 +46,8 @@ public:
   virtual RC update_record_with_trx(const Record &old_record, const Record &new_record, Trx *trx) = 0;
   virtual RC get_record(const RID &rid, Record &record)                                           = 0;
 
-  virtual RC     create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique) = 0;
+  virtual RC     create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique,
+      bool vector_index, const string &distance_func, const string &index_type, int lists, int probes) = 0;
   virtual RC     get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode)   = 0;
   virtual RC     get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode)  = 0;
   virtual RC     visit_record(const RID &rid, function<bool(Record &)> visitor)              = 0;

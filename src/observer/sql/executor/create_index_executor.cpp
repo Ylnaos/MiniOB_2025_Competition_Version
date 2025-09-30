@@ -43,5 +43,10 @@ RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
   return table->create_index(trx,
                              span<const FieldMeta>(field_metas.data(), field_metas.size()),
                              create_index_stmt->index_name().c_str(),
-                             create_index_stmt->unique());
+                             create_index_stmt->unique(),
+                             create_index_stmt->vector_index(),
+                             create_index_stmt->distance_func(),
+                             create_index_stmt->vector_index_type(),
+                             create_index_stmt->lists(),
+                             create_index_stmt->probes());
 }

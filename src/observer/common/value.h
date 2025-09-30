@@ -131,6 +131,10 @@ public:
   void set_null();
   bool is_null() const { return attr_type_ == AttrType::NULLS; }
 
+  // Vector specific methods
+  void set_vector(const char *s);
+  static bool is_vector_string(const char *s);
+
 private:
   AttrType attr_type_ = AttrType::UNDEFINED;
   int      length_    = 0;

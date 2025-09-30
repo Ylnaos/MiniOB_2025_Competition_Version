@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/heap_record_scanner.h"
 #include "common/log/log.h"
 #include "storage/index/bplus_tree_index.h"
+#include "storage/index/ivfflat_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
 
@@ -277,7 +278,8 @@ RC HeapTableEngine::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadW
   return rc;
 }
 
-RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique)
+RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique,
+    bool vector_index, const string &distance_func, const string &index_type, int lists, int probes)
 {
   if (common::is_blank(index_name) || field_metas.empty()) {
     LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or fields empty", table_meta_->name());
@@ -286,64 +288,66 @@ RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, co
 
   IndexMeta new_index_meta;
 
-  RC rc = new_index_meta.init(index_name, field_metas, unique);
+  RC rc = new_index_meta.init(index_name, field_metas, unique, vector_index, distance_func, index_type, lists, probes);
   if (rc != RC::SUCCESS) {
-    LOG_INFO("Failed to init IndexMeta in table:%s, index_name:%s", 
+    LOG_INFO("Failed to init IndexMeta in table:%s, index_name:%s",
              table_meta_->name(), index_name);
     return rc;
   }
 
-  // 创建索引相关数据
-  BplusTreeIndex *index      = new BplusTreeIndex();
-  string          index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+  Index *index = nullptr;
+  if (vector_index) {
+    index = new IvfflatIndex();
+  } else {
+    index = new BplusTreeIndex();
+  }
+  string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
 
   rc = index->create(table_, index_file.c_str(), new_index_meta, field_metas);
   if (rc != RC::SUCCESS) {
     delete index;
-    LOG_ERROR("Failed to create bplus tree index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
+    LOG_ERROR("Failed to create index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
     return rc;
   }
 
-  // 遍历当前的所有数据，插入这个索引
-  RecordScanner *scanner = nullptr;
-  rc = get_record_scanner(scanner, trx, ReadWriteMode::READ_ONLY);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to create scanner while creating index. table=%s, index=%s, rc=%s", 
-             table_meta_->name(), index_name, strrc(rc));
-    return rc;
-  }
-
-  Record record;
-  while (OB_SUCC(rc = scanner->next(record))) {
-    rc = index->insert_entry(record.data(), &record.rid());
+  if (!vector_index) {
+    RecordScanner *scanner = nullptr;
+    rc = get_record_scanner(scanner, trx, ReadWriteMode::READ_ONLY);
     if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
+      LOG_WARN("failed to create scanner while creating index. table=%s, index=%s, rc=%s",
                table_meta_->name(), index_name, strrc(rc));
-      // cleanup index resources before return
-      scanner->close_scan();
-      delete scanner;
-      index->close();
-      delete index;
-      // best-effort: remove the index file to avoid orphan
-      string index_file_rm = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
-      ::remove(index_file_rm.c_str());
       return rc;
     }
+
+    Record record;
+    while (OB_SUCC(rc = scanner->next(record))) {
+      rc = index->insert_entry(record.data(), &record.rid());
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
+                 table_meta_->name(), index_name, strrc(rc));
+        scanner->close_scan();
+        delete scanner;
+        index->close();
+        delete index;
+        string index_file_rm = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+        ::remove(index_file_rm.c_str());
+        return rc;
+      }
+    }
+    if (RC::RECORD_EOF == rc) {
+      rc = RC::SUCCESS;
+    } else {
+      LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
+               table_meta_->name(), index_name, strrc(rc));
+      return rc;
+    }
+    scanner->close_scan();
+    delete scanner;
+    LOG_INFO("inserted all records into new index. table=%s, index=%s", table_meta_->name(), index_name);
   }
-  if (RC::RECORD_EOF == rc) {
-    rc = RC::SUCCESS;
-  } else {
-    LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
-             table_meta_->name(), index_name, strrc(rc));
-    return rc;
-  }
-  scanner->close_scan();
-  delete scanner;
-  LOG_INFO("inserted all records into new index. table=%s, index=%s", table_meta_->name(), index_name);
 
   indexes_.push_back(index);
 
-  /// 接下来将这个索引放到表的元数据中
   TableMeta new_table_meta(*table_meta_);
   rc = new_table_meta.add_index(new_index_meta);
   if (rc != RC::SUCCESS) {
@@ -351,13 +355,12 @@ RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, co
     return rc;
   }
 
-  /// 内存中有一份元数据，磁盘文件也有一份元数据。修改磁盘文件时，先创建一个临时文件，写入完成后再rename为正式文�?  /// 这样可以防止文件内容不完�?  // 创建元数据临时文�?
-string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
+  string tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
   fstream fs;
   fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
   if (!fs.is_open()) {
     LOG_ERROR("Failed to open file for write. file name=%s, errmsg=%s", tmp_file.c_str(), strerror(errno));
-    return RC::IOERR_OPEN;  // 创建索引中途出错，要做还原操作
+    return RC::IOERR_OPEN;
   }
   if (new_table_meta.serialize(fs) < 0) {
     LOG_ERROR("Failed to dump new table meta to file: %s. sys err=%d:%s", tmp_file.c_str(), errno, strerror(errno));
@@ -365,13 +368,11 @@ string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + "
   }
   fs.close();
 
-  // 覆盖原始元数据文�?
-string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
+  string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
 
   int ret = rename(tmp_file.c_str(), meta_file.c_str());
   if (ret != 0) {
-    LOG_ERROR("Failed to rename tmp meta file (%s) to normal meta file (%s) while creating index (%s) on table (%s). "
-              "system error=%d:%s",
+    LOG_ERROR("Failed to rename tmp meta file (%s) to normal meta file (%s) while creating index (%s) on table (%s). system error=%d:%s",
               tmp_file.c_str(), meta_file.c_str(), index_name, table_meta_->name(), errno, strerror(errno));
     return RC::IOERR_WRITE;
   }

@@ -94,7 +94,9 @@ public:
   RC get_record(const RID &rid, Record &record);
 
   // TODO refactor
-  RC create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique);
+  RC create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique,
+      bool vector_index = false, const string &distance_func = string(), const string &index_type = string(),
+      int lists = 0, int probes = 0);
 
   RC get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode);
 
