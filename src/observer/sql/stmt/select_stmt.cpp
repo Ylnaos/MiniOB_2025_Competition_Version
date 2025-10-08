@@ -30,13 +30,16 @@ using namespace common;
 // 支持两类：
 // 1) 未绑定字段（直接映射 列名 -> 表.列）
 // 2) 星号(*)：当且仅当能唯一定位到一个底层表时，将该表所有可见列加入映射
+// 3) 复杂表达式：存储表达式副本
 static void build_view_output_mapping(
     Db *db,
     const vector<RelationSqlNode> &view_rels,
     const vector<unique_ptr<Expression>> &view_exprs,
-    unordered_map<string, pair<string, string>> &name_to_relattr)
+    unordered_map<string, pair<string, string>> &name_to_relattr,
+    unordered_map<string, unique_ptr<Expression>> &name_to_expr)
 {
   name_to_relattr.clear();
+  name_to_expr.clear();
 
   auto add_table_columns = [&](const RelationSqlNode &rel) {
     Table *tbl = db->find_table(rel.relation_name.c_str());
@@ -85,13 +88,12 @@ static void build_view_output_mapping(
         add_table_columns(view_rels[0]);
       }
     } else {
-      // 复杂表达式：只有在有别名时才作为输出列名参与映射（此处不处理）
+      // 复杂表达式：存储表达式副本,用于后续展开
       if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
-        // 无法反推到底层字段，仅占位，避免误将缺失视为未输出列
         string key = expr->alias();
         common::str_to_lower(key);
-        // 使用空表名占位，后续 rewrite 找不到再交由 binder 处理
-        name_to_relattr.emplace(key, make_pair(string(), string()));
+        // 复制表达式用于后续重写
+        name_to_expr[key] = expr->copy();
       }
     }
   }
@@ -99,9 +101,11 @@ static void build_view_output_mapping(
 
 // 在绑定前重写外层表达式树中未限定的字段引用：
 //   name -> real_table.real_field (依据视图输出列名映射)
+//   或 name -> 计算表达式 (对于复杂表达式)
 static RC rewrite_unqualified_fields(
     unique_ptr<Expression> &expr,
-    const unordered_map<string, pair<string, string>> &name_to_relattr)
+    const unordered_map<string, pair<string, string>> &name_to_relattr,
+    const unordered_map<string, unique_ptr<Expression>> &name_to_expr)
 {
   if (!expr) return RC::SUCCESS;
 
@@ -113,39 +117,53 @@ static RC rewrite_unqualified_fields(
       if ((tbl == nullptr || tbl[0] == '\0') && col != nullptr && col[0] != '\0') {
         string key = string(col);
         common::str_to_lower(key);
-        auto   it  = name_to_relattr.find(key);
-        if (it != name_to_relattr.end()) {
+
+        // 优先查找表达式映射(计算列)
+        auto expr_it = name_to_expr.find(key);
+        if (expr_it != name_to_expr.end()) {
+          // 用视图中的计算表达式替换
+          unique_ptr<Expression> replaced = expr_it->second->copy();
+          if (expr->alias() != nullptr) {
+            replaced->set_alias(expr->alias());
+          }
+          expr.swap(replaced);
+          return RC::SUCCESS;
+        }
+
+        // 其次查找字段映射(简单字段)
+        auto field_it = name_to_relattr.find(key);
+        if (field_it != name_to_relattr.end()) {
           // 用底层限定字段替换
-          unique_ptr<Expression> replaced = make_unique<UnboundFieldExpr>(it->second.first, it->second.second);
+          unique_ptr<Expression> replaced = make_unique<UnboundFieldExpr>(field_it->second.first, field_it->second.second);
           // 继承展示名称(保持简单)：设置为 "table.field"
-          string display = it->second.first;
+          string display = field_it->second.first;
           if (!display.empty()) display += ".";
-          display += it->second.second;
+          display += field_it->second.second;
           replaced->set_name(display);
           if (expr->alias() != nullptr) {
             replaced->set_alias(expr->alias());
           }
           expr.swap(replaced);
           return RC::SUCCESS;
-        } else {
-          // 外层引用了视图未输出的列，应报错
-          return RC::SCHEMA_FIELD_MISSING;
         }
+
+        // 外层引用了视图未输出的列，应报错
+        return RC::SCHEMA_FIELD_MISSING;
       }
       return RC::SUCCESS;
     } break;
 
     case ExprType::UNBOUND_AGGREGATION: {
       auto *agg = static_cast<UnboundAggregateExpr *>(expr.get());
-      return rewrite_unqualified_fields(agg->child(), name_to_relattr);
+      return rewrite_unqualified_fields(agg->child(), name_to_relattr, name_to_expr);
     } break;
 
     case ExprType::ARITHMETIC: {
       auto *arith = static_cast<ArithmeticExpr *>(expr.get());
-      RC rc = rewrite_unqualified_fields(arith->left(), name_to_relattr);
+      RC rc = rewrite_unqualified_fields(arith->left(), name_to_relattr, name_to_expr);
       if (OB_FAIL(rc)) return rc;
       if (arith->right()) {
-        rc = rewrite_unqualified_fields(arith->right(), name_to_relattr);
+        rc = rewrite_unqualified_fields(arith->right(), name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) return rc;
       }
       return RC::SUCCESS;
@@ -153,16 +171,16 @@ static RC rewrite_unqualified_fields(
 
     case ExprType::COMPARISON: {
       auto *cmp = static_cast<ComparisonExpr *>(expr.get());
-      RC rc = rewrite_unqualified_fields(cmp->left(), name_to_relattr);
+      RC rc = rewrite_unqualified_fields(cmp->left(), name_to_relattr, name_to_expr);
       if (OB_FAIL(rc)) return rc;
-      rc = rewrite_unqualified_fields(cmp->right(), name_to_relattr);
+      rc = rewrite_unqualified_fields(cmp->right(), name_to_relattr, name_to_expr);
       return rc;
     } break;
 
     case ExprType::CONJUNCTION: {
       auto *conj = static_cast<ConjunctionExpr *>(expr.get());
       for (auto &child : conj->children()) {
-        RC rc = rewrite_unqualified_fields(child, name_to_relattr);
+        RC rc = rewrite_unqualified_fields(child, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) return rc;
       }
       return RC::SUCCESS;
@@ -170,19 +188,19 @@ static RC rewrite_unqualified_fields(
 
     case ExprType::CAST: {
       auto *c = static_cast<CastExpr *>(expr.get());
-      return rewrite_unqualified_fields(c->child(), name_to_relattr);
+      return rewrite_unqualified_fields(c->child(), name_to_relattr, name_to_expr);
     } break;
 
     case ExprType::FUNCTION: {
       auto *fn = static_cast<ScalarFunctionExpr *>(expr.get());
-      return rewrite_unqualified_fields(fn->child(), name_to_relattr);
+      return rewrite_unqualified_fields(fn->child(), name_to_relattr, name_to_expr);
     } break;
 
     case ExprType::IN_LIST: {
       auto *in = static_cast<InExpr *>(expr.get());
-      RC rc = rewrite_unqualified_fields(in->test_expr(), name_to_relattr);
+      RC rc = rewrite_unqualified_fields(in->test_expr(), name_to_relattr, name_to_expr);
       if (OB_FAIL(rc)) return rc;
-      rc = rewrite_unqualified_fields(in->set_expr(), name_to_relattr);
+      rc = rewrite_unqualified_fields(in->set_expr(), name_to_relattr, name_to_expr);
       return rc;
     } break;
 
@@ -250,20 +268,21 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         } else {
           // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
           unordered_map<string, pair<string, string>> name_to_relattr;
+          unordered_map<string, unique_ptr<Expression>> name_to_expr;
           // 注意：上面已经将视图内部的 relation 列表 swap 到 select_sql.relations 中
           // 此处必须使用新的 relations，否则会拿到原外层的视图名，导致无法建立字段映射
-          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, name_to_relattr);
+          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, name_to_relattr, name_to_expr);
           for (auto &outer_expr : select_sql.expressions) {
-            RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr);
+            RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
             if (OB_FAIL(rc)) return rc;
           }
           // group by / order by 同样做一次字段重写，出现未输出列一律报错
           for (auto &gexpr : select_sql.group_by) {
-            RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr);
+            RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
             if (OB_FAIL(rc)) return rc;
           }
           for (auto &item : select_sql.order_by) {
-            RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr);
+            RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
             if (OB_FAIL(rc)) return rc;
           }
         }

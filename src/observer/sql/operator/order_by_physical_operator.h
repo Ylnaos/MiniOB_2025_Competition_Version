@@ -35,11 +35,17 @@ public:
   Tuple *current_tuple() override;
 
 private:
-  int compare_rows(const ValueListTuple &lhs, const ValueListTuple &rhs) const;
+  // 用于存储每一行及其预计算的排序键值
+  struct RowWithKeys {
+    ValueListTuple row;
+    vector<Value>  sort_keys; // 预计算的排序键值
+  };
+
+  int compare_rows(const RowWithKeys &lhs, const RowWithKeys &rhs) const;
 
 private:
   vector<OrderItem>       order_by_items_;
-  vector<ValueListTuple>  rows_;
+  vector<RowWithKeys>     rows_;
   size_t                  current_index_ = 0;
   bool                    opened_        = false;
 };

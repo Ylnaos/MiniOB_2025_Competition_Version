@@ -31,13 +31,27 @@ RC OrderByPhysicalOperator::open(Trx *trx)
       LOG_WARN("child returned null tuple");
       return RC::INTERNAL;
     }
-    ValueListTuple row;
-    rc = ValueListTuple::make(*child_tuple, row);
+
+    RowWithKeys row_with_keys;
+    rc = ValueListTuple::make(*child_tuple, row_with_keys.row);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to materialize tuple. rc=%s", strrc(rc));
       return rc;
     }
-    rows_.emplace_back(std::move(row));
+
+    // 预计算所有ORDER BY表达式的值
+    row_with_keys.sort_keys.reserve(order_by_items_.size());
+    for (const auto &item : order_by_items_) {
+      Value key_value;
+      rc = item.first->get_value(row_with_keys.row, key_value);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to get order by key value. rc=%s", strrc(rc));
+        return rc;
+      }
+      row_with_keys.sort_keys.push_back(std::move(key_value));
+    }
+
+    rows_.emplace_back(std::move(row_with_keys));
   }
 
   if (rc != RC::RECORD_EOF) {
@@ -45,8 +59,8 @@ RC OrderByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
-  // 排序
-  std::sort(rows_.begin(), rows_.end(), [this](const ValueListTuple &a, const ValueListTuple &b) {
+  // 排序 - 现在使用预计算的键值进行比较
+  std::sort(rows_.begin(), rows_.end(), [this](const RowWithKeys &a, const RowWithKeys &b) {
     int cmp = compare_rows(a, b);
     return cmp < 0;
   });
@@ -56,28 +70,14 @@ RC OrderByPhysicalOperator::open(Trx *trx)
   return RC::SUCCESS;
 }
 
-int OrderByPhysicalOperator::compare_rows(const ValueListTuple &lhs, const ValueListTuple &rhs) const
+int OrderByPhysicalOperator::compare_rows(const RowWithKeys &lhs, const RowWithKeys &rhs) const
 {
-  RC    rc = RC::SUCCESS;
-  Value lv;
-  Value rv;
-  for (const auto &item : order_by_items_) {
-    Expression *expr = item.first.get();
-    bool        asc  = item.second;
-
-    rc = expr->get_value(lhs, lv);
-    if (OB_FAIL(rc)) {
-      LOG_WARN("failed to get value from left row for order by. rc=%s", strrc(rc));
-      return 0;
-    }
-    rc = expr->get_value(rhs, rv);
-    if (OB_FAIL(rc)) {
-      LOG_WARN("failed to get value from right row for order by. rc=%s", strrc(rc));
-      return 0;
-    }
+  // 使用预计算的sort_keys进行比较
+  for (size_t i = 0; i < order_by_items_.size(); ++i) {
+    bool asc = order_by_items_[i].second;
 
     int c = 0;
-    Value::compare(lv, rv, c);
+    Value::compare(lhs.sort_keys[i], rhs.sort_keys[i], c);
     if (c == 0) {
       continue;
     }
@@ -122,7 +122,7 @@ Tuple *OrderByPhysicalOperator::current_tuple()
   if (idx >= rows_.size()) {
     return nullptr;
   }
-  return &rows_[idx];
+  return &rows_[idx].row;
 }
 
 RC OrderByPhysicalOperator::close()
