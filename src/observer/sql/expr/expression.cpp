@@ -525,6 +525,17 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
       select[i] &= result ? 1 : 0;
     }
 
+  } else if (left_column.attr_type() == AttrType::VECTORS) {
+    // 逐行比较（字典序）
+    int rows = (left_column.column_type() == Column::Type::CONSTANT_COLUMN) ? right_column.count() : left_column.count();
+    for (int i = 0; i < rows; ++i) {
+      Value lv = left_column.get_value(i);
+      Value rv = right_column.get_value(i);
+      bool  res = false;
+      rc        = compare_value(lv, rv, res);
+      if (rc != RC::SUCCESS) return rc;
+      select[i] &= res ? 1 : 0;
+    }
   } else {
     LOG_WARN("unsupported data type %d", left_column.attr_type());
     return RC::INTERNAL;
@@ -626,6 +637,11 @@ AttrType ArithmeticExpr::value_type() const
     return left_->value_type();
   }
 
+  // 向量参与的算术计算：结果为向量
+  if (left_->value_type() == AttrType::VECTORS || right_->value_type() == AttrType::VECTORS) {
+    return AttrType::VECTORS;
+  }
+
   // 除法：即使左右都是 INT，也返回 FLOATS，避免整数截断
   if (arithmetic_type_ == Type::DIV) {
     return AttrType::FLOATS;
@@ -643,13 +659,13 @@ RC ArithmeticExpr::calc_value(const Value &left_value, const Value &right_value,
 {
   RC rc = RC::SUCCESS;
 
-  // 澶勭悊NULL鍊间紶鎾?
-if (left_value.is_null() || (arithmetic_type_ != Type::NEGATIVE && right_value.is_null())) {
+  // 处理 NULL 值
+  if (left_value.is_null() || (arithmetic_type_ != Type::NEGATIVE && right_value.is_null())) {
     value.set_null();
     return RC::SUCCESS;
   }
 
-  // 鐗规畩澶勭悊闄ら浂锛氳繑鍥濶ULL
+  // 特殊处理除零：返回 NULL
   if (arithmetic_type_ == Type::DIV) {
     float divisor = right_value.get_float();
     if (divisor > -0.000001 && divisor < 0.000001) {
@@ -942,6 +958,28 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
   RC rc = RC::SUCCESS;
 
   const AttrType target_type = value_type();
+
+  // 向量：逐行计算
+  if (target_type == AttrType::VECTORS) {
+    const bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    const bool right_const = right_column.column_type() == Column::Type::CONSTANT_COLUMN;
+    const int  rows        = std::max(left_column.count(), right_column.count());
+    // 推断结果向量字节长度：优先取左或右的非零长度
+    int res_len = left_column.attr_len() > 0 ? left_column.attr_len() : right_column.attr_len();
+    column.init(target_type, res_len, rows);
+    column.set_column_type((left_const && right_const) ? Column::Type::CONSTANT_COLUMN : Column::Type::NORMAL_COLUMN);
+    for (int i = 0; i < rows; ++i) {
+      Value lv = left_column.get_value(left_const ? 0 : i);
+      Value rv = right_column.get_value(right_const ? 0 : i);
+      Value out;
+      out.set_type(AttrType::VECTORS);
+      RC irc = calc_value(lv, rv, out);
+      if (irc != RC::SUCCESS) return irc;
+      column.append_value(out);
+    }
+    column.set_count(rows);
+    return RC::SUCCESS;
+  }
 
   if (arithmetic_type_ == Type::NEGATIVE) {
     const bool left_const = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
@@ -1399,6 +1437,51 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       value.set_string(out.c_str());
       return RC::SUCCESS;
     }
+    case FuncType::L2_DISTANCE:
+    case FuncType::COSINE_DISTANCE:
+    case FuncType::INNER_PRODUCT: {
+      if (!child2_) return RC::INVALID_ARGUMENT;
+      Value arg2;
+      rc = child2_->get_value(tuple, arg2);
+      if (OB_FAIL(rc)) return rc;
+      if (arg.attr_type() != AttrType::VECTORS || arg2.attr_type() != AttrType::VECTORS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      const int len1 = arg.length();
+      const int len2 = arg2.length();
+      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      const int dim = len1 / static_cast<int>(sizeof(float));
+      const float *a = reinterpret_cast<const float *>(arg.data());
+      const float *b = reinterpret_cast<const float *>(arg2.data());
+      double acc = 0.0;
+      if (func_type_ == FuncType::L2_DISTANCE) {
+        for (int i = 0; i < dim; ++i) {
+          double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+          acc += d * d;
+        }
+        acc = std::sqrt(acc);
+      } else if (func_type_ == FuncType::INNER_PRODUCT) {
+        for (int i = 0; i < dim; ++i) acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+      } else { // COSINE_DISTANCE
+        double dot = 0.0, na = 0.0, nb = 0.0;
+        for (int i = 0; i < dim; ++i) {
+          double va = static_cast<double>(a[i]);
+          double vb = static_cast<double>(b[i]);
+          dot += va * vb; na += va * va; nb += vb * vb;
+        }
+        if (na <= 0.0 || nb <= 0.0) { value.set_null(); return RC::SUCCESS; }
+        double cos = dot / (std::sqrt(na) * std::sqrt(nb));
+        acc = 1.0 - cos;
+      }
+      // 保留两位小数（与 ROUND 使用的一致的银行家舍入）
+      double p = std::pow(10.0, 2.0);
+      double rf = round_half_to_even(acc * p) / p;
+      value.set_float(static_cast<float>(rf));
+      return RC::SUCCESS;
+    }
   }
   return RC::UNIMPLEMENTED;
 }
@@ -1523,6 +1606,13 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       value.set_string(out.c_str());
       return RC::SUCCESS;
     }
+    case FuncType::L2_DISTANCE:
+    case FuncType::COSINE_DISTANCE:
+    case FuncType::INNER_PRODUCT: {
+      // 这些函数需要两个参数,在try_get_value中不支持常量折叠
+      // 它们的实际计算在get_column中处理
+      return RC::UNIMPLEMENTED;
+    }
   }
   return RC::UNIMPLEMENTED;
 }
@@ -1550,6 +1640,13 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
   bool   has_fmt = (func_type_ == FuncType::DATE_FORMAT) && (child2_ != nullptr);
   if (has_fmt) {
     rc = child2_->get_column(chunk, fmt_col);
+    if (OB_FAIL(rc)) return rc;
+  }
+  Column arg2_col; bool has_arg2 = false;
+  if (func_type_ == FuncType::L2_DISTANCE || func_type_ == FuncType::COSINE_DISTANCE || func_type_ == FuncType::INNER_PRODUCT) {
+    if (!child2_) return RC::INVALID_ARGUMENT;
+    has_arg2 = true;
+    rc = child2_->get_column(chunk, arg2_col);
     if (OB_FAIL(rc)) return rc;
   }
 
@@ -1655,6 +1752,33 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
           }
         }
         out.set_string(out_s.c_str());
+      } break;
+      case FuncType::L2_DISTANCE:
+      case FuncType::COSINE_DISTANCE:
+      case FuncType::INNER_PRODUCT: {
+        Value argb = has_arg2 ? arg2_col.get_value(i) : Value();
+        if (arg.attr_type() != AttrType::VECTORS || argb.attr_type() != AttrType::VECTORS) return RC::INVALID_ARGUMENT;
+        const int len1 = arg.length();
+        const int len2 = argb.length();
+        if (len1 <= 0 || len2 <= 0 || len1 != len2) { out.set_null(); break; }
+        const int dim = len1 / static_cast<int>(sizeof(float));
+        const float *a = reinterpret_cast<const float *>(arg.data());
+        const float *b = reinterpret_cast<const float *>(argb.data());
+        double acc = 0.0;
+        if (func_type_ == FuncType::L2_DISTANCE) {
+          for (int j = 0; j < dim; ++j) { double d = (double)a[j] - (double)b[j]; acc += d*d; }
+          acc = std::sqrt(acc);
+        } else if (func_type_ == FuncType::INNER_PRODUCT) {
+          for (int j = 0; j < dim; ++j) acc += (double)a[j] * (double)b[j];
+        } else { // COSINE_DISTANCE
+          double dot = 0.0, na = 0.0, nb = 0.0;
+          for (int j = 0; j < dim; ++j) { double va = (double)a[j], vb = (double)b[j]; dot += va*vb; na += va*va; nb += vb*vb; }
+          if (na <= 0.0 || nb <= 0.0) { out.set_null(); break; }
+          double cos = dot / (std::sqrt(na) * std::sqrt(nb));
+          acc = 1.0 - cos;
+        }
+        double p = std::pow(10.0, 2.0); double rf = round_half_to_even(acc * p) / p;
+        out.set_float(static_cast<float>(rf));
       } break;
     }
     column.append_value(out);
@@ -2044,7 +2168,3 @@ if (set_expr_->type() != ExprType::SUBQUERY) {
   value.set_boolean(result);
   return RC::SUCCESS;
 }
-
-
-
-

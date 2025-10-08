@@ -100,6 +100,7 @@ void Value::reset()
   switch (attr_type_) {
     case AttrType::CHARS:
     case AttrType::TEXTS:
+    case AttrType::VECTORS:
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
         value_.pointer_value_ = nullptr;
@@ -122,6 +123,18 @@ void Value::set_data(char *data, int length)
       AttrType old_type = attr_type_;
       set_string(data, length);
       attr_type_ = old_type;
+    } break;
+    case AttrType::VECTORS: {
+      reset();
+      attr_type_ = AttrType::VECTORS;
+      own_data_ = true;
+      length_   = length;
+      if (length_ > 0) {
+        value_.pointer_value_ = new char[length_];
+        memcpy(value_.pointer_value_, data, length_);
+      } else {
+        value_.pointer_value_ = nullptr;
+      }
     } break;
     case AttrType::INTS: {
       value_.int_value_ = *(int *)data;
@@ -261,6 +274,9 @@ char *Value::data() const
       return value_.pointer_value_;
     } break;
     case AttrType::TEXTS: {
+      return value_.pointer_value_;
+    } break;
+    case AttrType::VECTORS: {
       return value_.pointer_value_;
     } break;
     default: {

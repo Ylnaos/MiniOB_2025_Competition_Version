@@ -648,7 +648,7 @@ private:
 class ScalarFunctionExpr : public Expression
 {
 public:
-  enum class FuncType { LENGTH, ROUND, DATE_FORMAT };
+  enum class FuncType { LENGTH, ROUND, DATE_FORMAT, L2_DISTANCE, COSINE_DISTANCE, INNER_PRODUCT };
 
   explicit ScalarFunctionExpr(FuncType func_type, std::unique_ptr<Expression> child)
       : func_type_(func_type), child_(std::move(child))
@@ -681,6 +681,9 @@ public:
       case FuncType::LENGTH: return AttrType::INTS;
       case FuncType::ROUND: return AttrType::FLOATS;
       case FuncType::DATE_FORMAT: return AttrType::CHARS;
+      case FuncType::L2_DISTANCE: return AttrType::FLOATS;
+      case FuncType::COSINE_DISTANCE: return AttrType::FLOATS;
+      case FuncType::INNER_PRODUCT: return AttrType::FLOATS;
     }
     return AttrType::UNDEFINED;
   }
@@ -691,6 +694,9 @@ public:
       case FuncType::LENGTH: return sizeof(int);
       case FuncType::ROUND: return sizeof(float);
       case FuncType::DATE_FORMAT: return 32; // 足够覆盖常见格式，如 %Y-%m-%d 等
+      case FuncType::L2_DISTANCE: return sizeof(float);
+      case FuncType::COSINE_DISTANCE: return sizeof(float);
+      case FuncType::INNER_PRODUCT: return sizeof(float);
     }
     return -1;
   }

@@ -149,9 +149,14 @@ NULL                                    RETURN_TOKEN(NULL_T);
   LENGTH                                  RETURN_TOKEN(LENGTH_F);
   ROUND                                   RETURN_TOKEN(ROUND_F);
   DATE_FORMAT                             RETURN_TOKEN(DATE_FORMAT_F);
+  L2_DISTANCE                             RETURN_TOKEN(L2_DISTANCE_F);
+  COSINE_DISTANCE                         RETURN_TOKEN(COSINE_DISTANCE_F);
+  INNER_PRODUCT                           RETURN_TOKEN(INNER_PRODUCT_F);
   {ID}                                    yylval->cstring=strdup(yytext); static_cast<std::vector<char*>*>(yyextra)->push_back(yylval->cstring); RETURN_TOKEN(ID);
 "("                                     RETURN_TOKEN(LBRACE);
 ")"                                     RETURN_TOKEN(RBRACE);
+"\["                                    RETURN_TOKEN(LBRACKET);
+"\]"                                    RETURN_TOKEN(RBRACKET);
 
 ","                                     RETURN_TOKEN(COMMA);
 "="                                     RETURN_TOKEN(EQ);

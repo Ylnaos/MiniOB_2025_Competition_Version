@@ -126,6 +126,34 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
           }
         }
       } break;
+      case ScalarFunctionExpr::FuncType::L2_DISTANCE:
+      case ScalarFunctionExpr::FuncType::COSINE_DISTANCE:
+      case ScalarFunctionExpr::FuncType::INNER_PRODUCT: {
+        // 距离函数要求两个向量参数
+        // 第一个参数允许为 VECTORS 或可转换为 VECTORS 的类型（如字符串）
+        if (arg_type == AttrType::CHARS) {
+          // 字符串隐式转换为向量
+          auto cast = make_unique<CastExpr>(func->child()->copy(), AttrType::VECTORS);
+          func->child().reset(cast.release());
+        } else if (arg_type != AttrType::VECTORS) {
+          LOG_WARN("distance function expects vector type for first arg, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+        // 第二个参数也必须是向量或可转换为向量
+        if (func->child2()) {
+          AttrType arg2_type = func->child2()->value_type();
+          if (arg2_type == AttrType::CHARS) {
+            auto cast = make_unique<CastExpr>(func->child2()->copy(), AttrType::VECTORS);
+            func->child2().reset(cast.release());
+          } else if (arg2_type != AttrType::VECTORS) {
+            LOG_WARN("distance function expects vector type for second arg, got %d", (int)arg2_type);
+            return RC::INVALID_ARGUMENT;
+          }
+        } else {
+          LOG_WARN("distance function requires two arguments");
+          return RC::INVALID_ARGUMENT;
+        }
+      } break;
     }
     // 落入常规绑定，便于后续统一处理列位置等
     return bind_field_expression(expr, bound_expressions);

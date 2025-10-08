@@ -53,6 +53,44 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       result = val;
       return RC::SUCCESS;
     }
+    case AttrType::VECTORS: {
+      // 从字符串解析成向量字节序列，形如 "[1,2,3]"
+      std::string s = val.get_string();
+      // 去除空白
+      auto l = s.find_first_not_of(" \t\r\n");
+      auto r = s.find_last_not_of(" \t\r\n");
+      if (l == std::string::npos) return RC::INVALID_ARGUMENT;
+      s = s.substr(l, r - l + 1);
+      if (s.size() < 2 || s.front() != '[' || s.back() != ']') {
+        return RC::INVALID_ARGUMENT;
+      }
+      std::vector<float> elems;
+      std::string inner = s.substr(1, s.size() - 2);
+      std::string token;
+      std::stringstream ss(inner);
+      while (std::getline(ss, token, ',')) {
+        // trim
+        size_t tl = token.find_first_not_of(" \t\r\n");
+        size_t tr = token.find_last_not_of(" \t\r\n");
+        if (tl == std::string::npos) continue;
+        token = token.substr(tl, tr - tl + 1);
+        if (token.empty()) continue;
+        char *endp = nullptr;
+        float v = static_cast<float>(strtod(token.c_str(), &endp));
+        if (endp == token.c_str()) {
+          return RC::INVALID_ARGUMENT;
+        }
+        elems.push_back(v);
+      }
+      if (elems.empty()) {
+        // 空向量按 0 维处理
+        elems.clear();
+      }
+      // 组装结果
+      result.set_type(AttrType::VECTORS);
+      result.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+      return RC::SUCCESS;
+    }
     case AttrType::TEXTS: {
       result = val;
       result.set_type(AttrType::TEXTS);

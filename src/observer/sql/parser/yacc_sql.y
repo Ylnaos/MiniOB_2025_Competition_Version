@@ -53,6 +53,16 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 // 收集 JOIN ... ON 布尔表达式（使用 AND 连接）
 static Expression *g_join_on_expr = nullptr;
 
+// 辅助函数：分配字符串并加入到 allocated_strings
+static char* alloc_string(const char* str, yyscan_t scanner) {
+  char* result = strdup(str);
+  std::vector<char*>* allocated = static_cast<std::vector<char*>*>(yyget_extra(scanner));
+  if (allocated) {
+    allocated->push_back(result);
+  }
+  return result;
+}
+
 %}
 
 %define api.pure full
@@ -71,6 +81,8 @@ static Expression *g_join_on_expr = nullptr;
         ORDER
         HAVING
         OR
+        LBRACKET
+        RBRACKET
         CREATE
         VIEW
         DROP
@@ -140,6 +152,9 @@ static Expression *g_join_on_expr = nullptr;
         LENGTH_F
         ROUND_F
         DATE_FORMAT_F
+        L2_DISTANCE_F
+        COSINE_DISTANCE_F
+        INNER_PRODUCT_F
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -191,6 +206,7 @@ static Expression *g_join_on_expr = nullptr;
 %type <number>              nullable_opt
 %type <condition>           condition
 %type <value>               value
+%type <value>               vector_literal
 %type <number>              number
 %type <relation_node>       relation
 %type <comp>                comp_op
@@ -224,6 +240,7 @@ static Expression *g_join_on_expr = nullptr;
 %type <order_by_item>       order_by_condition
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
+%type <cstring>             identifier
 %type <sql_node>            calc_stmt
 %type <sql_node>            select_stmt
 %type <sql_node>            insert_stmt
@@ -633,6 +650,36 @@ value:
       $$ = new Value(tmp);
       free(tmp);
     }
+    | vector_literal {
+      $$ = $1;
+    }
+    ;
+
+// vector literal like: [1,2,3.5]
+vector_literal:
+    LBRACKET value_list RBRACKET
+    {
+      std::vector<float> elems;
+      if ($2 != nullptr) {
+        elems.reserve($2->size());
+        for (const auto &v : *$2) {
+          // 宽松转换为 float
+          if (v.attr_type() == AttrType::NULLS) continue;
+          elems.push_back(v.get_float());
+        }
+        delete $2;
+      }
+      // 组装为 Value(VECTORS)
+      Value *vec = new Value();
+      vec->set_type(AttrType::VECTORS);
+      if (!elems.empty()) {
+        vec->set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+      } else {
+        // 空向量：长度 0，显式指定指针类型以避免重载二义性
+        vec->set_data((const char *)nullptr, 0);
+      }
+      $$ = vec;
+    }
     ;
 nullable_opt:
     /* empty */
@@ -897,15 +944,22 @@ select_item:
     {
       $$ = $1;
     }
-    | expression ID
+    | expression identifier
     {
       $1->set_alias($2);
       $$ = $1;
     }
-    | expression AS ID
+    | expression AS identifier
     {
       $1->set_alias($3);
       $$ = $1;
+    }
+    ;
+identifier:
+    ID { $$ = $1; }
+    | DATA {
+      // DATA 关键字可以作为标识符使用
+      $$ = alloc_string("data", scanner);
     }
     ;
 
@@ -937,6 +991,21 @@ function_expression:
         // DATE_FORMAT(date_expr, format_expr)
         // 保留第二个参数(format)传入表达式，供执行阶段使用
         $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DATE_FORMAT, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | L2_DISTANCE_F LBRACE expression COMMA expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::L2_DISTANCE, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | COSINE_DISTANCE_F LBRACE expression COMMA expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::COSINE_DISTANCE, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | INNER_PRODUCT_F LBRACE expression COMMA expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::INNER_PRODUCT, $3, $5);
         $$->set_name(token_name(sql_string, &@$));
       }
     ;
