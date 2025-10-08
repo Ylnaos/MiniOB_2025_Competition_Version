@@ -97,6 +97,11 @@ static void build_view_output_mapping(
       }
     }
   }
+
+  // 如果视图只有一个底层表，将该表的所有列加入映射，以支持复杂表达式中的字段引用
+  if (view_rels.size() == 1) {
+    add_table_columns(view_rels[0]);
+  }
 }
 
 // 在绑定前重写外层表达式树中未限定的字段引用：
@@ -127,7 +132,8 @@ static RC rewrite_unqualified_fields(
             replaced->set_alias(expr->alias());
           }
           expr.swap(replaced);
-          return RC::SUCCESS;
+          // 递归重写替换后表达式内部的未限定字段
+          return rewrite_unqualified_fields(expr, name_to_relattr, name_to_expr);
         }
 
         // 其次查找字段映射(简单字段)

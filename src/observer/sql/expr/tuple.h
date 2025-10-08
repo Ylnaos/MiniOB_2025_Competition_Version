@@ -243,6 +243,35 @@ public:
       cell.set_type(AttrType::TEXTS);
       cell.set_data(buf.data(), length);
       return RC::SUCCESS;
+    }
+    // High-dimensional VECTORS (>1000 dims) are stored as LobRef in record; need to fetch from LOB file
+    else if (field_meta->type() == AttrType::VECTORS && field_meta->len() == static_cast<int>(sizeof(LobRef))) {
+      // Decode LobRef
+      const char *p = this->record_->data() + field_meta->offset();
+      LobRef ref;
+      memcpy(&ref, p, sizeof(LobRef));
+
+      const int32_t length = ref.length;
+      const int64_t offset = ref.offset;
+
+      if (length <= 0 || (length % sizeof(float)) != 0) {
+        // empty or invalid vector
+        cell.set_type(AttrType::VECTORS);
+        cell.set_data("", 0);
+        return RC::SUCCESS;
+      }
+      if (table_ == nullptr || table_->lob_handler() == nullptr) {
+        return RC::INTERNAL;
+      }
+      std::vector<char> buf;
+      buf.resize(static_cast<size_t>(length));
+      RC rc = table_->lob_handler()->get_data(offset, length, buf.data());
+      if (rc != RC::SUCCESS) {
+        return rc;
+      }
+      cell.set_type(AttrType::VECTORS);
+      cell.set_data(buf.data(), length);
+      return RC::SUCCESS;
     } else {
       cell.set_type(field_meta->type());
       cell.set_data(this->record_->data() + field_meta->offset(), field_meta->len());

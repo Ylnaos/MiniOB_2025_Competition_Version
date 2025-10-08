@@ -155,6 +155,12 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
         L2_DISTANCE_F
         COSINE_DISTANCE_F
         INNER_PRODUCT_F
+        WITH
+        DISTANCE
+        TYPE
+        LISTS
+        PROBES
+        IVFFLAT
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -409,6 +415,20 @@ create_index_stmt:    /*create index 语句的语法解析树*/
         delete $8;
       }
       create_index.unique = true;
+    }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE ID EQ ID COMMA TYPE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      create_index.attribute_names.push_back($8);
+      create_index.is_vector_index = true;
+      create_index.distance_type = $12;
+      create_index.index_type = $18;
+      create_index.lists = $22;
+      create_index.probes = $26;
+      create_index.unique = false;
     }
     ;
 

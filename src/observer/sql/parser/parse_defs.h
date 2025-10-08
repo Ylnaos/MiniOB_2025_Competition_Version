@@ -253,6 +253,13 @@ struct CreateIndexSqlNode
   string              relation_name;  ///< Relation name
   vector<string>      attribute_names;///< Attribute names (support multi-column)
   bool                unique = false; ///< Whether the index is UNIQUE
+
+  // Vector index specific parameters
+  bool                is_vector_index = false;  ///< Whether this is a vector index
+  string              distance_type;            ///< Distance type: l2_distance, cosine_distance, inner_product
+  string              index_type;               ///< Index type: ivfflat
+  int                 lists = 0;                ///< Number of clusters for IVF-Flat
+  int                 probes = 0;               ///< Number of probes during search
 };
 
 /**

@@ -352,6 +352,43 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     return RC::SUCCESS;
   }
 
+  // Special handling for high-dimensional VECTORS (>1000 dims): store into LOB file, similar to TEXT
+  if (field->type() == AttrType::VECTORS && field->len() == static_cast<int>(sizeof(LobRef))) {
+    if (lob_handler_ == nullptr) {
+      LOG_WARN("LOB handler not initialized for table %s", table_meta_.name());
+      return RC::INTERNAL;
+    }
+
+    // Vector data length in bytes
+    int vec_len = src->length();
+    if (vec_len <= 0 || (vec_len % sizeof(float)) != 0) {
+      LOG_WARN("Invalid vector data length: %d", vec_len);
+      return RC::INVALID_ARGUMENT;
+    }
+
+    // Write vector data into .lob file
+    int64_t offset = 0;
+    RC      lrc    = lob_handler_->insert_data(offset, vec_len, src->data());
+    if (OB_FAIL(lrc)) {
+      LOG_WARN("failed to append vector LOB. rc=%s", strrc(lrc));
+      return lrc;
+    }
+
+    // Fill LobRef into record
+    LobRef ref;
+    ref.length = vec_len;
+    ref.offset = offset;
+    const size_t record_size   = table_meta_.record_size();
+    const size_t field_offset  = static_cast<size_t>(field->offset());
+    const size_t field_len     = static_cast<size_t>(field->len());
+    const size_t avail_in_rec  = (field_offset < record_size) ? (record_size - field_offset) : 0;
+    const size_t writable_size = std::min(field_len, avail_in_rec);
+    if (writable_size >= sizeof(LobRef)) {
+      memcpy(record_data + field_offset, &ref, sizeof(LobRef));
+    }
+    return RC::SUCCESS;
+  }
+
   // 安全写入：计算该字段在记录缓冲区内的可写范围，避免越界
   {
     const size_t record_size   = table_meta_.record_size();

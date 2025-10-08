@@ -79,6 +79,8 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     return RC::SCHEMA_INDEX_NAME_REPEAT;
   }
 
-  stmt = new CreateIndexStmt(table, std::move(field_metas), create_index.index_name, create_index.unique);
+  stmt = new CreateIndexStmt(table, std::move(field_metas), create_index.index_name, create_index.unique,
+                             create_index.is_vector_index, create_index.distance_type, create_index.index_type,
+                             create_index.lists, create_index.probes);
   return RC::SUCCESS;
 }
