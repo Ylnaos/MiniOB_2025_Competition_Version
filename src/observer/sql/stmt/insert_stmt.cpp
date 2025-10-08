@@ -64,35 +64,43 @@ static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &def
     }
 
     Value def_val;
-    switch (field->type()) {
-      case AttrType::INTS: {
-        def_val.set_int(0);
-      } break;
-      case AttrType::FLOATS: {
-        def_val.set_float(0.0f);
-      } break;
-      case AttrType::CHARS: {
-        // For view inserts, prefer empty string over NULL to
-        // satisfy NOT NULL columns when the view omits them.
-        def_val.set_string("");
-      } break;
-      case AttrType::TEXTS: {
-        // TEXT default as empty as well
-        def_val.set_string("");
-      } break;
-      case AttrType::BOOLEANS: {
-        def_val.set_boolean(false);
-      } break;
-      case AttrType::DATES: {
-        def_val.set_date(19700101);  // 选取合法的日期作为缺省填充值
-      } break;
-      case AttrType::NULLS: {
-        def_val.set_null();
-      } break;
-      default: {
-        LOG_WARN("unsupported field type for default fill. table=%s field=%s type=%d",
-            table_meta.name(), field->name(), static_cast<int>(field->type()));
-        return RC::UNIMPLEMENTED;
+    // 优先遵循可空约束：
+    // - 若字段允许为 NULL，则直接补 NULL（保持统计/语义直观）；
+    // - 若字段不允许为 NULL，则按类型填充“非空零值/空串”等安全默认值，避免违反 NOT NULL 约束。
+    if (field->nullable()) {
+      def_val.set_null();
+    } else {
+      switch (field->type()) {
+        case AttrType::INTS: {
+          def_val.set_int(0);
+        } break;
+        case AttrType::FLOATS: {
+          def_val.set_float(0.0f);
+        } break;
+        case AttrType::CHARS: {
+          // 非空字符字段：使用空串作为默认值
+          def_val.set_string("", 0);
+        } break;
+        case AttrType::TEXTS: {
+          // 非空 TEXT：同样填充为空串（长度为0）
+          def_val.set_string("", 0);
+        } break;
+        case AttrType::BOOLEANS: {
+          def_val.set_boolean(false);
+        } break;
+        case AttrType::DATES: {
+          // 选择合法日期作为安全默认值
+          def_val.set_date(19700101);
+        } break;
+        case AttrType::NULLS: {
+          // 理论上不会出现对可见列的 NULLS 类型，这里兜底
+          def_val.set_null();
+        } break;
+        default: {
+          LOG_WARN("unsupported field type for default fill. table=%s field=%s type=%d",
+              table_meta.name(), field->name(), static_cast<int>(field->type()));
+          return RC::UNIMPLEMENTED;
+        }
       }
     }
 
