@@ -166,6 +166,7 @@ struct CalcSqlNode
 struct InsertSqlNode
 {
   string                         relation_name;  ///< Relation to insert into
+  vector<string>                 attribute_names;///< 可选：指定插入的列名列表（为空表示插入所有列）
   vector<vector<Value>>          rows;           ///< 多行插入的值，每个子 vector 表示一行
 };
 

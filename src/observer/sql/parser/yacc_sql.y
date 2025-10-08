@@ -555,6 +555,15 @@ insert_stmt:        /*insert   语句的语法解析树*/
       $$->insertion.rows.swap(*$5);
       delete $5;
     }
+    | INSERT INTO ID LBRACE attr_list RBRACE VALUES row_list
+    {
+      $$ = new ParsedSqlNode(SCF_INSERT);
+      $$->insertion.relation_name = $3;
+      $$->insertion.attribute_names.swap(*$5);
+      $$->insertion.rows.swap(*$8);
+      delete $5;
+      delete $8;
+    }
     ;
 
 value_list:
@@ -628,7 +637,8 @@ value:
 nullable_opt:
     /* empty */
     {
-      $$ = 0;
+      // 符合 SQL 标准：未显式指定时，字段默认允许 NULL
+      $$ = 1;
     }
     | NULLABLE
     {
@@ -641,7 +651,7 @@ nullable_opt:
     }
     | NOT NULL_T
     {
-      // 显式声明 NOT NULL（默认即 NOT NULL，这里仅作语法兼容）
+      // 显式声明 NOT NULL
       $$ = 0;
     }
     ;

@@ -64,45 +64,11 @@ static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &def
     }
 
     Value def_val;
-    // 优先遵循可空约束：
-    // - 若字段允许为 NULL，则直接补 NULL（保持统计/语义直观）；
-    // - 若字段不允许为 NULL，则按类型填充“非空零值/空串”等安全默认值，避免违反 NOT NULL 约束。
-    if (field->nullable()) {
-      def_val.set_null();
-    } else {
-      switch (field->type()) {
-        case AttrType::INTS: {
-          def_val.set_int(0);
-        } break;
-        case AttrType::FLOATS: {
-          def_val.set_float(0.0f);
-        } break;
-        case AttrType::CHARS: {
-          // 非空字符字段：使用空串作为默认值
-          def_val.set_string("", 0);
-        } break;
-        case AttrType::TEXTS: {
-          // 非空 TEXT：同样填充为空串（长度为0）
-          def_val.set_string("", 0);
-        } break;
-        case AttrType::BOOLEANS: {
-          def_val.set_boolean(false);
-        } break;
-        case AttrType::DATES: {
-          // 选择合法日期作为安全默认值
-          def_val.set_date(19700101);
-        } break;
-        case AttrType::NULLS: {
-          // 理论上不会出现对可见列的 NULLS 类型，这里兜底
-          def_val.set_null();
-        } break;
-        default: {
-          LOG_WARN("unsupported field type for default fill. table=%s field=%s type=%d",
-              table_meta.name(), field->name(), static_cast<int>(field->type()));
-          return RC::UNIMPLEMENTED;
-        }
-      }
-    }
+    // 对于未指定的字段，统一设为 NULL
+    // 这样才能正确处理聚合函数（COUNT、AVG 等会忽略 NULL，但不会忽略 0 或空串）
+    // 注意：这里是为视图插入或带列名的 INSERT 准备默认值，用户未指定的字段应该是 NULL
+    // 如果字段有 NOT NULL 约束，会在后续的插入验证阶段报错
+    def_val.set_null();
 
     defaults[i] = std::move(def_val);
   }
@@ -302,7 +268,61 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
 
   // check the fields number for each row
   const TableMeta &table_meta = table->table_meta();
-  const int        field_num  = table_meta.field_num() - table_meta.sys_field_num();
+  const int        sys_num    = table_meta.sys_field_num();
+  const int        field_num  = table_meta.field_num() - sys_num;
+
+  // 如果指定了列名，需要进行列映射和默认值填充
+  if (!inserts.attribute_names.empty()) {
+    // 检查指定的列名是否合法
+    const int specified_num = static_cast<int>(inserts.attribute_names.size());
+    std::vector<int> field_indices;
+    field_indices.reserve(specified_num);
+
+    for (const auto &attr_name : inserts.attribute_names) {
+      bool found = false;
+      for (int i = 0; i < field_num; ++i) {
+        const FieldMeta *field = table_meta.field(i + sys_num);
+        if (field != nullptr && strcasecmp(field->name(), attr_name.c_str()) == 0) {
+          field_indices.push_back(i);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        LOG_WARN("specified field not found in table. table=%s field=%s", table_name, attr_name.c_str());
+        return RC::SCHEMA_FIELD_MISSING;
+      }
+    }
+
+    // 构建默认值行
+    std::vector<Value> defaults;
+    RC rc = build_default_row(table_meta, defaults);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to build default row for insert with column names. table=%s rc=%s", table_name, strrc(rc));
+      return rc;
+    }
+
+    // 对每一行进行列映射
+    vector<vector<Value>> full_rows;
+    full_rows.reserve(normalized_rows.size());
+    for (size_t row_idx = 0; row_idx < normalized_rows.size(); ++row_idx) {
+      const std::vector<Value> &src_row = normalized_rows[row_idx];
+      if (src_row.size() != inserts.attribute_names.size()) {
+        LOG_WARN("value count mismatch with specified columns at row %zu. values=%zu columns=%zu",
+            row_idx, src_row.size(), inserts.attribute_names.size());
+        return RC::SCHEMA_FIELD_MISSING;
+      }
+
+      std::vector<Value> full_row = defaults;
+      for (size_t i = 0; i < field_indices.size(); ++i) {
+        full_row[field_indices[i]] = src_row[i];
+      }
+      full_rows.emplace_back(std::move(full_row));
+    }
+    normalized_rows = std::move(full_rows);
+  }
+
+  // 检查每行的字段数量
   for (size_t i = 0; i < normalized_rows.size(); i++) {
     const int value_num = static_cast<int>(normalized_rows[i].size());
     if (field_num != value_num) {
