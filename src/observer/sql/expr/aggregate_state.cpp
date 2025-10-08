@@ -232,7 +232,14 @@ RC aggregate_state_update_by_column(void *state, AggregateExpr::Type aggr_type, 
       rc = RC::UNIMPLEMENTED;
     }
   } else if (aggr_type == AggregateExpr::Type::COUNT) {
-    update_aggregate_state<CountState<int>, int>(state, col);
+    // COUNT(expr) 忽略 NULL，逐行检查以规避列向量缺少 NULL 位图的问题
+    const int rows = col.count();
+    for (int i = 0; i < rows; ++i) {
+      Value v = col.get_value(i);
+      if (!v.is_null()) {
+        static_cast<CountState<int> *>(state)->update(1);
+      }
+    }
   } else if (aggr_type == AggregateExpr::Type::AVG) {
     if (attr_type == AttrType::INTS) {
       update_aggregate_state<AvgState<int>, int>(state, col);

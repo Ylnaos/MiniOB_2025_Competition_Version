@@ -371,8 +371,8 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     }
 
     if (field->type() == AttrType::CHARS) {
-      // CHARS：尽量包含末尾'\0'
-      copy_len = std::min(writable_size, data_len + 1);
+      // CHARS：若为空字符串则不拷贝，区域已清零可提供终止符
+      copy_len = (data_len > 0 && src->data() != nullptr) ? std::min(writable_size, data_len) : 0;
     } else if (field->type() == AttrType::TEXTS) {
       // TEXT：仅按长度截断，不强制添加'\0'
       copy_len = std::min(writable_size, data_len);
@@ -391,7 +391,7 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
   const size_t data_len = src->length();
   if (field->type() == AttrType::CHARS) {
     if (copy_len > data_len) {
-      copy_len = data_len + 1; // 预留结尾'\0'
+      copy_len = data_len; // 预留结尾'\0'不需要显式拷贝，区域已清零
     }
     memset(record_data + field->offset(), 0, field->len());
   } else if (field->type() == AttrType::TEXTS) {
@@ -401,7 +401,9 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     }
     memset(record_data + field->offset(), 0, field->len());
   }
-  memcpy(record_data + field->offset(), src->data(), copy_len);
+  if (copy_len > 0 && src->data() != nullptr) {
+    memcpy(record_data + field->offset(), src->data(), copy_len);
+  }
   return RC::SUCCESS;
 }
 

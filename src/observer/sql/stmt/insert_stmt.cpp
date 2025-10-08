@@ -72,10 +72,13 @@ static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &def
         def_val.set_float(0.0f);
       } break;
       case AttrType::CHARS: {
-        def_val.set_null();
+        // For view inserts, prefer empty string over NULL to
+        // satisfy NOT NULL columns when the view omits them.
+        def_val.set_string("");
       } break;
       case AttrType::TEXTS: {
-        def_val.set_null();
+        // TEXT default as empty as well
+        def_val.set_string("");
       } break;
       case AttrType::BOOLEANS: {
         def_val.set_boolean(false);
