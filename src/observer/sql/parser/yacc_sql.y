@@ -363,8 +363,11 @@ create_view_stmt:
     {
       $$ = new ParsedSqlNode(SCF_CREATE_VIEW);
       $$->create_view.view_name = $3;
-      // 列清单(第5个符号)当前不强制校验/存储，语义阶段按原实现基于 SELECT 结果派生
-      if ($5 != nullptr) { delete $5; }
+      // 保存列名列表
+      if ($5 != nullptr) {
+        $$->create_view.field_names = *$5;
+        delete $5;
+      }
       // 记录 select 子句的原始文本
       $$->create_view.view_select_sql = token_name(sql_string, &@8);
       $$->create_view.select_node.reset($8);

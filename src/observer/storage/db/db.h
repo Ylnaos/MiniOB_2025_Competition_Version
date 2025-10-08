@@ -87,7 +87,7 @@ public:
   Table *find_table(int32_t table_id) const;
 
   /// @brief 创建视图
-  RC create_view(const char *view_name, const char *select_sql);
+  RC create_view(const char *view_name, const char *select_sql, const vector<string> &field_names = {});
   /// @brief 删除视图
   RC drop_view(const char *view_name);
   /// @brief 查找视图

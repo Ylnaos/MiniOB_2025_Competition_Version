@@ -25,6 +25,6 @@ RC CreateViewExecutor::execute(SQLStageEvent *sql_event)
     return RC::INVALID_ARGUMENT;
   }
 
-  return db->create_view(stmt->view_name().c_str(), stmt->view_select_sql().c_str());
+  return db->create_view(stmt->view_name().c_str(), stmt->view_select_sql().c_str(), stmt->field_names());
 }
 

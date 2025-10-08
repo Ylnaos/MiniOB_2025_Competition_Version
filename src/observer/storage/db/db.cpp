@@ -517,7 +517,7 @@ RC Db::open_all_views()
   return RC::SUCCESS;
 }
 
-RC Db::create_view(const char *view_name, const char *select_sql)
+RC Db::create_view(const char *view_name, const char *select_sql, const vector<string> &field_names)
 {
   if (is_blank(view_name) || is_blank(select_sql)) return RC::INVALID_ARGUMENT;
   if (opened_tables_.count(view_name) > 0) return RC::SCHEMA_TABLE_EXIST;
@@ -534,7 +534,7 @@ RC Db::create_view(const char *view_name, const char *select_sql)
   (void)n;
 
   View *view = new View();
-  RC    rc   = view->init(view_name, select_sql);
+  RC    rc   = view->init(view_name, select_sql, field_names);
   if (OB_FAIL(rc)) {
     delete view;
     return rc;

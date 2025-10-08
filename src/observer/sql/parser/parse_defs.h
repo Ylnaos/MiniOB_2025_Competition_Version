@@ -328,6 +328,7 @@ struct CreateViewSqlNode
   string                    view_name;       ///< 视图名称
   string                    view_select_sql; ///< 视图定义的 SELECT 子句文本（改写后文本）
   unique_ptr<ParsedSqlNode> select_node;     ///< 解析好的 SELECT 语法树（可选）
+  vector<string>            field_names;     ///< 视图定义的列名列表（如果有指定）
 };
 
 /**

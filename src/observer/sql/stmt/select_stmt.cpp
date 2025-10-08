@@ -31,10 +31,12 @@ using namespace common;
 // 1) 未绑定字段（直接映射 列名 -> 表.列）
 // 2) 星号(*)：当且仅当能唯一定位到一个底层表时，将该表所有可见列加入映射
 // 3) 复杂表达式：存储表达式副本
+// 如果提供了field_names，则只映射这些字段名
 static void build_view_output_mapping(
     Db *db,
     const vector<RelationSqlNode> &view_rels,
     const vector<unique_ptr<Expression>> &view_exprs,
+    const vector<string> &field_names,
     unordered_map<string, pair<string, string>> &name_to_relattr,
     unordered_map<string, unique_ptr<Expression>> &name_to_expr)
 {
@@ -101,6 +103,47 @@ static void build_view_output_mapping(
   // 如果视图只有一个底层表，将该表的所有列加入映射，以支持复杂表达式中的字段引用
   if (view_rels.size() == 1) {
     add_table_columns(view_rels[0]);
+  }
+
+  // 如果视图定义了列名列表，则只保留这些列的映射
+  if (!field_names.empty()) {
+    unordered_map<string, pair<string, string>> filtered_relattr;
+    unordered_map<string, unique_ptr<Expression>> filtered_expr;
+
+    for (size_t i = 0; i < field_names.size() && i < view_exprs.size(); ++i) {
+      string key = field_names[i];
+      common::str_to_lower(key);
+
+      // 从原映射中查找第i个表达式对应的映射
+      const auto &expr = view_exprs[i];
+      if (expr->type() == ExprType::UNBOUND_FIELD) {
+        string orig_label = expr->alias() && expr->alias()[0] != '\0'
+                               ? string(expr->alias())
+                               : string(static_cast<UnboundFieldExpr *>(expr.get())->field_name());
+        string orig_key = orig_label;
+        common::str_to_lower(orig_key);
+
+        auto it = name_to_relattr.find(orig_key);
+        if (it != name_to_relattr.end()) {
+          filtered_relattr[key] = it->second;
+        }
+      } else if (expr->type() != ExprType::STAR) {
+        string orig_key;
+        if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+          orig_key = expr->alias();
+        }
+        if (!orig_key.empty()) {
+          common::str_to_lower(orig_key);
+          auto it = name_to_expr.find(orig_key);
+          if (it != name_to_expr.end()) {
+            filtered_expr[key] = it->second->copy();
+          }
+        }
+      }
+    }
+
+    name_to_relattr = std::move(filtered_relattr);
+    name_to_expr = std::move(filtered_expr);
   }
 }
 
@@ -277,7 +320,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           unordered_map<string, unique_ptr<Expression>> name_to_expr;
           // 注意：上面已经将视图内部的 relation 列表 swap 到 select_sql.relations 中
           // 此处必须使用新的 relations，否则会拿到原外层的视图名，导致无法建立字段映射
-          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, name_to_relattr, name_to_expr);
+          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, view->field_names(), name_to_relattr, name_to_expr);
           for (auto &outer_expr : select_sql.expressions) {
             RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
             if (OB_FAIL(rc)) return rc;

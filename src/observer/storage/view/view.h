@@ -19,19 +19,22 @@ public:
   View()          = default;
   virtual ~View() = default;
 
-  RC init(const char *name, const char *select_sql)
+  RC init(const char *name, const char *select_sql, const vector<string> &field_names = {})
   {
     if (nullptr == name || nullptr == select_sql) return RC::INVALID_ARGUMENT;
     name_        = name;
     select_sql_  = select_sql;
+    field_names_ = field_names;
     return RC::SUCCESS;
   }
 
   const char *name() const { return name_.c_str(); }
   const char *select_sql() const { return select_sql_.c_str(); }
+  const vector<string> &field_names() const { return field_names_; }
 
 private:
-  string name_;
-  string select_sql_;
+  string         name_;
+  string         select_sql_;
+  vector<string> field_names_;  ///< 视图定义的列名列表(如果有指定)
 };
 
