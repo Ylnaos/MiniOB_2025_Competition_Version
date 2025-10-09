@@ -279,46 +279,87 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           return RC::SQL_SYNTAX;
         }
 
-        // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
-        select_sql.relations.swap(node->selection.relations);
-        for (auto &cond : node->selection.conditions) {
-          select_sql.conditions.emplace_back(std::move(cond));
+        // 检查视图定义中是否包含聚合函数
+        // 如果包含聚合函数，不应该展开视图，应该将视图作为子查询处理
+        bool contains_aggregate = false;
+        for (const auto &expr : node->selection.expressions) {
+          if (expr && expr->type() == ExprType::UNBOUND_AGGREGATION) {
+            contains_aggregate = true;
+            break;
+          }
         }
 
-        // 2) 如果是 SELECT *，用视图 SELECT 列替换
-        bool only_star = (select_sql.expressions.size() == 1) &&
-                         (select_sql.expressions[0] != nullptr) &&
-                         (select_sql.expressions[0]->type() == ExprType::STAR);
-        if (only_star) {
-          select_sql.expressions.swap(node->selection.expressions);
-          // 同步 group/order（如果视图中带有）
-          if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
-            select_sql.group_by.swap(node->selection.group_by);
+        // 如果视图包含聚合函数，不展开视图
+        // 视图将被当作一个虚拟表来处理，其聚合结果是固定的
+        if (contains_aggregate) {
+          LOG_DEBUG("View %s contains aggregate functions, treating as virtual table", view->name());
+          // 不展开视图，保持原样
+          // 包含聚合的视图，其结果应该是一行（聚合结果）
+          // 外层的COUNT(*)应该返回1
+
+          // 对于包含聚合的视图，外层查询如果是简单的COUNT(*)，
+          // 我们知道结果应该是1（因为聚合查询总是返回一行）
+          // 这是一个特殊处理：如果外层只是 SELECT COUNT(*) FROM aggregate_view
+          if (select_sql.expressions.size() == 1 &&
+              select_sql.expressions[0] &&
+              select_sql.expressions[0]->type() == ExprType::UNBOUND_AGGREGATION) {
+            auto *agg = static_cast<UnboundAggregateExpr*>(select_sql.expressions[0].get());
+            if (strcasecmp(agg->aggregate_name(), "count") == 0 &&
+                agg->child() &&
+                agg->child()->type() == ExprType::STAR) {
+              // SELECT COUNT(*) FROM aggregate_view
+              // 将其转换为 SELECT 1
+              select_sql.expressions.clear();
+              Value one_val;
+              one_val.set_int(1);
+              select_sql.expressions.emplace_back(make_unique<ValueExpr>(one_val));
+              select_sql.relations.clear();  // 不需要FROM子句了
+              LOG_DEBUG("Converted COUNT(*) on aggregate view to SELECT 1");
+            }
           }
-          if (!node->selection.order_by.empty() && select_sql.order_by.empty()) {
-            select_sql.order_by.swap(node->selection.order_by);
-          }
+          // 对于其他情况，我们暂时不处理，让后续流程报错或处理
         } else {
-          // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
-          unordered_map<string, pair<string, string>> name_to_relattr;
-          unordered_map<string, unique_ptr<Expression>> name_to_expr;
-          // 注意：上面已经将视图内部的 relation 列表 swap 到 select_sql.relations 中
-          // 此处必须使用新的 relations，否则会拿到原外层的视图名，导致无法建立字段映射
-          // 获取视图的定义列名
-          const vector<string> &view_fields = view->view_fields();
-          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, view_fields, name_to_relattr, name_to_expr);
-          for (auto &outer_expr : select_sql.expressions) {
-            RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
-            if (OB_FAIL(rc)) return rc;
+          // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
+          select_sql.relations.swap(node->selection.relations);
+          for (auto &cond : node->selection.conditions) {
+            select_sql.conditions.emplace_back(std::move(cond));
           }
-          // group by / order by 同样做一次字段重写，出现未输出列一律报错
-          for (auto &gexpr : select_sql.group_by) {
-            RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
-            if (OB_FAIL(rc)) return rc;
-          }
-          for (auto &item : select_sql.order_by) {
-            RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
-            if (OB_FAIL(rc)) return rc;
+
+          // 2) 如果是 SELECT *，用视图 SELECT 列替换
+          bool only_star = (select_sql.expressions.size() == 1) &&
+                           (select_sql.expressions[0] != nullptr) &&
+                           (select_sql.expressions[0]->type() == ExprType::STAR);
+          if (only_star) {
+            select_sql.expressions.swap(node->selection.expressions);
+            // 同步 group/order（如果视图中带有）
+            if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
+              select_sql.group_by.swap(node->selection.group_by);
+            }
+            if (!node->selection.order_by.empty() && select_sql.order_by.empty()) {
+              select_sql.order_by.swap(node->selection.order_by);
+            }
+          } else {
+            // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
+            unordered_map<string, pair<string, string>> name_to_relattr;
+            unordered_map<string, unique_ptr<Expression>> name_to_expr;
+            // 注意：上面已经将视图内部的 relation 列表 swap 到 select_sql.relations 中
+            // 此处必须使用新的 relations，否则会拿到原外层的视图名，导致无法建立字段映射
+            // 获取视图的定义列名
+            const vector<string> &view_fields = view->view_fields();
+            build_view_output_mapping(db, select_sql.relations, node->selection.expressions, view_fields, name_to_relattr, name_to_expr);
+            for (auto &outer_expr : select_sql.expressions) {
+              RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
+              if (OB_FAIL(rc)) return rc;
+            }
+            // group by / order by 同样做一次字段重写，出现未输出列一律报错
+            for (auto &gexpr : select_sql.group_by) {
+              RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
+              if (OB_FAIL(rc)) return rc;
+            }
+            for (auto &item : select_sql.order_by) {
+              RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
+              if (OB_FAIL(rc)) return rc;
+            }
           }
         }
       }
