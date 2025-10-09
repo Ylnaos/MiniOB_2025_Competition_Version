@@ -114,11 +114,10 @@ static void build_view_output_mapping(
     }
   }
 
-  // 如果视图只有一个底层表，且没有明确定义视图列名时，将该表的所有列加入映射，以支持复杂表达式中的字段引用
-  // 如果视图有明确定义的列名（如 CREATE VIEW v(id, age) AS ...），则不应添加所有列
-  if (view_rels.size() == 1 && view_field_names.empty()) {
-    add_table_columns(view_rels[0]);
-  }
+  // 移除错误逻辑：不应该自动将底层表的所有列加入映射
+  // 视图对外只暴露SELECT列表中明确输出的字段，不应该暴露底层表的其他字段
+  // 如果外层查询引用了视图未输出的列，应该报错
+  // 原有逻辑会导致类似 "select count(name) from view" 这样的查询错误地访问到底层表的name字段
 }
 
 // 在绑定前重写外层表达式树中未限定的字段引用：
