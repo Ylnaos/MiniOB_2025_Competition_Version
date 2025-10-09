@@ -35,6 +35,7 @@ static void build_view_output_mapping(
     Db *db,
     const vector<RelationSqlNode> &view_rels,
     const vector<unique_ptr<Expression>> &view_exprs,
+    const vector<string> &view_field_names,  // 视图定义的列名（可能为空）
     unordered_map<string, pair<string, string>> &name_to_relattr,
     unordered_map<string, unique_ptr<Expression>> &name_to_expr)
 {
@@ -56,14 +57,20 @@ static void build_view_output_mapping(
     }
   };
 
-  for (const auto &expr : view_exprs) {
+  for (size_t i = 0; i < view_exprs.size(); ++i) {
+    const auto &expr = view_exprs[i];
     if (expr == nullptr) continue;
 
     if (expr->type() == ExprType::UNBOUND_FIELD) {
-      // 结果列名优先使用别名
-      string label = expr->alias() && expr->alias()[0] != '\0'
-                         ? string(expr->alias())
-                         : string(static_cast<UnboundFieldExpr *>(expr.get())->field_name());
+      // 如果视图有定义列名，使用视图定义的列名；否则使用别名或字段名
+      string label;
+      if (i < view_field_names.size() && !view_field_names[i].empty()) {
+        label = view_field_names[i];
+      } else {
+        label = expr->alias() && expr->alias()[0] != '\0'
+                    ? string(expr->alias())
+                    : string(static_cast<UnboundFieldExpr *>(expr.get())->field_name());
+      }
 
       auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
       string key = label;
@@ -89,17 +96,27 @@ static void build_view_output_mapping(
       }
     } else {
       // 复杂表达式：存储表达式副本,用于后续展开
-      if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
-        string key = expr->alias();
+      // 优先使用视图定义的列名，其次使用别名
+      string label;
+      if (i < view_field_names.size() && !view_field_names[i].empty()) {
+        label = view_field_names[i];
+      } else if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+        label = expr->alias();
+      }
+
+      if (!label.empty()) {
+        string key = label;
         common::str_to_lower(key);
         // 复制表达式用于后续重写
         name_to_expr[key] = expr->copy();
+        LOG_DEBUG("Added computed column '%s' to name_to_expr mapping", key.c_str());
       }
     }
   }
 
-  // 如果视图只有一个底层表，将该表的所有列加入映射，以支持复杂表达式中的字段引用
-  if (view_rels.size() == 1) {
+  // 如果视图只有一个底层表，且没有明确定义视图列名时，将该表的所有列加入映射，以支持复杂表达式中的字段引用
+  // 如果视图有明确定义的列名（如 CREATE VIEW v(id, age) AS ...），则不应添加所有列
+  if (view_rels.size() == 1 && view_field_names.empty()) {
     add_table_columns(view_rels[0]);
   }
 }
@@ -126,6 +143,7 @@ static RC rewrite_unqualified_fields(
         // 优先查找表达式映射(计算列)
         auto expr_it = name_to_expr.find(key);
         if (expr_it != name_to_expr.end()) {
+          LOG_DEBUG("Found computed column '%s' in name_to_expr mapping", key.c_str());
           // 用视图中的计算表达式替换
           unique_ptr<Expression> replaced = expr_it->second->copy();
           if (expr->alias() != nullptr) {
@@ -161,16 +179,25 @@ static RC rewrite_unqualified_fields(
 
     case ExprType::UNBOUND_AGGREGATION: {
       auto *agg = static_cast<UnboundAggregateExpr *>(expr.get());
-      return rewrite_unqualified_fields(agg->child(), name_to_relattr, name_to_expr);
+      RC rc = rewrite_unqualified_fields(agg->child(), name_to_relattr, name_to_expr);
+      // 如果子表达式重写失败（如字段不存在），应该正确传递错误
+      return rc;
     } break;
 
     case ExprType::ARITHMETIC: {
       auto *arith = static_cast<ArithmeticExpr *>(expr.get());
+      LOG_DEBUG("Rewriting arithmetic expression");
       RC rc = rewrite_unqualified_fields(arith->left(), name_to_relattr, name_to_expr);
-      if (OB_FAIL(rc)) return rc;
+      if (OB_FAIL(rc)) {
+        LOG_WARN("Failed to rewrite left expression of arithmetic");
+        return rc;
+      }
       if (arith->right()) {
         rc = rewrite_unqualified_fields(arith->right(), name_to_relattr, name_to_expr);
-        if (OB_FAIL(rc)) return rc;
+        if (OB_FAIL(rc)) {
+          LOG_WARN("Failed to rewrite right expression of arithmetic");
+          return rc;
+        }
       }
       return RC::SUCCESS;
     } break;
@@ -241,9 +268,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       View *view = db->find_view(rel_name);
       if (view != nullptr && rel.alias.empty()) {
         ParsedSqlResult parsed;
+        LOG_DEBUG("Parsing view SELECT SQL: %s", view->select_sql());
         RC parse_rc = parse(view->select_sql(), &parsed);
         if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
-          LOG_WARN("parse view select failed. view=%s", view->name());
+          LOG_WARN("parse view select failed. view=%s, sql=%s", view->name(), view->select_sql());
           return RC::SQL_SYNTAX;
         }
         ParsedSqlNode *node = parsed.sql_nodes()[0].get();
@@ -277,7 +305,9 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           unordered_map<string, unique_ptr<Expression>> name_to_expr;
           // 注意：上面已经将视图内部的 relation 列表 swap 到 select_sql.relations 中
           // 此处必须使用新的 relations，否则会拿到原外层的视图名，导致无法建立字段映射
-          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, name_to_relattr, name_to_expr);
+          // 获取视图的定义列名
+          const vector<string> &view_fields = view->view_fields();
+          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, view_fields, name_to_relattr, name_to_expr);
           for (auto &outer_expr : select_sql.expressions) {
             RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
             if (OB_FAIL(rc)) return rc;

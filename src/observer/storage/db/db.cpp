@@ -503,8 +503,46 @@ RC Db::open_all_views()
       return RC::SCHEMA_TABLE_EXIST;
     }
 
+    // 解析视图元数据格式：
+    // 第1行：SELECT SQL 语句
+    // 第2行：视图定义的列名数量（可选）
+    // 第3行起：每行一个列名
+    string select_sql;
+    vector<string> view_fields;
+
+    size_t first_newline = content.find('\n');
+    if (first_newline == string::npos) {
+      // 旧格式：只有 SQL 语句，没有换行符
+      select_sql = content;
+    } else {
+      // 新格式：有列名信息
+      select_sql = content.substr(0, first_newline);
+
+      size_t second_newline = content.find('\n', first_newline + 1);
+      if (second_newline != string::npos) {
+        // 提取列名数量
+        string count_str = content.substr(first_newline + 1, second_newline - first_newline - 1);
+        int field_count = atoi(count_str.c_str());
+
+        // 提取各个列名
+        size_t pos = second_newline + 1;
+        for (int i = 0; i < field_count && pos < content.size(); ++i) {
+          size_t next_newline = content.find('\n', pos);
+          if (next_newline == string::npos) {
+            // 最后一个字段
+            view_fields.push_back(content.substr(pos));
+            break;
+          } else {
+            view_fields.push_back(content.substr(pos, next_newline - pos));
+            pos = next_newline + 1;
+          }
+        }
+      }
+    }
+
     View *view = new View();
-    RC    rc   = view->init(view_name.c_str(), content.c_str());
+    RC    rc   = view_fields.empty() ? view->init(view_name.c_str(), select_sql.c_str())
+                                      : view->init(view_name.c_str(), select_sql.c_str(), view_fields);
     if (OB_FAIL(rc)) {
       delete view;
       LOG_WARN("init view failed: %s", view_name.c_str());
@@ -517,7 +555,7 @@ RC Db::open_all_views()
   return RC::SUCCESS;
 }
 
-RC Db::create_view(const char *view_name, const char *select_sql)
+RC Db::create_view(const char *view_name, const char *select_sql, const vector<string> &view_fields)
 {
   if (is_blank(view_name) || is_blank(select_sql)) return RC::INVALID_ARGUMENT;
   if (opened_tables_.count(view_name) > 0) return RC::SCHEMA_TABLE_EXIST;
@@ -529,12 +567,26 @@ RC Db::create_view(const char *view_name, const char *select_sql)
     LOG_WARN("create view: open meta file failed %s", file_path.c_str());
     return RC::IOERR_OPEN;
   }
-  size_t n = fwrite(select_sql, 1, strlen(select_sql), fp);
+
+  // 保存格式：
+  // 第1行：SELECT SQL 语句
+  // 第2行：视图定义的列名数量
+  // 第3行起：每行一个列名
+  string content = select_sql;
+  content += "\n";
+  content += to_string(view_fields.size());
+  for (const auto &field : view_fields) {
+    content += "\n";
+    content += field;
+  }
+
+  size_t n = fwrite(content.c_str(), 1, content.size(), fp);
   fclose(fp);
   (void)n;
 
   View *view = new View();
-  RC    rc   = view->init(view_name, select_sql);
+  RC    rc   = view_fields.empty() ? view->init(view_name, select_sql)
+                                    : view->init(view_name, select_sql, view_fields);
   if (OB_FAIL(rc)) {
     delete view;
     return rc;

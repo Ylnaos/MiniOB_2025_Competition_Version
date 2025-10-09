@@ -33,6 +33,7 @@ RC CreateViewStmt::create(Db *db, const CreateViewSqlNode &create_view, Stmt *&s
   auto *view_stmt = new CreateViewStmt();
   view_stmt->view_name_       = create_view.view_name;
   view_stmt->view_select_sql_ = create_view.view_select_sql;
+  view_stmt->view_fields_     = create_view.view_fields;
   stmt                        = view_stmt;
   return RC::SUCCESS;
 }

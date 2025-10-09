@@ -30,9 +30,11 @@ public:
 
   const std::string &view_name() const { return view_name_; }
   const std::string &view_select_sql() const { return view_select_sql_; }
+  const std::vector<std::string> &view_fields() const { return view_fields_; }
 
 private:
   std::string view_name_;
   std::string view_select_sql_;
+  std::vector<std::string> view_fields_;
 };
 
