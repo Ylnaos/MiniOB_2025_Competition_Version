@@ -389,6 +389,24 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     return RC::SUCCESS;
   }
 
+  // 对于非高维向量（维度<=1000），需要检查维度是否匹配
+  if (field->type() == AttrType::VECTORS && field->len() != static_cast<int>(sizeof(LobRef))) {
+    // 检查向量维度是否匹配
+    int vec_len = src->length();
+    if (vec_len <= 0 || (vec_len % sizeof(float)) != 0) {
+      LOG_WARN("Invalid vector data length: %d", vec_len);
+      return RC::INVALID_ARGUMENT;
+    }
+
+    // 字段的len存储的是字节数，需要与实际数据的字节数比较
+    if (vec_len != field->len()) {
+      int expected_dim = field->len() / static_cast<int>(sizeof(float));
+      int actual_dim = vec_len / static_cast<int>(sizeof(float));
+      LOG_WARN("Vector dimension mismatch. Expected %d, got %d", expected_dim, actual_dim);
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
   // 安全写入：计算该字段在记录缓冲区内的可写范围，避免越界
   {
     const size_t record_size   = table_meta_.record_size();
@@ -457,6 +475,12 @@ RC Table::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode m
 RC Table::create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique)
 {
   return engine_->create_index(trx, field_metas, index_name, unique);
+}
+
+RC Table::create_vector_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name,
+                              const char *distance_type, const char *index_type, int lists, int probes)
+{
+  return engine_->create_vector_index(trx, field_metas, index_name, distance_type, index_type, lists, probes);
 }
 
 RC Table::delete_record(const Record &record)

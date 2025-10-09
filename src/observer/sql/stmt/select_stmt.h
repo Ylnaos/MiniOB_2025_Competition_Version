@@ -48,6 +48,7 @@ public:
   vector<unique_ptr<Expression>> &query_expressions() { return query_expressions_; }
   vector<unique_ptr<Expression>> &group_by() { return group_by_; }
   vector<pair<unique_ptr<Expression>, bool>> &order_by() { return order_by_; }
+  int limit() const { return limit_; }
 
 private:
   vector<unique_ptr<Expression>> query_expressions_;
@@ -57,4 +58,5 @@ private:
   vector<pair<unique_ptr<Expression>, bool>> order_by_;
   unique_ptr<Expression>         where_expr_;
   unique_ptr<Expression>         having_expr_;
+  int                            limit_ = -1;  // LIMIT数量，-1表示无限制
 };

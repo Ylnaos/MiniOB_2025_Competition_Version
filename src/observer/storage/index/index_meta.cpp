@@ -22,6 +22,11 @@ See the Mulan PSL v2 for more details. */
 const static Json::StaticString FIELD_NAME("name");
 const static Json::StaticString FIELD_FIELD_NAMES("field_names");
 const static Json::StaticString FIELD_UNIQUE("unique");
+const static Json::StaticString FIELD_IS_VECTOR_INDEX("is_vector_index");
+const static Json::StaticString FIELD_DISTANCE_TYPE("distance_type");
+const static Json::StaticString FIELD_INDEX_TYPE("index_type");
+const static Json::StaticString FIELD_LISTS("lists");
+const static Json::StaticString FIELD_PROBES("probes");
 
 RC IndexMeta::init(const char *name, span<const FieldMeta> fields, bool unique)
 {
@@ -54,6 +59,15 @@ void IndexMeta::to_json(Json::Value &json_value) const
   }
   json_value[FIELD_FIELD_NAMES] = field_list;
   json_value[FIELD_UNIQUE]     = unique_;
+
+  // Vector index specific fields
+  if (is_vector_index_) {
+    json_value[FIELD_IS_VECTOR_INDEX] = is_vector_index_;
+    json_value[FIELD_DISTANCE_TYPE] = distance_type_;
+    json_value[FIELD_INDEX_TYPE] = index_type_;
+    json_value[FIELD_LISTS] = lists_;
+    json_value[FIELD_PROBES] = probes_;
+  }
 }
 
 RC IndexMeta::from_json(const TableMeta &table, const Json::Value &json_value, IndexMeta &index)
@@ -94,7 +108,33 @@ RC IndexMeta::from_json(const TableMeta &table, const Json::Value &json_value, I
     unique = unique_value.asBool();
   }
 
-  return index.init(name_value.asCString(), span<const FieldMeta>(fields.data(), fields.size()), unique);
+  RC rc = index.init(name_value.asCString(), span<const FieldMeta>(fields.data(), fields.size()), unique);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+
+  // Load vector index specific fields if present
+  if (json_value.isMember(FIELD_IS_VECTOR_INDEX.c_str())) {
+    const Json::Value &is_vector = json_value[FIELD_IS_VECTOR_INDEX];
+    if (is_vector.isBool() && is_vector.asBool()) {
+      index.set_vector_index(true);
+
+      if (json_value.isMember(FIELD_DISTANCE_TYPE.c_str())) {
+        index.set_distance_type(json_value[FIELD_DISTANCE_TYPE].asCString());
+      }
+      if (json_value.isMember(FIELD_INDEX_TYPE.c_str())) {
+        index.set_index_type(json_value[FIELD_INDEX_TYPE].asCString());
+      }
+      if (json_value.isMember(FIELD_LISTS.c_str())) {
+        index.set_lists(json_value[FIELD_LISTS].asInt());
+      }
+      if (json_value.isMember(FIELD_PROBES.c_str())) {
+        index.set_probes(json_value[FIELD_PROBES].asInt());
+      }
+    }
+  }
+
+  return RC::SUCCESS;
 }
 
 const char *IndexMeta::name() const { return name_.c_str(); }

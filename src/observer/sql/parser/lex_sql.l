@@ -154,6 +154,7 @@ NULL                                    RETURN_TOKEN(NULL_T);
   INNER_PRODUCT                           RETURN_TOKEN(INNER_PRODUCT_F);
   WITH                                    RETURN_TOKEN(WITH);
   DISTANCE                                RETURN_TOKEN(DISTANCE);
+  LIMIT                                   RETURN_TOKEN(LIMIT);
   TYPE                                    RETURN_TOKEN(TYPE);
   LISTS                                   RETURN_TOKEN(LISTS);
   PROBES                                  RETURN_TOKEN(PROBES);

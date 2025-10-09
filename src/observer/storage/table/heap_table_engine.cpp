@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/heap_record_scanner.h"
 #include "common/log/log.h"
 #include "storage/index/bplus_tree_index.h"
+#include "storage/index/ivfflat_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
 
@@ -40,7 +41,7 @@ RC HeapTableEngine::insert_record(Record &record)
 {
   RC rc = RC::SUCCESS;
 
-  // 1) 先基�?UNIQUE 索引做重复检查，避免写入后回�?
+  // 1) 先基�?UNIQUE 索引做重复检查，避免写入后回�?
 if (!indexes_.empty()) {
     auto build_user_key = [&](const Index *index, vector<char> &out_key) {
       int total_len = 0;
@@ -100,7 +101,7 @@ if (!indexes_.empty()) {
       IndexScanner *scanner = index->create_scanner(user_key.data(), static_cast<int>(user_key.size()), true,
                                                     user_key.data(), static_cast<int>(user_key.size()), true);
       if (scanner == nullptr) {
-        // 扫描器打开失败（可能是空树/瞬时锁），保守放行，由索引层再次兜底检查�?
+        // 扫描器打开失败（可能是空树/瞬时锁），保守放行，由索引层再次兜底检查�?
 LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
                   table_meta_->name(), index->index_meta().name());
         continue;
@@ -122,7 +123,7 @@ LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
 
   // 3) 维护索引
   rc = insert_entry_of_indexes(record.data(), record.rid());
-  if (rc != RC::SUCCESS) {  // 可能出现了键值重�?
+  if (rc != RC::SUCCESS) {  // 可能出现了键值重�?
 RC rc2 = delete_entry_of_indexes(record.data(), record.rid(), false /*error_on_not_exists*/);
     if (rc2 != RC::SUCCESS) {
       LOG_ERROR("Failed to rollback index data when insert index entries failed. table name=%s, rc=%d:%s",
@@ -183,13 +184,13 @@ RC HeapTableEngine::update_record_with_trx(const Record &old_record, const Recor
 {
   RC rc = RC::SUCCESS;
 
-  // 首先删除旧的索引�?
+  // 首先删除旧的索引�?
 for (Index *index : indexes_) {
     rc = index->delete_entry(old_record.data(), &old_record.rid());
     if (rc != RC::SUCCESS && rc != RC::RECORD_NOT_EXIST) {
       LOG_ERROR("failed to delete old entry from index. table name=%s, index name=%s, rid=%s, rc=%s",
                 table_meta_->name(), index->index_meta().name(), old_record.rid().to_string().c_str(), strrc(rc));
-      // 回滚已经删除的索�?
+      // 回滚已经删除的索�?
 for (Index *rollback_index : indexes_) {
         if (rollback_index == index) {
           break;
@@ -220,7 +221,7 @@ for (Index *rollback_index : indexes_) {
     return rc;
   }
 
-  // 插入新的索引�?
+  // 插入新的索引�?
 for (Index *index : indexes_) {
     rc = index->insert_entry(new_record.data(), &new_record.rid());
     if (rc != RC::SUCCESS) {
@@ -351,7 +352,7 @@ RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, co
     return rc;
   }
 
-  /// 内存中有一份元数据，磁盘文件也有一份元数据。修改磁盘文件时，先创建一个临时文件，写入完成后再rename为正式文�?  /// 这样可以防止文件内容不完�?  // 创建元数据临时文�?
+  /// 内存中有一份元数据，磁盘文件也有一份元数据。修改磁盘文件时，先创建一个临时文件，写入完成后再rename为正式文�?  /// 这样可以防止文件内容不完�?  // 创建元数据临时文�?
 string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
   fstream fs;
   fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
@@ -365,7 +366,7 @@ string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + "
   }
   fs.close();
 
-  // 覆盖原始元数据文�?
+  // 覆盖原始元数据文�?
 string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
 
   int ret = rename(tmp_file.c_str(), meta_file.c_str());
@@ -380,6 +381,154 @@ string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
 
   LOG_INFO("Successfully added a new index (%s) on the table (%s)", index_name, table_meta_->name());
   return rc;
+}
+
+RC HeapTableEngine::create_vector_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name,
+                                        const char *distance_type, const char *index_type, int lists, int probes)
+{
+  if (common::is_blank(index_name) || field_metas.empty()) {
+    LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or fields empty", table_meta_->name());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 验证是否为向量字段
+  if (field_metas.size() != 1 || field_metas[0].type() != AttrType::VECTORS) {
+    LOG_WARN("Vector index can only be created on a single vector field");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 验证距离类型
+  if (strcasecmp(distance_type, "L2_DISTANCE") != 0 &&
+      strcasecmp(distance_type, "COSINE_DISTANCE") != 0 &&
+      strcasecmp(distance_type, "INNER_PRODUCT") != 0) {
+    LOG_WARN("Invalid distance type: %s", distance_type);
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 验证索引类型
+  if (strcasecmp(index_type, "IVFFLAT") != 0) {
+    LOG_WARN("Only IVFFLAT index type is supported, got: %s", index_type);
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 验证参数
+  if (lists <= 0 || probes <= 0 || probes > lists) {
+    LOG_WARN("Invalid vector index parameters: lists=%d, probes=%d", lists, probes);
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 创建向量索引元数据
+  IndexMeta new_index_meta;
+  RC rc = new_index_meta.init(index_name, field_metas, false);
+  if (rc != RC::SUCCESS) {
+    LOG_INFO("Failed to init IndexMeta in table:%s, index_name:%s",
+             table_meta_->name(), index_name);
+    return rc;
+  }
+
+  // 设置向量索引特定参数
+  new_index_meta.set_vector_index(true);
+  new_index_meta.set_distance_type(distance_type);
+  new_index_meta.set_index_type(index_type);
+  new_index_meta.set_lists(lists);
+  new_index_meta.set_probes(probes);
+
+  // 创建IVFFlat向量索引
+  IvfflatIndex *index      = new IvfflatIndex();
+  string          index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+
+  rc = index->create(table_, index_file.c_str(), new_index_meta, field_metas);
+  if (rc != RC::SUCCESS) {
+    delete index;
+    LOG_ERROR("Failed to create vector index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
+    return rc;
+  }
+
+  // 遍历现有数据并插入到索引
+  RecordScanner *scanner = nullptr;
+  rc = get_record_scanner(scanner, trx, ReadWriteMode::READ_ONLY);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to create scanner while creating vector index. table=%s, index=%s, rc=%s",
+             table_meta_->name(), index_name, strrc(rc));
+    delete index;
+    return rc;
+  }
+
+  Record record;
+  int inserted_count = 0;
+  while (OB_SUCC(rc = scanner->next(record))) {
+    rc = index->insert_entry(record.data(), &record.rid());
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to insert record into vector index. table=%s, index=%s, rc=%s",
+               table_meta_->name(), index_name, strrc(rc));
+      scanner->close_scan();
+      delete scanner;
+      index->close();
+      delete index;
+      return rc;
+    }
+    inserted_count++;
+  }
+
+  if (RC::RECORD_EOF == rc) {
+    rc = RC::SUCCESS;
+  }
+
+  scanner->close_scan();
+  delete scanner;
+
+  // 训练索引
+  if (inserted_count > 0) {
+    LOG_INFO("Training vector index with %d vectors...", inserted_count);
+    rc = index->train();
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("Failed to train vector index. table=%s, index=%s, rc=%s",
+               table_meta_->name(), index_name, strrc(rc));
+      index->close();
+      delete index;
+      return rc;
+    }
+    LOG_INFO("Vector index trained successfully");
+  }
+
+  indexes_.push_back(index);
+
+  // 将索引元数据添加到表元数据中
+  TableMeta new_table_meta(*table_meta_);
+  rc = new_table_meta.add_index(new_index_meta);
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to add vector index (%s) on table (%s). error=%d:%s",
+              index_name, table_meta_->name(), rc, strrc(rc));
+    return rc;
+  }
+
+  // 持久化元数据
+  string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
+  fstream fs;
+  fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
+  if (!fs.is_open()) {
+    LOG_ERROR("Failed to open file for write. file name=%s, errmsg=%s", tmp_file.c_str(), strerror(errno));
+    return RC::IOERR_OPEN;
+  }
+  if (new_table_meta.serialize(fs) < 0) {
+    LOG_ERROR("Failed to dump new table meta to file: %s. sys err=%d:%s", tmp_file.c_str(), errno, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+  fs.close();
+
+  string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
+  int ret = rename(tmp_file.c_str(), meta_file.c_str());
+  if (ret != 0) {
+    LOG_ERROR("Failed to rename tmp meta file (%s) to normal meta file (%s) while creating vector index (%s) on table (%s). "
+              "system error=%d:%s",
+              tmp_file.c_str(), meta_file.c_str(), index_name, table_meta_->name(), errno, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+
+  table_meta_->swap(new_table_meta);
+
+  LOG_INFO("Successfully added a new vector index (%s) on the table (%s)", index_name, table_meta_->name());
+  return RC::SUCCESS;
 }
 
 RC HeapTableEngine::insert_entry_of_indexes(const char *record, const RID &rid)
@@ -488,8 +637,15 @@ RC HeapTableEngine::open()
       field_metas.push_back(*fm);
     }
 
-    BplusTreeIndex *index      = new BplusTreeIndex();
-    string          index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
+    Index *index = nullptr;
+    string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
+
+    // 根据索引类型创建不同的索引对象
+    if (index_meta->is_vector_index()) {
+      index = new IvfflatIndex();
+    } else {
+      index = new BplusTreeIndex();
+    }
 
     rc = index->open(table_, index_file.c_str(), *index_meta, span<const FieldMeta>(field_metas.data(), field_metas.size()));
     if (rc != RC::SUCCESS) {

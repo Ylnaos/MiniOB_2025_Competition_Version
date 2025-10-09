@@ -141,6 +141,7 @@ struct SelectSqlNode
   vector<unique_ptr<Expression>> group_by;     ///< group by clause
   vector<ConditionSqlNode>       having;       ///< having clause (AND chained conditions)
   vector<OrderBySqlNode>         order_by;     ///< order by clause
+  int                            limit_num = -1; ///< LIMIT count, -1 means no limit
 
   SelectSqlNode() = default;
   ~SelectSqlNode();  // 定义在 parse_defs.cpp 中

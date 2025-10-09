@@ -1,0 +1,1 @@
+docker exec miniob2025 bash -c "cd /root/miniob && mkdir -p build && cd build && cmake .. && make -j20

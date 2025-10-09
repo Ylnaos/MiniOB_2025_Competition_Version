@@ -113,6 +113,7 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
         DATE_T
         TEXT_T
         VECTOR_T
+        VECTOR
         HELP
         EXIT
         DOT //QUOTE
@@ -161,6 +162,7 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
         LISTS
         PROBES
         IVFFLAT
+        LIMIT
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -244,6 +246,7 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
 %type <order_by_list>       order_by
 %type <order_by_list>       order_by_condition_list
 %type <order_by_item>       order_by_condition
+%type <number>              limit_clause
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
 %type <cstring>             identifier
@@ -419,7 +422,7 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       }
       create_index.unique = true;
     }
-    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE TYPE EQ ID COMMA DISTANCE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    | CREATE VECTOR INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE TYPE EQ ID COMMA DISTANCE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
     {
       $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
       CreateIndexSqlNode &create_index = $$->create_index;
@@ -433,7 +436,7 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       create_index.probes = $26;
       create_index.unique = false;
     }
-    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE DISTANCE EQ ID COMMA TYPE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    | CREATE VECTOR INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE DISTANCE EQ ID COMMA TYPE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
     {
       $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
       CreateIndexSqlNode &create_index = $$->create_index;
@@ -797,7 +800,7 @@ update_list:
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by having order_by
+    SELECT expression_list FROM rel_list where group_by having order_by limit_clause
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -842,8 +845,10 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.order_by.swap(*$8);
         delete $8;
       }
+
+      $$->selection.limit_num = $9;
     }
-    | SELECT expression_list FROM rel_list where_bool group_by having order_by
+    | SELECT expression_list FROM rel_list where_bool group_by having order_by limit_clause
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -886,6 +891,8 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.order_by.swap(*$8);
         delete $8;
       }
+
+      $$->selection.limit_num = $9;
     }
     | SELECT expression_list
     {
@@ -1417,6 +1424,18 @@ order_by_condition:
       $$->asc = false;
     }
     ;
+
+limit_clause:
+    /* empty */
+    {
+      $$ = -1; // No limit
+    }
+    | LIMIT NUMBER
+    {
+      $$ = $2;
+    }
+    ;
+
 load_data_stmt:
     LOAD DATA INFILE SSS INTO TABLE ID fields_terminated_by enclosed_by
     {

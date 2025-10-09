@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include <functional>
 #include <sstream>
 #include <cmath>
+#include <cstdio>
 
 namespace {
 inline int dim_from_len(int len) { return len <= 0 ? 0 : (len / static_cast<int>(sizeof(float))); }
@@ -98,11 +99,21 @@ RC VectorType::to_string(const Value &val, string &result) const
   const int dim = len / static_cast<int>(sizeof(float));
   const float *data = reinterpret_cast<const float *>(val.data());
   std::ostringstream oss;
-  oss.setf(std::ios::fixed); oss.precision(6);
   oss << "[";
   for (int i = 0; i < dim; ++i) {
     if (i > 0) oss << ",";
-    oss << data[i];
+
+    float value = data[i];
+    // 判断是否为整数
+    if (value == std::floor(value)) {
+      // 如果是整数，输出为整数格式
+      oss << static_cast<int>(value);
+    } else {
+      // 对于浮点数，保留6位小数输出
+      char buffer[64];
+      snprintf(buffer, sizeof(buffer), "%.6f", value);
+      oss << buffer;
+    }
   }
   oss << "]";
   result = oss.str();

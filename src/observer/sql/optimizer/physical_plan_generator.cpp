@@ -45,6 +45,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/scalar_group_by_physical_operator.h"
 #include "sql/operator/order_by_logical_operator.h"
 #include "sql/operator/order_by_physical_operator.h"
+#include "sql/operator/limit_logical_operator.h"
+#include "sql/operator/limit_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
@@ -113,6 +115,22 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
       auto order_phy = make_unique<OrderByPhysicalOperator>(std::move(items));
       order_phy->add_child(std::move(child_physical_oper));
       oper = std::move(order_phy);
+      return RC::SUCCESS;
+    } break;
+
+    case LogicalOperatorType::LIMIT: {
+      // create physical plan for limit
+      auto &limit_logical = static_cast<LimitLogicalOperator &>(logical_operator);
+      ASSERT(limit_logical.children().size() == 1, "limit operator should have 1 child");
+      unique_ptr<PhysicalOperator> child_physical_oper;
+      RC rc = create(*limit_logical.children().front(), child_physical_oper, session);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to create child physical operator of limit. rc=%s", strrc(rc));
+        return rc;
+      }
+      auto limit_phy = make_unique<LimitPhysicalOperator>(limit_logical.limit());
+      limit_phy->add_child(std::move(child_physical_oper));
+      oper = std::move(limit_phy);
       return RC::SUCCESS;
     } break;
 

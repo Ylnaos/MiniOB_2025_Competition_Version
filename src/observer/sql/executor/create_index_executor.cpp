@@ -40,8 +40,20 @@ RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
   for (const FieldMeta *fm : fms) {
     field_metas.push_back(*fm);
   }
-  return table->create_index(trx,
-                             span<const FieldMeta>(field_metas.data(), field_metas.size()),
-                             create_index_stmt->index_name().c_str(),
-                             create_index_stmt->unique());
+
+  // 如果是向量索引，调用特定的创建方法
+  if (create_index_stmt->is_vector_index()) {
+    return table->create_vector_index(trx,
+                                      span<const FieldMeta>(field_metas.data(), field_metas.size()),
+                                      create_index_stmt->index_name().c_str(),
+                                      create_index_stmt->distance_type().c_str(),
+                                      create_index_stmt->index_type().c_str(),
+                                      create_index_stmt->lists(),
+                                      create_index_stmt->probes());
+  } else {
+    return table->create_index(trx,
+                               span<const FieldMeta>(field_metas.data(), field_metas.size()),
+                               create_index_stmt->index_name().c_str(),
+                               create_index_stmt->unique());
+  }
 }

@@ -496,6 +496,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);
   select_stmt->order_by_.swap(order_by_items);
+  select_stmt->limit_ = select_sql.limit_num;  // 设置 LIMIT
   if (select_sql.where_expr) {
     vector<unique_ptr<Expression>> bound;
     RC rc2 = expression_binder.bind_expression(select_sql.where_expr, bound);
