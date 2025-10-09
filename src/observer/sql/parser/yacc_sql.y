@@ -419,7 +419,7 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       }
       create_index.unique = true;
     }
-    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE ID EQ ID COMMA TYPE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE TYPE EQ ID COMMA DISTANCE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
     {
       $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
       CreateIndexSqlNode &create_index = $$->create_index;
@@ -427,7 +427,21 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       create_index.relation_name = $6;
       create_index.attribute_names.push_back($8);
       create_index.is_vector_index = true;
-      create_index.distance_type = $12;
+      create_index.index_type = $14;
+      create_index.distance_type = $18;
+      create_index.lists = $22;
+      create_index.probes = $26;
+      create_index.unique = false;
+    }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE DISTANCE EQ ID COMMA TYPE EQ ID COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      create_index.attribute_names.push_back($8);
+      create_index.is_vector_index = true;
+      create_index.distance_type = $14;
       create_index.index_type = $18;
       create_index.lists = $22;
       create_index.probes = $26;

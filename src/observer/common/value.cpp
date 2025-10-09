@@ -41,6 +41,15 @@ Value::Value(const Value &other)
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
+    case AttrType::VECTORS: {
+      // 深拷贝 VECTORS 类型的数据
+      if (other.own_data_ && other.value_.pointer_value_ != nullptr && other.length_ > 0) {
+        this->value_.pointer_value_ = new char[other.length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, other.length_);
+      } else {
+        this->value_.pointer_value_ = nullptr;
+      }
+    } break;
 
     default: {
       this->value_ = other.value_;
@@ -56,6 +65,8 @@ Value::Value(Value &&other)
   this->value_     = other.value_;
   other.own_data_  = false;
   other.length_    = 0;
+  other.value_.pointer_value_ = nullptr;
+  other.attr_type_ = AttrType::UNDEFINED;
 }
 
 Value &Value::operator=(const Value &other)
@@ -71,6 +82,15 @@ Value &Value::operator=(const Value &other)
     case AttrType::CHARS:
     case AttrType::TEXTS: {
       set_string_from_other(other);
+    } break;
+    case AttrType::VECTORS: {
+      // 深拷贝 VECTORS 类型的数据
+      if (other.own_data_ && other.value_.pointer_value_ != nullptr && other.length_ > 0) {
+        this->value_.pointer_value_ = new char[other.length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, other.length_);
+      } else {
+        this->value_.pointer_value_ = nullptr;
+      }
     } break;
 
     default: {
@@ -92,6 +112,8 @@ Value &Value::operator=(Value &&other)
   this->value_     = other.value_;
   other.own_data_  = false;
   other.length_    = 0;
+  other.value_.pointer_value_ = nullptr;
+  other.attr_type_ = AttrType::UNDEFINED;
   return *this;
 }
 
