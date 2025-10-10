@@ -670,8 +670,35 @@ value:
     }
     | SSS {
       char *tmp = common::substr($1,1,strlen($1)-2);
-      $$ = new Value(tmp);
-      free(tmp);
+      // 检查是否为向量字符串格式 '[...]'
+      if (tmp != nullptr && tmp[0] == '[') {
+        // 解析为向量
+        std::vector<float> elems;
+        const char *p = tmp + 1;  // 跳过 '['
+        while (*p && *p != ']') {
+          while (*p == ' ' || *p == '\t') p++;  // 跳过空白
+          if (*p == ']') break;
+          char *end = nullptr;
+          float val = strtof(p, &end);
+          if (end == p) break;  // 解析失败
+          elems.push_back(val);
+          p = end;
+          while (*p == ' ' || *p == '\t') p++;  // 跳过空白
+          if (*p == ',') p++;
+        }
+        Value *vec = new Value();
+        vec->set_type(AttrType::VECTORS);
+        if (!elems.empty()) {
+          vec->set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+        } else {
+          vec->set_data((const char *)nullptr, 0);
+        }
+        free(tmp);
+        $$ = vec;
+      } else {
+        $$ = new Value(tmp);
+        free(tmp);
+      }
     }
     | vector_literal {
       $$ = $1;
