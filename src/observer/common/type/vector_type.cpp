@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include <vector>
 #include <functional>
 #include <sstream>
+#include <iomanip>
 #include <cmath>
 
 namespace {
@@ -98,7 +99,8 @@ RC VectorType::to_string(const Value &val, string &result) const
   const int dim = len / static_cast<int>(sizeof(float));
   const float *data = reinterpret_cast<const float *>(val.data());
   std::ostringstream oss;
-  oss.setf(std::ios::fixed); oss.precision(6);
+  // 固定6位小数，避免出现整数样式或科学计数法
+  oss << std::fixed << std::setprecision(6);
   oss << "[";
   for (int i = 0; i < dim; ++i) {
     if (i > 0) oss << ",";

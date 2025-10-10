@@ -41,6 +41,16 @@ Value::Value(const Value &other)
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
+    case AttrType::VECTORS: {
+      // 深拷贝向量字节数据，避免 Value 在容器拷贝时发生悬垂指针或二次释放
+      own_data_ = true;
+      if (this->length_ > 0) {
+        this->value_.pointer_value_ = new char[this->length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
+      } else {
+        this->value_.pointer_value_ = nullptr;
+      }
+    } break;
 
     default: {
       this->value_ = other.value_;
@@ -71,6 +81,16 @@ Value &Value::operator=(const Value &other)
     case AttrType::CHARS:
     case AttrType::TEXTS: {
       set_string_from_other(other);
+    } break;
+    case AttrType::VECTORS: {
+      // 深拷贝向量字节数据
+      own_data_ = true;
+      if (this->length_ > 0) {
+        this->value_.pointer_value_ = new char[this->length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
+      } else {
+        this->value_.pointer_value_ = nullptr;
+      }
     } break;
 
     default: {
@@ -241,6 +261,11 @@ void Value::set_value(const Value &value)
     } break;
     case AttrType::CHARS: {
       set_string(value.get_string().c_str());
+    } break;
+    case AttrType::VECTORS: {
+      // 复制向量二进制数据
+      set_type(AttrType::VECTORS);
+      set_data(value.data(), value.length());
     } break;
     case AttrType::BOOLEANS: {
       set_boolean(value.get_boolean());
