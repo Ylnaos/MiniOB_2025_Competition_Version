@@ -259,6 +259,8 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
 %type <sql_node>            show_tables_stmt
 %type <sql_node>            desc_table_stmt
 %type <sql_node>            create_index_stmt
+%type <cstring>             vector_index_type
+%type <cstring>             vector_distance
 %type <sql_node>            drop_index_stmt
 %type <sql_node>            sync_stmt
 %type <sql_node>            begin_stmt
@@ -433,7 +435,48 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       create_index.probes = $26;
       create_index.unique = false;
     }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE TYPE EQ vector_index_type COMMA DISTANCE EQ vector_distance COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      create_index.attribute_names.push_back($8);
+      create_index.is_vector_index = true;
+      create_index.index_type = $14;
+      create_index.distance_type = $18;
+      create_index.lists = $22;
+      create_index.probes = $26;
+      create_index.unique = false;
+    }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE DISTANCE EQ vector_distance COMMA TYPE EQ vector_index_type COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      create_index.attribute_names.push_back($8);
+      create_index.is_vector_index = true;
+      create_index.distance_type = $14;
+      create_index.index_type = $18;
+      create_index.lists = $22;
+      create_index.probes = $26;
+      create_index.unique = false;
+    }
     ;
+
+// 兼容索引类型与距离类型取值（既支持关键字，也支持作为普通ID）
+vector_index_type:
+    ID          { $$ = $1; }
+  | IVFFLAT     { $$ = strdup("IVFFLAT"); }
+  ;
+
+vector_distance:
+    ID                  { $$ = $1; }
+  | L2_DISTANCE_F       { $$ = strdup("L2_DISTANCE"); }
+  | COSINE_DISTANCE_F   { $$ = strdup("COSINE_DISTANCE"); }
+  | INNER_PRODUCT_F     { $$ = strdup("INNER_PRODUCT"); }
+  ;
 
 drop_index_stmt:      /*drop index 语句的语法解析树*/
     DROP INDEX ID ON ID
