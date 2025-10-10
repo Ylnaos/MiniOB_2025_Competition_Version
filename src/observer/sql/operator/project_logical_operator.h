@@ -35,4 +35,10 @@ public:
 
   vector<unique_ptr<Expression>>       &expressions() { return expressions_; }
   const vector<unique_ptr<Expression>> &expressions() const { return expressions_; }
+
+  void set_limit(int limit) { limit_ = limit; }
+  int  limit() const { return limit_; }
+
+private:
+  int limit_ = -1;  ///< LIMIT限制（-1表示无限制）
 };

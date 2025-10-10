@@ -25,7 +25,7 @@ RC OrderByPhysicalOperator::open(Trx *trx)
   }
 
   // 添加最大行数限制，防止内存溢出
-  const size_t MAX_ROWS = 500000;  // 最多缓存50万行
+  const size_t MAX_ROWS = 200000;  // 最多缓存20万行
 
   // 读取所有数据并物化
   while (RC::SUCCESS == (rc = children_[0]->next())) {

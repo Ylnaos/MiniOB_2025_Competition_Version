@@ -1,0 +1,63 @@
+/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
+miniob is licensed under Mulan PSL v2.
+You can use this software according to the terms and conditions of the Mulan PSL v2.
+You may obtain a copy of Mulan PSL v2 at:
+         http://license.coscl.org.cn/MulanPSL2
+THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
+EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
+MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+See the Mulan PSL v2 for more details. */
+
+#include "sql/operator/limit_physical_operator.h"
+#include "common/log/log.h"
+
+RC LimitPhysicalOperator::open(Trx *trx)
+{
+  if (children_.size() != 1) {
+    LOG_WARN("limit operator expects exactly 1 child, got %d", children_.size());
+    return RC::INTERNAL;
+  }
+
+  RC rc = children_[0]->open(trx);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to open child operator. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  returned_ = 0;
+  return RC::SUCCESS;
+}
+
+RC LimitPhysicalOperator::next()
+{
+  // 如果limit为-1，表示不限制，直接透传
+  if (limit_ < 0) {
+    return children_[0]->next();
+  }
+
+  // 如果已经返回了足够多的行，直接返回EOF
+  if (returned_ >= limit_) {
+    return RC::RECORD_EOF;
+  }
+
+  // 否则从子算子获取下一行
+  RC rc = children_[0]->next();
+  if (rc == RC::SUCCESS) {
+    returned_++;
+  }
+  return rc;
+}
+
+RC LimitPhysicalOperator::close()
+{
+  if (!children_.empty()) {
+    children_[0]->close();
+  }
+  returned_ = 0;
+  return RC::SUCCESS;
+}
+
+Tuple *LimitPhysicalOperator::current_tuple()
+{
+  return children_[0]->current_tuple();
+}

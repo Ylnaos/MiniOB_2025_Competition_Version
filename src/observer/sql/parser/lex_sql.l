@@ -110,6 +110,7 @@ FROM                                    RETURN_TOKEN(FROM);
 ORDER                                   RETURN_TOKEN(ORDER);
 OR                                      RETURN_TOKEN(OR);
 ASC                                     RETURN_TOKEN(ASC);
+LIMIT                                   RETURN_TOKEN(LIMIT);
 INSERT                                  RETURN_TOKEN(INSERT);
 INTO                                    RETURN_TOKEN(INTO);
 VALUES                                  RETURN_TOKEN(VALUES);

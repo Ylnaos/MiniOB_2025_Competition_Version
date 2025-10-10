@@ -45,6 +45,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/scalar_group_by_physical_operator.h"
 #include "sql/operator/order_by_logical_operator.h"
 #include "sql/operator/order_by_physical_operator.h"
+#include "sql/operator/limit_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
@@ -265,7 +266,15 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
     project_operator->add_child(std::move(child_phy_oper));
   }
 
-  oper = std::move(project_operator);
+  // 如果有LIMIT，包装LimitPhysicalOperator
+  if (project_oper.limit() >= 0) {
+    auto limit_operator = make_unique<LimitPhysicalOperator>(project_oper.limit());
+    limit_operator->add_child(std::move(project_operator));
+    oper = std::move(limit_operator);
+    LOG_TRACE("create a limit physical operator with limit=%d", project_oper.limit());
+  } else {
+    oper = std::move(project_operator);
+  }
 
   LOG_TRACE("create a project physical operator");
   return rc;

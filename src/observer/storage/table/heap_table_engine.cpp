@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/heap_record_scanner.h"
 #include "common/log/log.h"
 #include "storage/index/bplus_tree_index.h"
+#include "storage/index/ivfflat_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
 
@@ -40,7 +41,7 @@ RC HeapTableEngine::insert_record(Record &record)
 {
   RC rc = RC::SUCCESS;
 
-  // 1) 先基�?UNIQUE 索引做重复检查，避免写入后回�?
+  // 1) 先基�?UNIQUE 索引做重复检查，避免写入后回�?
 if (!indexes_.empty()) {
     auto build_user_key = [&](const Index *index, vector<char> &out_key) {
       int total_len = 0;
@@ -100,7 +101,7 @@ if (!indexes_.empty()) {
       IndexScanner *scanner = index->create_scanner(user_key.data(), static_cast<int>(user_key.size()), true,
                                                     user_key.data(), static_cast<int>(user_key.size()), true);
       if (scanner == nullptr) {
-        // 扫描器打开失败（可能是空树/瞬时锁），保守放行，由索引层再次兜底检查�?
+        // 扫描器打开失败（可能是空树/瞬时锁），保守放行，由索引层再次兜底检查�?
 LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
                   table_meta_->name(), index->index_meta().name());
         continue;
@@ -122,7 +123,7 @@ LOG_TRACE("skip unique precheck due to scanner open fail. table=%s, index=%s",
 
   // 3) 维护索引
   rc = insert_entry_of_indexes(record.data(), record.rid());
-  if (rc != RC::SUCCESS) {  // 可能出现了键值重�?
+  if (rc != RC::SUCCESS) {  // 可能出现了键值重�?
 RC rc2 = delete_entry_of_indexes(record.data(), record.rid(), false /*error_on_not_exists*/);
     if (rc2 != RC::SUCCESS) {
       LOG_ERROR("Failed to rollback index data when insert index entries failed. table name=%s, rc=%d:%s",
@@ -183,13 +184,13 @@ RC HeapTableEngine::update_record_with_trx(const Record &old_record, const Recor
 {
   RC rc = RC::SUCCESS;
 
-  // 首先删除旧的索引�?
+  // 首先删除旧的索引�?
 for (Index *index : indexes_) {
     rc = index->delete_entry(old_record.data(), &old_record.rid());
     if (rc != RC::SUCCESS && rc != RC::RECORD_NOT_EXIST) {
       LOG_ERROR("failed to delete old entry from index. table name=%s, index name=%s, rid=%s, rc=%s",
                 table_meta_->name(), index->index_meta().name(), old_record.rid().to_string().c_str(), strrc(rc));
-      // 回滚已经删除的索�?
+      // 回滚已经删除的索�?
 for (Index *rollback_index : indexes_) {
         if (rollback_index == index) {
           break;
@@ -220,7 +221,7 @@ for (Index *rollback_index : indexes_) {
     return rc;
   }
 
-  // 插入新的索引�?
+  // 插入新的索引�?
 for (Index *index : indexes_) {
     rc = index->insert_entry(new_record.data(), &new_record.rid());
     if (rc != RC::SUCCESS) {
@@ -293,53 +294,67 @@ RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, co
     return rc;
   }
 
-  // 创建索引相关数据
-  BplusTreeIndex *index      = new BplusTreeIndex();
-  string          index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+  // 判断是否为向量索引
+  bool is_vector_index = (field_metas.size() == 1 && field_metas[0].type() == AttrType::VECTORS);
+
+  Index *index = nullptr;
+  string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+
+  if (is_vector_index) {
+    // 创建向量索引
+    index = new IvfflatIndex();
+    LOG_INFO("Creating IVF-Flat vector index: %s", index_name);
+  } else {
+    // 创建B+树索引
+    index = new BplusTreeIndex();
+    LOG_INFO("Creating B+Tree index: %s", index_name);
+  }
 
   rc = index->create(table_, index_file.c_str(), new_index_meta, field_metas);
   if (rc != RC::SUCCESS) {
     delete index;
-    LOG_ERROR("Failed to create bplus tree index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
+    LOG_ERROR("Failed to create index. file name=%s, rc=%d:%s", index_file.c_str(), rc, strrc(rc));
     return rc;
   }
 
-  // 遍历当前的所有数据，插入这个索引
-  RecordScanner *scanner = nullptr;
-  rc = get_record_scanner(scanner, trx, ReadWriteMode::READ_ONLY);
-  if (rc != RC::SUCCESS) {
-    LOG_WARN("failed to create scanner while creating index. table=%s, index=%s, rc=%s", 
-             table_meta_->name(), index_name, strrc(rc));
-    return rc;
-  }
-
-  Record record;
-  while (OB_SUCC(rc = scanner->next(record))) {
-    rc = index->insert_entry(record.data(), &record.rid());
+  // 向量索引在create()时已经扫描并建立了索引，无需额外插入数据
+  // B+树索引需要遍历数据逐条插入
+  if (!is_vector_index) {
+    RecordScanner *scanner = nullptr;
+    rc = get_record_scanner(scanner, trx, ReadWriteMode::READ_ONLY);
     if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
+      LOG_WARN("failed to create scanner while creating index. table=%s, index=%s, rc=%s",
                table_meta_->name(), index_name, strrc(rc));
-      // cleanup index resources before return
-      scanner->close_scan();
-      delete scanner;
-      index->close();
-      delete index;
-      // best-effort: remove the index file to avoid orphan
-      string index_file_rm = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
-      ::remove(index_file_rm.c_str());
       return rc;
     }
+
+    Record record;
+    while (OB_SUCC(rc = scanner->next(record))) {
+      rc = index->insert_entry(record.data(), &record.rid());
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
+                 table_meta_->name(), index_name, strrc(rc));
+        // cleanup index resources before return
+        scanner->close_scan();
+        delete scanner;
+        delete index;
+        // best-effort: remove the index file to avoid orphan
+        string index_file_rm = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+        ::remove(index_file_rm.c_str());
+        return rc;
+      }
+    }
+    if (RC::RECORD_EOF == rc) {
+      rc = RC::SUCCESS;
+    } else {
+      LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
+               table_meta_->name(), index_name, strrc(rc));
+      return rc;
+    }
+    scanner->close_scan();
+    delete scanner;
+    LOG_INFO("inserted all records into new index. table=%s, index=%s", table_meta_->name(), index_name);
   }
-  if (RC::RECORD_EOF == rc) {
-    rc = RC::SUCCESS;
-  } else {
-    LOG_WARN("failed to insert record into index while creating index. table=%s, index=%s, rc=%s",
-             table_meta_->name(), index_name, strrc(rc));
-    return rc;
-  }
-  scanner->close_scan();
-  delete scanner;
-  LOG_INFO("inserted all records into new index. table=%s, index=%s", table_meta_->name(), index_name);
 
   indexes_.push_back(index);
 
@@ -351,7 +366,7 @@ RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, co
     return rc;
   }
 
-  /// 内存中有一份元数据，磁盘文件也有一份元数据。修改磁盘文件时，先创建一个临时文件，写入完成后再rename为正式文�?  /// 这样可以防止文件内容不完�?  // 创建元数据临时文�?
+  /// 内存中有一份元数据，磁盘文件也有一份元数据。修改磁盘文件时，先创建一个临时文件，写入完成后再rename为正式文�?  /// 这样可以防止文件内容不完�?  // 创建元数据临时文�?
 string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
   fstream fs;
   fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
@@ -365,7 +380,7 @@ string  tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + "
   }
   fs.close();
 
-  // 覆盖原始元数据文�?
+  // 覆盖原始元数据文�?
 string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
 
   int ret = rename(tmp_file.c_str(), meta_file.c_str());
@@ -488,8 +503,19 @@ RC HeapTableEngine::open()
       field_metas.push_back(*fm);
     }
 
-    BplusTreeIndex *index      = new BplusTreeIndex();
-    string          index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
+    // 判断是否为向量索引
+    bool is_vector_index = (field_metas.size() == 1 && field_metas[0].type() == AttrType::VECTORS);
+
+    Index *index = nullptr;
+    string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
+
+    if (is_vector_index) {
+      index = new IvfflatIndex();
+      LOG_INFO("Opening IVF-Flat vector index: %s", index_meta->name());
+    } else {
+      index = new BplusTreeIndex();
+      LOG_INFO("Opening B+Tree index: %s", index_meta->name());
+    }
 
     rc = index->open(table_, index_file.c_str(), *index_meta, span<const FieldMeta>(field_metas.data(), field_metas.size()));
     if (rc != RC::SUCCESS) {

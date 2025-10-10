@@ -231,6 +231,9 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     project_oper->add_child(std::move(*last_oper));
   }
 
+  // 设置LIMIT
+  static_cast<ProjectLogicalOperator*>(project_oper.get())->set_limit(select_stmt->limit());
+
   last_oper = &project_oper;
 
   logical_operator = std::move(*last_oper);

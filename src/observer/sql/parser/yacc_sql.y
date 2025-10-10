@@ -79,6 +79,7 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
 %token  SEMICOLON
         BY
         ORDER
+        LIMIT
         HAVING
         OR
         LBRACKET
@@ -244,6 +245,7 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
 %type <order_by_list>       order_by
 %type <order_by_list>       order_by_condition_list
 %type <order_by_item>       order_by_condition
+%type <number>              limit_opt
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
 %type <cstring>             identifier
@@ -810,7 +812,7 @@ update_list:
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by having order_by
+    SELECT expression_list FROM rel_list where group_by having order_by limit_opt
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -855,8 +857,10 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.order_by.swap(*$8);
         delete $8;
       }
+
+      $$->selection.limit = $9;
     }
-    | SELECT expression_list FROM rel_list where_bool group_by having order_by
+    | SELECT expression_list FROM rel_list where_bool group_by having order_by limit_opt
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -899,6 +903,8 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.order_by.swap(*$8);
         delete $8;
       }
+
+      $$->selection.limit = $9;
     }
     | SELECT expression_list
     {
@@ -1428,6 +1434,16 @@ order_by_condition:
       $$ = new OrderBySqlNode();
       $$->expression.reset($1);
       $$->asc = false;
+    }
+    ;
+limit_opt:
+    /* empty */
+    {
+      $$ = -1; // -1表示无LIMIT
+    }
+    | LIMIT NUMBER
+    {
+      $$ = $2;
     }
     ;
 load_data_stmt:
