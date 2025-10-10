@@ -371,16 +371,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             }
           }
 
-          // 直接改写: 聚合视图上的 SELECT count(*) 恒为 1（无表头）
-          if (is_count_star && select_sql.conditions.empty() && select_sql.group_by.empty()) {
-            SelectStmt *calc_like_select = new SelectStmt();
-            vector<unique_ptr<Expression>> exprs;
-            exprs.emplace_back(new ValueExpr(Value(1)));
-            calc_like_select->query_expressions().swap(exprs);
-            stmt = calc_like_select;
-            return RC::SUCCESS;
-          }
-
           if (is_count_star && select_sql.conditions.empty() && select_sql.group_by.empty()) {
             // 特殊处理: SELECT count(*) FROM aggregate_view
             // 创建视图的SelectStmt作为内层查询

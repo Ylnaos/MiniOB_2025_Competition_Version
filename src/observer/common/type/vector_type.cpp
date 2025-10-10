@@ -98,15 +98,36 @@ RC VectorType::to_string(const Value &val, string &result) const
   if (len <= 0) { result = "[]"; return RC::SUCCESS; }
   const int dim = len / static_cast<int>(sizeof(float));
   const float *data = reinterpret_cast<const float *>(val.data());
-  std::ostringstream oss;
-  // 固定6位小数，避免出现整数样式或科学计数法
-  oss << std::fixed << std::setprecision(6);
-  oss << "[";
+
+  result = "[";
   for (int i = 0; i < dim; ++i) {
-    if (i > 0) oss << ",";
-    oss << data[i];
+    if (i > 0) result += ",";
+    float value = data[i];
+
+    // 检查是否为整数值
+    if (std::floor(value) == value && std::abs(value) < 1e9) {
+      // 整数显示，不带小数点
+      result += std::to_string(static_cast<int>(value));
+    } else {
+      // 小数显示，使用固定精度格式化
+      char buf[64];
+      snprintf(buf, sizeof(buf), "%.6f", value);
+      std::string temp(buf);
+      // 去掉尾部的0
+      size_t dot_pos = temp.find('.');
+      if (dot_pos != std::string::npos) {
+        size_t last_non_zero = temp.find_last_not_of('0');
+        if (last_non_zero >= dot_pos) {
+          temp = temp.substr(0, last_non_zero + 1);
+          // 如果最后一个字符是小数点，保留至少一位小数
+          if (temp.back() == '.') {
+            temp += "0";
+          }
+        }
+      }
+      result += temp;
+    }
   }
-  oss << "]";
-  result = oss.str();
+  result += "]";
   return RC::SUCCESS;
 }

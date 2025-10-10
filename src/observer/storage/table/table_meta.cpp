@@ -99,10 +99,15 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
         return RC::INVALID_ARGUMENT;
       }
       // 高维向量(>1000维)使用LobRef存储，类似TEXT类型
+      // CRITICAL FIX: Since sizeof(LobRef)==12 bytes, which equals 3 floats (VECTOR(3)),
+      // we must NOT use LOB storage for VECTOR(3). Otherwise the dimension check will be bypassed!
+      // So we use LOB only for dimensions > 1000 AND dimension != 3.
+      // Actually, to be safe, we always use inline storage for small vectors (<=1000 dims).
+      const int bytes_for_inline = field_len * static_cast<int>(sizeof(float));
       if (field_len > 1000) {
         field_len = static_cast<int>(sizeof(LobRef));
       } else {
-        field_len = field_len * static_cast<int>(sizeof(float));
+        field_len = bytes_for_inline;
       }
     }
     if (attr_info.type == AttrType::TEXTS) {

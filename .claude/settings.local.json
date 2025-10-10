@@ -5,7 +5,8 @@
       "Bash(docker-compose build:*)",
       "Bash(winpty docker run -it --name miniob-container ubuntu:20.04 /bin/bash)",
       "Bash(cd:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
