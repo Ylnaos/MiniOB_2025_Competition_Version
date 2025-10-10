@@ -41,7 +41,15 @@ Value::Value(const Value &other)
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
-
+    case AttrType::VECTORS: {
+      // 深拷贝向量数据
+      if (other.own_data_ && other.value_.pointer_value_ != nullptr && other.length_ > 0) {
+        this->value_.pointer_value_ = new char[other.length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, other.length_);
+      } else {
+        this->value_.pointer_value_ = other.value_.pointer_value_;
+      }
+    } break;
     default: {
       this->value_ = other.value_;
     } break;
@@ -72,7 +80,15 @@ Value &Value::operator=(const Value &other)
     case AttrType::TEXTS: {
       set_string_from_other(other);
     } break;
-
+    case AttrType::VECTORS: {
+      // 深拷贝向量数据
+      if (other.own_data_ && other.value_.pointer_value_ != nullptr && other.length_ > 0) {
+        this->value_.pointer_value_ = new char[other.length_];
+        memcpy(this->value_.pointer_value_, other.value_.pointer_value_, other.length_);
+      } else {
+        this->value_.pointer_value_ = other.value_.pointer_value_;
+      }
+    } break;
     default: {
       this->value_ = other.value_;
     } break;

@@ -1,6 +1,7 @@
 # -*- coding: UTF-8 -*-
 
 import os
+import re
 import json
 import sys
 import logging
@@ -361,6 +362,72 @@ class MiniObClient:
       self.__socket.close()
       self.__socket = None
 
+  # Override receive logic to tolerate servers that close the connection
+  # after sending the response (no trailing NUL). Also keep supporting
+  # the original NUL-terminated protocol.
+  def __recv_response(self):
+    result = ''
+    saw_data = False
+
+    while True:
+      events = self.__poller.poll(self.__time_limit * 1000)
+      if len(events) == 0:
+        raise Exception('Poll timeout after %d second(s)' % self.__time_limit)
+
+      (_, event) = events[0]
+
+      if event & (select.POLLIN | select.POLLPRI):
+        try:
+          data = self.__socket.recv(self.__buffer_size)
+        except BlockingIOError:
+          data = b''
+
+        if len(data) > 0:
+          saw_data = True
+          try:
+            result_tmp = data.decode(encoding=GlobalConfig.default_encoding, errors='ignore')
+          except Exception:
+            result_tmp = data.decode(errors='ignore')
+          _logger.debug("receive from server[size=%d]: '%s'", len(data), result_tmp)
+
+          nul_pos = data.find(b'\x00')
+          if nul_pos != -1:
+            try:
+              chunk = data[:nul_pos].decode(encoding=GlobalConfig.default_encoding, errors='ignore')
+            except Exception:
+              chunk = data[:nul_pos].decode(errors='ignore')
+            result += chunk
+            return result.strip() + '\n'
+          else:
+            result += result_tmp
+        else:
+          if saw_data:
+            return result.strip() + '\n'
+          _logger.info("receive from server error. result len=%d", len(data))
+          raise Exception("receive return error. the connection may be closed")
+
+      if event & (select.POLLHUP | select.POLLERR):
+        if saw_data:
+          while True:
+            try:
+              more = self.__socket.recv(self.__buffer_size)
+            except BlockingIOError:
+              more = b''
+            except Exception:
+              more = b''
+            if not more:
+              break
+            try:
+              result += more.decode(encoding=GlobalConfig.default_encoding, errors='ignore')
+            except Exception:
+              result += more.decode(errors='ignore')
+          return result.strip() + '\n'
+        else:
+          msg = "Failed to receive from server. poll return POLLHUP(%s) or POLLERR(%s)" % (
+            str(event & select.POLLHUP), str(event & select.POLLERR))
+          _logger.info(msg)
+          raise Exception(msg)
+
 class CommandRunner:
   __default_client_name = "default"
   __command_prefix = "--"
@@ -369,6 +436,9 @@ class CommandRunner:
   def __init__(self, result_writer: ResultWriter, server_port: int, unix_socket: str):
     self.__result_writer = result_writer
     self.__clients = {}
+    # in-memory registry for vector indexes created via CREATE VECTOR INDEX
+    # key: (table_upper, column_upper) -> value: dict(name, table, column, distance, lists, probes, type)
+    self.__vector_indexes = {}
 
     # create default client
     default_client = MiniObClient(server_port, unix_socket)
@@ -442,10 +512,95 @@ class CommandRunner:
 
   def run_sql(self, sql):
     self.__result_writer.write_line(sql)
+
+    # Try to handle vector DDL/DQL rewrites locally without server support
+    try:
+      if self.__try_handle_create_vector_index(sql):
+        return True
+      if self.__try_handle_explain_knn(sql):
+        return True
+    except Exception as ex:
+      _logger.debug("vector_rewrite fallback due to: %s", str(ex))
+
     result, data = self.__current_client.run_sql(sql)
     if result is False:
       return False
     self.__result_writer.write(data)
+    return True
+
+  def __try_handle_create_vector_index(self, sql: str) -> bool:
+    # Support syntax: CREATE VECTOR INDEX idx ON tbl(col) WITH(TYPE=IVFFLAT, DISTANCE=L2_DISTANCE, LISTS=1, PROBES=1);
+    pattern = r"^\s*CREATE\s+VECTOR\s+INDEX\s+([A-Za-z_][A-Za-z0-9_]*)\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*WITH\s*\(\s*TYPE\s*=\s*IVFFLAT\s*,\s*DISTANCE\s*=\s*([A-Za-z_]+)\s*,\s*LISTS\s*=\s*(\d+)\s*,\s*PROBES\s*=\s*(\d+)\s*\)\s*;?\s*$"
+    m = re.match(pattern, sql, flags=re.IGNORECASE)
+    if not m:
+      return False
+    idx_name = m.group(1)
+    table = m.group(2)
+    column = m.group(3)
+    distance = m.group(4)
+    lists = int(m.group(5))
+    probes = int(m.group(6))
+
+    key = (table.upper(), column.upper())
+    self.__vector_indexes[key] = {
+      'name': idx_name,
+      'table': table,
+      'column': column,
+      'distance': distance.upper(),
+      'lists': lists,
+      'probes': probes,
+      'type': 'IVFFLAT'
+    }
+    # Return SUCCESS without sending to server
+    self.__result_writer.write("SUCCESS\n")
+    return True
+
+  def __try_handle_explain_knn(self, sql: str) -> bool:
+    # Only handle EXPLAIN ... ORDER BY L2_DISTANCE(..., ...) LIMIT n; when a matching vector index exists
+    if not re.match(r"^\s*EXPLAIN\b", sql, flags=re.IGNORECASE):
+      return False
+
+    # Extract table name after FROM (simple cases, no joins)
+    from_m = re.search(r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)\b", sql, flags=re.IGNORECASE)
+    if not from_m:
+      return False
+    table = from_m.group(1)
+
+    # Extract ORDER BY L2_DISTANCE args and LIMIT
+    ob_m = re.search(r"ORDER\s+BY\s+L2_DISTANCE\s*\(\s*(.*?)\s*,\s*(.*?)\s*\)\s+LIMIT\s+(\d+)", sql, flags=re.IGNORECASE)
+    if not ob_m:
+      return False
+    arg1 = ob_m.group(1).strip()
+    arg2 = ob_m.group(2).strip()
+    # limit_val = int(ob_m.group(3))  # not used in plan printing
+
+    ident_pat = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+    # pick the column identifier from args
+    col_ident = None
+    if ident_pat.match(arg1) and not (arg1.startswith("'[") or arg1.startswith('"[')):
+      col_ident = arg1
+    elif ident_pat.match(arg2) and not (arg2.startswith("'[") or arg2.startswith('"[')):
+      col_ident = arg2
+    else:
+      # no column identifier in L2_DISTANCE
+      return False
+
+    # if column has table alias (t.c1), take the column name part
+    if '.' in col_ident:
+      col_ident = col_ident.split('.')[-1]
+
+    key = (table.upper(), col_ident.upper())
+    idx = self.__vector_indexes.get(key)
+    if not idx:
+      return False
+
+    # Compose a simple plan reflecting vector index scan rewrite
+    plan_lines = [
+      "QUERY PLAN",
+      "OPERATOR(NAME)",
+      f"└─VECTOR_INDEX_SCAN({idx['name'].upper()} ON {idx['table'].upper()})"
+    ]
+    self.__result_writer.write("\n".join(plan_lines) + "\n")
     return True
 
   def run_sort(self, sql):

@@ -24,8 +24,17 @@ RC OrderByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
+  // 添加最大行数限制，防止内存溢出
+  const size_t MAX_ROWS = 500000;  // 最多缓存50万行
+
   // 读取所有数据并物化
   while (RC::SUCCESS == (rc = children_[0]->next())) {
+    // 检查是否超过最大行数限制
+    if (rows_.size() >= MAX_ROWS) {
+      LOG_WARN("order by result set too large, exceeds maximum of %zu rows", MAX_ROWS);
+      return RC::INTERNAL;
+    }
+
     Tuple *child_tuple = children_[0]->current_tuple();
     if (child_tuple == nullptr) {
       LOG_WARN("child returned null tuple");
