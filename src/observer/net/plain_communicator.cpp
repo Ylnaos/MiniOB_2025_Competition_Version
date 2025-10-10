@@ -380,15 +380,15 @@ RC PlainCommunicator::write_chunk_result(SqlResult *sql_result)
     return rc; // 不打印表头，直接返回错误
   }
 
-  // 打印表头
+  // 打印表头（仅当至少有一个非空别名时才输出换行）
   const TupleSchema &schema   = sql_result->tuple_schema();
   const int          cell_num = schema.cell_num();
+  bool               header_written = false;
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
-    // 修复判空逻辑：必须同时非空且非空串
     if (nullptr != alias && alias[0] != 0) {
-      if (0 != i) {
+      if (header_written) {
         const char *delim = " | ";
         RC wrc = writer_->writen(delim, strlen(delim));
         if (OB_FAIL(wrc)) {
@@ -402,9 +402,10 @@ RC PlainCommunicator::write_chunk_result(SqlResult *sql_result)
         LOG_WARN("failed to send data to client. err=%s", strerror(errno));
         return wrc;
       }
+      header_written = true;
     }
   }
-  if (cell_num > 0) {
+  if (header_written) {
     char newline = '\n';
     RC wrc = writer_->writen(&newline, 1);
     if (OB_FAIL(wrc)) {
