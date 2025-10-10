@@ -36,6 +36,7 @@ enum class OpType
   LOGICALDELETE,
   LOGICALUPDATE,
   LOGICALLIMIT,
+  LOGICALSUBQUERY,
   LOGICALANALYZE,
   LOGICALEXPLAIN,
   // Separation of logical and physical operators
@@ -48,6 +49,7 @@ enum class OpType
   INDEXSCAN,
   ORDERBY,
   LIMIT,
+  SUBQUERY,
   INNERINDEXJOIN,
   INNERNLJOIN,
   INNERHASHJOIN,

@@ -352,82 +352,56 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
         // 如果视图包含聚合,则不展开
         // 对于这种情况,需要将外层查询转换为对视图结果的查询
+        // 使用通用的子查询机制处理
         if (view_has_aggregation) {
-          LOG_DEBUG("View '%s' contains aggregation, converting to two-level query", view->name());
+          LOG_DEBUG("View '%s' contains aggregation, using subquery mechanism", view->name());
 
-          // 策略:先创建视图的SelectStmt,然后基于视图结果创建外层SelectStmt
-          // 但由于MiniOB不支持FROM子查询,我们采用一个workaround:
-          // 先执行视图查询,将结果保存,然后执行外层查询
-
-          // 简化实现:检测特殊模式 "SELECT count(*) FROM aggregate_view"
-          // 对于这种情况,先执行视图查询统计行数,然后返回1
-          bool is_count_star = false;
-          if (select_sql.expressions.size() == 1 &&
-              select_sql.expressions[0]->type() == ExprType::UNBOUND_AGGREGATION) {
-            auto *agg = static_cast<UnboundAggregateExpr *>(select_sql.expressions[0].get());
-            if (strcasecmp(agg->aggregate_name(), "count") == 0 &&
-                agg->child()->type() == ExprType::STAR) {
-              is_count_star = true;
-            }
+          // 1. 创建视图的SelectStmt作为内层子查询
+          Stmt *inner_stmt = nullptr;
+          RC rc = SelectStmt::create(db, node->selection, inner_stmt);
+          if (OB_FAIL(rc)) {
+            LOG_WARN("Failed to create inner SelectStmt for aggregate view '%s'", view->name());
+            return rc;
           }
+          SelectStmt *inner_select = static_cast<SelectStmt *>(inner_stmt);
 
-          if (is_count_star && select_sql.conditions.empty() && select_sql.group_by.empty()) {
-            // 特殊处理: SELECT count(*) FROM aggregate_view
-            // 创建视图的SelectStmt作为内层查询
-            Stmt *inner_stmt = nullptr;
-            RC rc = SelectStmt::create(db, node->selection, inner_stmt);
-            if (OB_FAIL(rc)) {
-              LOG_WARN("Failed to create inner SelectStmt for aggregate view '%s'", view->name());
-              return rc;
-            }
-            SelectStmt *inner_select = static_cast<SelectStmt *>(inner_stmt);
+          // 2. 创建外层SelectStmt,将内层查询设置为子查询数据源
+          SelectStmt *outer_select = new SelectStmt();
+          outer_select->set_inner_view_stmt(inner_select);
 
-            // 创建外层SelectStmt,包含count(*)聚合
-            SelectStmt *outer_select = new SelectStmt();
-            outer_select->set_inner_view_stmt(inner_select);
-
-            // 外层的 query_expressions 仅包含 count(*)
-            // 需要将 UNBOUND_AGGREGATION 显式降解为 AggregateExpr，且将 count(*) 的 * 改写为常量 1，
-            // 与 binder 的处理保持一致，避免在执行期访问 STAR 表达式导致失败。
-            vector<unique_ptr<Expression>> bound_exprs;
-            for (auto &expr : select_sql.expressions) {
-              unique_ptr<Expression> copied = expr->copy();
-              if (copied->type() == ExprType::UNBOUND_AGGREGATION) {
-                auto *uagg = static_cast<UnboundAggregateExpr *>(copied.get());
-                AggregateExpr::Type agg_type;
-                RC rc2 = AggregateExpr::type_from_string(uagg->aggregate_name(), agg_type);
-                if (OB_FAIL(rc2)) {
-                  delete inner_select;
-                  delete outer_select;
-                  return rc2;
-                }
-                // 将 count(*) 的子表达式从 STAR 改写为常量 1
-                unique_ptr<Expression> child;
-                if (agg_type == AggregateExpr::Type::COUNT && uagg->child()->type() == ExprType::STAR) {
-                  child.reset(new ValueExpr(Value(1)));
-                } else {
-                  child = uagg->child()->copy();
-                }
-                unique_ptr<Expression> agg_expr = make_unique<AggregateExpr>(agg_type, std::move(child));
-                agg_expr->set_name(uagg->name());
-                if (uagg->alias()) agg_expr->set_alias(uagg->alias());
-                bound_exprs.push_back(std::move(agg_expr));
-              } else {
-                bound_exprs.push_back(std::move(copied));
+          // 3. 处理外层的表达式：将UNBOUND_AGGREGATION转换为AggregateExpr
+          // 这是必需的，因为执行器需要明确的AggregateExpr类型
+          vector<unique_ptr<Expression>> bound_exprs;
+          for (auto &expr : select_sql.expressions) {
+            unique_ptr<Expression> copied = expr->copy();
+            if (copied->type() == ExprType::UNBOUND_AGGREGATION) {
+              auto *uagg = static_cast<UnboundAggregateExpr *>(copied.get());
+              AggregateExpr::Type agg_type;
+              RC rc2 = AggregateExpr::type_from_string(uagg->aggregate_name(), agg_type);
+              if (OB_FAIL(rc2)) {
+                delete inner_select;
+                delete outer_select;
+                return rc2;
               }
+              // 将 count(*) 的子表达式从 STAR 改写为常量 1
+              unique_ptr<Expression> child;
+              if (agg_type == AggregateExpr::Type::COUNT && uagg->child()->type() == ExprType::STAR) {
+                child.reset(new ValueExpr(Value(1)));
+              } else {
+                child = uagg->child()->copy();
+              }
+              unique_ptr<Expression> agg_expr = make_unique<AggregateExpr>(agg_type, std::move(child));
+              agg_expr->set_name(uagg->name());
+              if (uagg->alias()) agg_expr->set_alias(uagg->alias());
+              bound_exprs.push_back(std::move(agg_expr));
+            } else {
+              bound_exprs.push_back(std::move(copied));
             }
-            outer_select->query_expressions().swap(bound_exprs);
-
-            // 将inner_select的tables作为虚拟数据源(虽然这不太标准)
-            // 实际执行时需要特殊处理
-
-            stmt = outer_select;
-            return RC::SUCCESS;
-          } else {
-            // 其他情况暂不支持
-            LOG_WARN("Complex queries on aggregate views are not yet supported");
-            return RC::UNSUPPORTED;
           }
+          outer_select->query_expressions().swap(bound_exprs);
+
+          stmt = outer_select;
+          return RC::SUCCESS;
         }
 
         // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）

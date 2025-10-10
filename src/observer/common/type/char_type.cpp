@@ -56,7 +56,7 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
     case AttrType::VECTORS: {
       // 从字符串解析成向量字节序列，形如 "[1,2,3]"
       std::string s = val.get_string();
-      // 去除空白
+      // 去除首尾空白
       auto l = s.find_first_not_of(" \t\r\n");
       auto r = s.find_last_not_of(" \t\r\n");
       if (l == std::string::npos) return RC::INVALID_ARGUMENT;
@@ -64,28 +64,44 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       if (s.size() < 2 || s.front() != '[' || s.back() != ']') {
         return RC::INVALID_ARGUMENT;
       }
+
+      // 检查向量字符串内部是否包含空格（拒绝带空格的格式如 '[1, 2, 3]'）
+      for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == ' ' || s[i] == '\t') {
+          // 包含空格，拒绝解析
+          return RC::INVALID_ARGUMENT;
+        }
+      }
+
+      // 严格解析（不跳过空格）
       std::vector<float> elems;
       std::string inner = s.substr(1, s.size() - 2);
-      std::string token;
-      std::stringstream ss(inner);
-      while (std::getline(ss, token, ',')) {
-        // trim
-        size_t tl = token.find_first_not_of(" \t\r\n");
-        size_t tr = token.find_last_not_of(" \t\r\n");
-        if (tl == std::string::npos) continue;
-        token = token.substr(tl, tr - tl + 1);
-        if (token.empty()) continue;
+      if (inner.empty()) {
+        // 空向量 "[]"
+        result.set_type(AttrType::VECTORS);
+        result.set_data(nullptr, 0);
+        return RC::SUCCESS;
+      }
+
+      // 按逗号分割并解析，不trim（因为已经验证无空格）
+      const char *p = inner.c_str();
+      while (*p) {
         char *endp = nullptr;
-        float v = static_cast<float>(strtod(token.c_str(), &endp));
-        if (endp == token.c_str()) {
+        float v = static_cast<float>(strtod(p, &endp));
+        if (endp == p) {
+          // 解析失败
           return RC::INVALID_ARGUMENT;
         }
         elems.push_back(v);
+        p = endp;
+        if (*p == ',') {
+          p++;
+        } else if (*p != '\0') {
+          // 非逗号非结束符，格式错误
+          return RC::INVALID_ARGUMENT;
+        }
       }
-      if (elems.empty()) {
-        // 空向量按 0 维处理
-        elems.clear();
-      }
+
       // 组装结果
       result.set_type(AttrType::VECTORS);
       result.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));

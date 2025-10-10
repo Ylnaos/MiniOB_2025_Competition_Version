@@ -46,6 +46,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/order_by_logical_operator.h"
 #include "sql/operator/order_by_physical_operator.h"
 #include "sql/operator/limit_physical_operator.h"
+#include "sql/operator/subquery_logical_operator.h"
+#include "sql/operator/subquery_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
@@ -115,6 +117,10 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
       order_phy->add_child(std::move(child_physical_oper));
       oper = std::move(order_phy);
       return RC::SUCCESS;
+    } break;
+
+    case LogicalOperatorType::SUBQUERY: {
+      return create_plan(static_cast<SubqueryLogicalOperator &>(logical_operator), oper, session);
     } break;
 
     default: {
@@ -530,4 +536,30 @@ RC PhysicalPlanGenerator::create_vec_plan(ExplainLogicalOperator &explain_oper, 
 
   oper = std::move(explain_physical_oper);
   return rc;
+}
+
+RC PhysicalPlanGenerator::create_plan(SubqueryLogicalOperator &subquery_oper, unique_ptr<PhysicalOperator> &oper, Session* session)
+{
+  // 获取子查询的逻辑计划
+  LogicalOperator *subquery_logical_plan = subquery_oper.subquery_plan();
+  if (subquery_logical_plan == nullptr) {
+    LOG_WARN("subquery logical operator has no subquery plan");
+    return RC::INTERNAL;
+  }
+
+  // 递归为子查询生成物理计划
+  unique_ptr<PhysicalOperator> subquery_physical_plan;
+  RC rc = create(*subquery_logical_plan, subquery_physical_plan, session);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to create physical plan for subquery. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  // 用SubqueryPhysicalOperator封装物理计划
+  auto subquery_physical_oper = make_unique<SubqueryPhysicalOperator>();
+  subquery_physical_oper->set_subquery(std::move(subquery_physical_plan));
+
+  oper = std::move(subquery_physical_oper);
+  LOG_TRACE("create a subquery physical operator");
+  return RC::SUCCESS;
 }

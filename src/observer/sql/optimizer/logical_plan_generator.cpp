@@ -28,6 +28,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/table_get_logical_operator.h"
 #include "sql/operator/group_by_logical_operator.h"
 #include "sql/operator/order_by_logical_operator.h"
+#include "sql/operator/subquery_logical_operator.h"
 
 #include "sql/stmt/calc_stmt.h"
 #include "sql/stmt/delete_stmt.h"
@@ -97,39 +98,47 @@ RC LogicalPlanGenerator::create_plan(CalcStmt *calc_stmt, unique_ptr<LogicalOper
 
 RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
-  // 特殊处理:如果SelectStmt包含inner_view_stmt,说明这是一个对聚合视图的查询
-  // 需要先生成内层视图的逻辑计划,然后在内层结果上构建外层的聚合
+  // 特殊处理:如果SelectStmt包含inner_view_stmt,说明这是一个FROM子查询
+  // 需要先生成内层子查询的逻辑计划,然后用SubqueryLogicalOperator封装
+  // 外层查询可以像访问表一样访问子查询结果
   if (select_stmt->inner_view_stmt() != nullptr) {
-    LOG_DEBUG("Processing nested view query with aggregation");
+    LOG_DEBUG("Processing subquery in FROM clause");
 
-    // 生成内层视图的逻辑计划
+    // 1. 生成内层子查询的完整逻辑计划
     unique_ptr<LogicalOperator> inner_logical_oper;
     RC rc = create_plan(select_stmt->inner_view_stmt(), inner_logical_oper);
     if (OB_FAIL(rc)) {
-      LOG_WARN("Failed to create logical plan for inner view");
+      LOG_WARN("Failed to create logical plan for subquery. rc=%s", strrc(rc));
       return rc;
     }
 
-    // 在内层逻辑计划之上构建外层的聚合逻辑
-    // 外层只有一个count(*)聚合,不需要group by
+    // 2. 用SubqueryLogicalOperator封装内层逻辑计划
+    auto subquery_oper = make_unique<SubqueryLogicalOperator>();
+    subquery_oper->set_subquery_plan(std::move(inner_logical_oper));
+
+    // 3. 将SubqueryLogicalOperator作为数据源，构建外层查询
+    // 外层可能包含GROUP BY、WHERE等操作
+    unique_ptr<LogicalOperator> last_oper = std::move(subquery_oper);
+
+    // 构建外层的GROUP BY逻辑（如果有聚合函数）
     unique_ptr<LogicalOperator> group_by_oper;
     rc = create_group_by_plan(select_stmt, group_by_oper);
     if (OB_FAIL(rc)) {
-      LOG_WARN("Failed to create group by plan for outer query");
+      LOG_WARN("Failed to create group by plan for outer query. rc=%s", strrc(rc));
       return rc;
     }
 
     if (group_by_oper) {
-      group_by_oper->add_child(std::move(inner_logical_oper));
+      group_by_oper->add_child(std::move(last_oper));
+      last_oper = std::move(group_by_oper);
     }
 
-    // 添加project算子
+    // 添加外层的PROJECT算子
     unique_ptr<LogicalOperator> project_oper = make_unique<ProjectLogicalOperator>(std::move(select_stmt->query_expressions()));
-    if (group_by_oper) {
-      project_oper->add_child(std::move(group_by_oper));
-    } else {
-      project_oper->add_child(std::move(inner_logical_oper));
-    }
+    project_oper->add_child(std::move(last_oper));
+
+    // 设置LIMIT（如果有）
+    static_cast<ProjectLogicalOperator*>(project_oper.get())->set_limit(select_stmt->limit());
 
     logical_operator = std::move(project_oper);
     return RC::SUCCESS;
