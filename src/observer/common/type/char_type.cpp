@@ -79,7 +79,7 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       if (inner.empty()) {
         // 空向量 "[]"
         result.set_type(AttrType::VECTORS);
-        result.set_data(nullptr, 0);
+        result.set_data(static_cast<const char*>(nullptr), 0);
         return RC::SUCCESS;
       }
 

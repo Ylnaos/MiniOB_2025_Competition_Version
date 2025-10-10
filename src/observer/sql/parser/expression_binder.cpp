@@ -154,6 +154,42 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
           return RC::INVALID_ARGUMENT;
         }
       } break;
+      case ScalarFunctionExpr::FuncType::STRING_TO_VECTOR: {
+        // 字符串到向量的转换函数
+        if (arg_type != AttrType::CHARS) {
+          LOG_WARN("string_to_vector expects char type, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+      } break;
+      case ScalarFunctionExpr::FuncType::VECTOR_TO_STRING: {
+        // 向量到字符串的转换函数
+        if (arg_type != AttrType::VECTORS) {
+          LOG_WARN("vector_to_string expects vector type, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+      } break;
+      case ScalarFunctionExpr::FuncType::DISTANCE: {
+        // 通用距离函数，需要三个参数：vec1, vec2, distance_type
+        // 这里只处理前两个参数的类型检查
+        if (arg_type == AttrType::CHARS) {
+          auto cast = make_unique<CastExpr>(func->child()->copy(), AttrType::VECTORS);
+          func->child().reset(cast.release());
+        } else if (arg_type != AttrType::VECTORS) {
+          LOG_WARN("distance function expects vector type for first arg, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+        if (func->child2()) {
+          AttrType arg2_type = func->child2()->value_type();
+          if (arg2_type == AttrType::CHARS) {
+            auto cast = make_unique<CastExpr>(func->child2()->copy(), AttrType::VECTORS);
+            func->child2().reset(cast.release());
+          } else if (arg2_type != AttrType::VECTORS) {
+            LOG_WARN("distance function expects vector type for second arg, got %d", (int)arg2_type);
+            return RC::INVALID_ARGUMENT;
+          }
+        }
+        // 第三个参数应该是距离类型字符串，不需要类型检查
+      } break;
     }
     // 落入常规绑定，便于后续统一处理列位置等
     return bind_field_expression(expr, bound_expressions);

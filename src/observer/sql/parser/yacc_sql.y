@@ -156,6 +156,11 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
         L2_DISTANCE_F
         COSINE_DISTANCE_F
         INNER_PRODUCT_F
+        STRING_TO_VECTOR_F
+        TO_VECTOR_F
+        VECTOR_TO_STRING_F
+        FROM_VECTOR_F
+        VECTOR_DISTANCE_F
         WITH
         DISTANCE
         TYPE
@@ -1076,6 +1081,39 @@ function_expression:
     | INNER_PRODUCT_F LBRACE expression COMMA expression RBRACE
       {
         $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::INNER_PRODUCT, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | STRING_TO_VECTOR_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::STRING_TO_VECTOR, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | TO_VECTOR_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::STRING_TO_VECTOR, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | VECTOR_TO_STRING_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::VECTOR_TO_STRING, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | FROM_VECTOR_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::VECTOR_TO_STRING, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | DISTANCE LBRACE expression COMMA expression COMMA expression RBRACE
+      {
+        // DISTANCE(vector1, vector2, distance_type)
+        // 第三个参数是距离类型字符串
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DISTANCE, $3, $5, $7);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | VECTOR_DISTANCE_F LBRACE expression COMMA expression COMMA expression RBRACE
+      {
+        // VECTOR_DISTANCE 是 DISTANCE 的同义词
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DISTANCE, $3, $5, $7);
         $$->set_name(token_name(sql_string, &@$));
       }
     ;

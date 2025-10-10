@@ -648,7 +648,7 @@ private:
 class ScalarFunctionExpr : public Expression
 {
 public:
-  enum class FuncType { LENGTH, ROUND, DATE_FORMAT, L2_DISTANCE, COSINE_DISTANCE, INNER_PRODUCT };
+  enum class FuncType { LENGTH, ROUND, DATE_FORMAT, L2_DISTANCE, COSINE_DISTANCE, INNER_PRODUCT, STRING_TO_VECTOR, VECTOR_TO_STRING, DISTANCE };
 
   explicit ScalarFunctionExpr(FuncType func_type, std::unique_ptr<Expression> child)
       : func_type_(func_type), child_(std::move(child))
@@ -663,6 +663,13 @@ public:
   ScalarFunctionExpr(FuncType func_type, Expression *child, Expression *child2)
       : func_type_(func_type), child_(child), child2_(child2)
   {}
+  // 用于支持 DISTANCE(expr1, expr2, expr3) 的三参构造
+  ScalarFunctionExpr(FuncType func_type, std::unique_ptr<Expression> child, std::unique_ptr<Expression> child2, std::unique_ptr<Expression> child3)
+      : func_type_(func_type), child_(std::move(child)), child2_(std::move(child2)), child3_(std::move(child3))
+  {}
+  ScalarFunctionExpr(FuncType func_type, Expression *child, Expression *child2, Expression *child3)
+      : func_type_(func_type), child_(child), child2_(child2), child3_(child3)
+  {}
 
   virtual ~ScalarFunctionExpr() = default;
 
@@ -670,7 +677,8 @@ public:
   {
     auto first  = child_ ? child_->copy().release() : nullptr;
     auto second = child2_ ? child2_->copy().release() : nullptr;
-    return make_unique<ScalarFunctionExpr>(func_type_, first, second);
+    auto third  = child3_ ? child3_->copy().release() : nullptr;
+    return make_unique<ScalarFunctionExpr>(func_type_, first, second, third);
   }
 
   ExprType type() const override { return ExprType::FUNCTION; }
@@ -684,6 +692,9 @@ public:
       case FuncType::L2_DISTANCE: return AttrType::FLOATS;
       case FuncType::COSINE_DISTANCE: return AttrType::FLOATS;
       case FuncType::INNER_PRODUCT: return AttrType::FLOATS;
+      case FuncType::STRING_TO_VECTOR: return AttrType::VECTORS;
+      case FuncType::VECTOR_TO_STRING: return AttrType::CHARS;
+      case FuncType::DISTANCE: return AttrType::FLOATS;
     }
     return AttrType::UNDEFINED;
   }
@@ -697,6 +708,9 @@ public:
       case FuncType::L2_DISTANCE: return sizeof(float);
       case FuncType::COSINE_DISTANCE: return sizeof(float);
       case FuncType::INNER_PRODUCT: return sizeof(float);
+      case FuncType::STRING_TO_VECTOR: return -1; // 动态长度，取决于输入字符串
+      case FuncType::VECTOR_TO_STRING: return 262128; // 最大输出大小: 16 * 16383
+      case FuncType::DISTANCE: return sizeof(float);
     }
     return -1;
   }
@@ -712,10 +726,15 @@ public:
   unique_ptr<Expression> &child2() { return child2_; }
   const unique_ptr<Expression> &child2() const { return child2_; }
 
+  // 第三个参数（仅对 DISTANCE 生效，表示距离类型字符串）
+  unique_ptr<Expression> &child3() { return child3_; }
+  const unique_ptr<Expression> &child3() const { return child3_; }
+
   FuncType function_type() const { return func_type_; }
 
 private:
   FuncType                 func_type_;
   unique_ptr<Expression>   child_;
   unique_ptr<Expression>   child2_;
+  unique_ptr<Expression>   child3_;
 };

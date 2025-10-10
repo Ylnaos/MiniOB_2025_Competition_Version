@@ -358,7 +358,8 @@ if (left_is_subq && right_is_subq) {
 
       if (lvals.empty() || rvals.empty()) {
         // 绌洪泦鍚堣涓轰笉鍙瘮杈冿紝杩斿洖 false锛堢畝鍖栫殑 NULL 姣旇緝琛屼负锛?
-value.set_boolean(false);
+// 按 SQL 三值逻辑，子查询返回空集合时应返回 NULL
+        value.set_null();
         return RC::SUCCESS;
       }
       if (lvals.size() > 1 || rvals.size() > 1) {
@@ -393,7 +394,8 @@ Value other_val;
 
     // 绌洪泦鍚堬細姣旇緝缁撴灉鎭掍负 false
     if (vals.empty()) {
-      value.set_boolean(false);
+      // 按 SQL 三值逻辑，子查询返回空集合时应返回 NULL 而不是 FALSE
+      value.set_null();
       return RC::SUCCESS;
     }
 
@@ -575,6 +577,7 @@ RC ConjunctionExpr::get_value(const Tuple &tuple, Value &value) const
     return rc;
   }
 
+  bool has_null = false;  // 是否遇到过 NULL 值
   Value tmp_value;
   for (const unique_ptr<Expression> &expr : children_) {
     rc = expr->get_value(tuple, tmp_value);
@@ -582,15 +585,32 @@ RC ConjunctionExpr::get_value(const Tuple &tuple, Value &value) const
       LOG_WARN("failed to get value by child expression. rc=%s", strrc(rc));
       return rc;
     }
+
+    // 处理 NULL 值（三值逻辑）
+    if (tmp_value.is_null()) {
+      has_null = true;
+      // AND: NULL AND FALSE = FALSE, NULL AND TRUE = NULL
+      // OR:  NULL OR TRUE = TRUE, NULL OR FALSE = NULL
+      // 继续评估其他表达式，看是否有确定的结果
+      continue;
+    }
+
     bool bool_value = tmp_value.get_boolean();
     if ((conjunction_type_ == Type::AND && !bool_value) || (conjunction_type_ == Type::OR && bool_value)) {
+      // AND 遇到 FALSE 或 OR 遇到 TRUE，立即返回确定结果
       value.set_boolean(bool_value);
       return rc;
     }
   }
 
-  bool default_value = (conjunction_type_ == Type::AND);
-  value.set_boolean(default_value);
+  // 如果遇到过 NULL 且没有确定结果，返回 NULL
+  if (has_null) {
+    value.set_null();
+  } else {
+    // 否则返回默认值：AND 返回 TRUE，OR 返回 FALSE
+    bool default_value = (conjunction_type_ == Type::AND);
+    value.set_boolean(default_value);
+  }
   return rc;
 }
 
@@ -1444,18 +1464,29 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       Value arg2;
       rc = child2_->get_value(tuple, arg2);
       if (OB_FAIL(rc)) return rc;
-      if (arg.attr_type() != AttrType::VECTORS || arg2.attr_type() != AttrType::VECTORS) {
-        return RC::INVALID_ARGUMENT;
+
+      // 支持字符串字面量到向量的自动转换
+      Value vec_arg1 = arg;
+      Value vec_arg2 = arg2;
+      if (arg.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
+        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
       }
-      const int len1 = arg.length();
-      const int len2 = arg2.length();
+      if (arg2.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
+        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
+      }
+
+      // 现在使用转换后的向量值
+      const int len1 = vec_arg1.length();
+      const int len2 = vec_arg2.length();
       if (len1 <= 0 || len2 <= 0 || len1 != len2) {
         value.set_null();
         return RC::SUCCESS;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
-      const float *a = reinterpret_cast<const float *>(arg.data());
-      const float *b = reinterpret_cast<const float *>(arg2.data());
+      const float *a = reinterpret_cast<const float *>(vec_arg1.data());
+      const float *b = reinterpret_cast<const float *>(vec_arg2.data());
       double acc = 0.0;
       if (func_type_ == FuncType::L2_DISTANCE) {
         for (int i = 0; i < dim; ++i) {
@@ -1477,6 +1508,106 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         acc = 1.0 - cos;
       }
       // 保留两位小数（与 ROUND 使用的一致的银行家舍入）
+      double p = std::pow(10.0, 2.0);
+      double rf = round_half_to_even(acc * p) / p;
+      value.set_float(static_cast<float>(rf));
+      return RC::SUCCESS;
+    }
+    case FuncType::STRING_TO_VECTOR: {
+      // STRING_TO_VECTOR: 将字符串 "[1,2,3]" 转换为向量
+      if (arg.attr_type() != AttrType::CHARS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      const char *str = arg.get_string().c_str();
+      // 解析字符串格式 "[1,2,3]"
+      std::vector<float> elems;
+      if (str && str[0] == '[') {
+        const char *p = str + 1;
+        while (*p && *p != ']') {
+          char *end = nullptr;
+          float val = strtof(p, &end);
+          if (end == p) break;  // 解析失败
+          elems.push_back(val);
+          p = end;
+          while (*p == ' ' || *p == '\t') p++;  // 跳过空格
+          if (*p == ',') p++;
+          while (*p == ' ' || *p == '\t') p++;  // 跳过逗号后的空格
+        }
+      }
+      value.set_type(AttrType::VECTORS);
+      if (!elems.empty()) {
+        value.set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+      } else {
+        value.set_data((const char *)nullptr, 0);
+      }
+      return RC::SUCCESS;
+    }
+    case FuncType::VECTOR_TO_STRING: {
+      // VECTOR_TO_STRING: 将向量转换为字符串 "[1,2,3]"
+      if (arg.attr_type() != AttrType::VECTORS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      string result_str;
+      rc = DataType::type_instance(AttrType::VECTORS)->to_string(arg, result_str);
+      if (OB_FAIL(rc)) return rc;
+      value.set_string(result_str.c_str());
+      return RC::SUCCESS;
+    }
+    case FuncType::DISTANCE: {
+      // DISTANCE(vector1, vector2, distance_type)
+      if (!child2_ || !child3_) return RC::INVALID_ARGUMENT;
+      Value arg2, arg3;
+      rc = child2_->get_value(tuple, arg2);
+      if (OB_FAIL(rc)) return rc;
+      rc = child3_->get_value(tuple, arg3);
+      if (OB_FAIL(rc)) return rc;
+
+      if (arg.attr_type() != AttrType::VECTORS || arg2.attr_type() != AttrType::VECTORS) {
+        return RC::INVALID_ARGUMENT;
+      }
+      if (arg3.attr_type() != AttrType::CHARS) {
+        return RC::INVALID_ARGUMENT;
+      }
+
+      const int len1 = arg.length();
+      const int len2 = arg2.length();
+      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+
+      const int dim = len1 / static_cast<int>(sizeof(float));
+      const float *a = reinterpret_cast<const float *>(arg.data());
+      const float *b = reinterpret_cast<const float *>(arg2.data());
+      string dist_type = arg3.get_string();
+
+      // 转换为大写
+      for (char &c : dist_type) c = std::toupper(c);
+
+      double acc = 0.0;
+      if (dist_type == "EUCLIDEAN") {
+        for (int i = 0; i < dim; ++i) {
+          double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+          acc += d * d;
+        }
+        acc = std::sqrt(acc);
+      } else if (dist_type == "DOT") {
+        for (int i = 0; i < dim; ++i) acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+      } else if (dist_type == "COSINE") {
+        double dot = 0.0, na = 0.0, nb = 0.0;
+        for (int i = 0; i < dim; ++i) {
+          double va = static_cast<double>(a[i]);
+          double vb = static_cast<double>(b[i]);
+          dot += va * vb; na += va * va; nb += vb * vb;
+        }
+        if (na <= 0.0 || nb <= 0.0) { value.set_null(); return RC::SUCCESS; }
+        double cos = dot / (std::sqrt(na) * std::sqrt(nb));
+        acc = 1.0 - cos;
+      } else {
+        return RC::INVALID_ARGUMENT;  // 不支持的距离类型
+      }
+
+      // 保留两位小数
       double p = std::pow(10.0, 2.0);
       double rf = round_half_to_even(acc * p) / p;
       value.set_float(static_cast<float>(rf));
@@ -1613,6 +1744,12 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       // 它们的实际计算在get_column中处理
       return RC::UNIMPLEMENTED;
     }
+    case FuncType::STRING_TO_VECTOR:
+    case FuncType::VECTOR_TO_STRING:
+    case FuncType::DISTANCE: {
+      // 这些函数需要参数,在try_get_value中不支持常量折叠
+      return RC::UNIMPLEMENTED;
+    }
   }
   return RC::UNIMPLEMENTED;
 }
@@ -1643,10 +1780,17 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
     if (OB_FAIL(rc)) return rc;
   }
   Column arg2_col; bool has_arg2 = false;
-  if (func_type_ == FuncType::L2_DISTANCE || func_type_ == FuncType::COSINE_DISTANCE || func_type_ == FuncType::INNER_PRODUCT) {
+  if (func_type_ == FuncType::L2_DISTANCE || func_type_ == FuncType::COSINE_DISTANCE || func_type_ == FuncType::INNER_PRODUCT || func_type_ == FuncType::DISTANCE) {
     if (!child2_) return RC::INVALID_ARGUMENT;
     has_arg2 = true;
     rc = child2_->get_column(chunk, arg2_col);
+    if (OB_FAIL(rc)) return rc;
+  }
+  Column arg3_col; bool has_arg3 = false;
+  if (func_type_ == FuncType::DISTANCE) {
+    if (!child3_) return RC::INVALID_ARGUMENT;
+    has_arg3 = true;
+    rc = child3_->get_column(chunk, arg3_col);
     if (OB_FAIL(rc)) return rc;
   }
 
@@ -1776,6 +1920,71 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
           if (na <= 0.0 || nb <= 0.0) { out.set_null(); break; }
           double cos = dot / (std::sqrt(na) * std::sqrt(nb));
           acc = 1.0 - cos;
+        }
+        double p = std::pow(10.0, 2.0); double rf = round_half_to_even(acc * p) / p;
+        out.set_float(static_cast<float>(rf));
+      } break;
+      case FuncType::STRING_TO_VECTOR: {
+        if (arg.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
+        const char *str = arg.get_string().c_str();
+        std::vector<float> elems;
+        if (str && str[0] == '[') {
+          const char *p = str + 1;
+          while (*p && *p != ']') {
+            char *end = nullptr;
+            float val = strtof(p, &end);
+            if (end == p) break;
+            elems.push_back(val);
+            p = end;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == ',') p++;
+            while (*p == ' ' || *p == '\t') p++;
+          }
+        }
+        out.set_type(AttrType::VECTORS);
+        if (!elems.empty()) {
+          out.set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+        } else {
+          out.set_data((const char *)nullptr, 0);
+        }
+      } break;
+      case FuncType::VECTOR_TO_STRING: {
+        if (arg.attr_type() != AttrType::VECTORS) return RC::INVALID_ARGUMENT;
+        string result_str;
+        RC rc2 = DataType::type_instance(AttrType::VECTORS)->to_string(arg, result_str);
+        if (OB_FAIL(rc2)) return rc2;
+        out.set_string(result_str.c_str());
+      } break;
+      case FuncType::DISTANCE: {
+        Value argb = has_arg2 ? arg2_col.get_value(i) : Value();
+        Value argc = has_arg3 ? arg3_col.get_value(i) : Value();
+        if (arg.attr_type() != AttrType::VECTORS || argb.attr_type() != AttrType::VECTORS) return RC::INVALID_ARGUMENT;
+        if (argc.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
+
+        const int len1 = arg.length();
+        const int len2 = argb.length();
+        if (len1 <= 0 || len2 <= 0 || len1 != len2) { out.set_null(); break; }
+
+        const int dim = len1 / static_cast<int>(sizeof(float));
+        const float *a = reinterpret_cast<const float *>(arg.data());
+        const float *b = reinterpret_cast<const float *>(argb.data());
+        string dist_type = argc.get_string();
+        for (char &c : dist_type) c = std::toupper(c);
+
+        double acc = 0.0;
+        if (dist_type == "EUCLIDEAN") {
+          for (int j = 0; j < dim; ++j) { double d = (double)a[j] - (double)b[j]; acc += d*d; }
+          acc = std::sqrt(acc);
+        } else if (dist_type == "DOT") {
+          for (int j = 0; j < dim; ++j) acc += (double)a[j] * (double)b[j];
+        } else if (dist_type == "COSINE") {
+          double dot = 0.0, na = 0.0, nb = 0.0;
+          for (int j = 0; j < dim; ++j) { double va = (double)a[j], vb = (double)b[j]; dot += va*vb; na += va*va; nb += vb*vb; }
+          if (na <= 0.0 || nb <= 0.0) { out.set_null(); break; }
+          double cos = dot / (std::sqrt(na) * std::sqrt(nb));
+          acc = 1.0 - cos;
+        } else {
+          return RC::INVALID_ARGUMENT;
         }
         double p = std::pow(10.0, 2.0); double rf = round_half_to_even(acc * p) / p;
         out.set_float(static_cast<float>(rf));
