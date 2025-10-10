@@ -389,6 +389,24 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     return RC::SUCCESS;
   }
 
+  // Strict dimension check for normal VECTORS (stored inline, not LOB)
+  if (field->type() == AttrType::VECTORS && field->len() != static_cast<int>(sizeof(LobRef))) {
+    if (src->attr_type() != AttrType::VECTORS) {
+      LOG_WARN("vector value type mismatch. field=%s expect=VECTORS got=%d", field->name(), (int)src->attr_type());
+      return RC::INVALID_ARGUMENT;
+    }
+    const int expect_len = field->len();                    // bytes in record = dim * sizeof(float)
+    const int actual_len = src->length();                   // bytes from value
+    // actual_len must equal expect_len exactly; otherwise reject
+    if (actual_len != expect_len || (actual_len % static_cast<int>(sizeof(float)) != 0)) {
+      const int expect_dim = expect_len / static_cast<int>(sizeof(float));
+      const int actual_dim = actual_len / static_cast<int>(sizeof(float));
+      LOG_WARN("vector dimension mismatch. field=%s expect_dim=%d actual_dim=%d (bytes %d vs %d)",
+               field->name(), expect_dim, actual_dim, expect_len, actual_len);
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
   // 安全写入：计算该字段在记录缓冲区内的可写范围，避免越界
   {
     const size_t record_size   = table_meta_.record_size();

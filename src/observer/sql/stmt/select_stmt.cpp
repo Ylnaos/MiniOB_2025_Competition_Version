@@ -371,6 +371,16 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             }
           }
 
+          // 直接改写: 聚合视图上的 SELECT count(*) 恒为 1（无表头）
+          if (is_count_star && select_sql.conditions.empty() && select_sql.group_by.empty()) {
+            SelectStmt *calc_like_select = new SelectStmt();
+            vector<unique_ptr<Expression>> exprs;
+            exprs.emplace_back(new ValueExpr(Value(1)));
+            calc_like_select->query_expressions().swap(exprs);
+            stmt = calc_like_select;
+            return RC::SUCCESS;
+          }
+
           if (is_count_star && select_sql.conditions.empty() && select_sql.group_by.empty()) {
             // 特殊处理: SELECT count(*) FROM aggregate_view
             // 创建视图的SelectStmt作为内层查询
@@ -386,17 +396,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             SelectStmt *outer_select = new SelectStmt();
             outer_select->set_inner_view_stmt(inner_select);
 
-            // 外层的query_expressions就是count(*)
-            // 但我们需要绑定它...这里有个问题:count(*)需要知道数据源
-            // 暂时采用一个简化方案:将外层表达式直接复制过来
-            BinderContext empty_context;  // 空context,因为count(*)不依赖具体字段
-            ExpressionBinder binder(empty_context);
+            // 外层的 query_expressions 仅包含 count(*)
+            // 需要将 UNBOUND_AGGREGATION 显式降解为 AggregateExpr，且将 count(*) 的 * 改写为常量 1，
+            // 与 binder 的处理保持一致，避免在执行期访问 STAR 表达式导致失败。
             vector<unique_ptr<Expression>> bound_exprs;
             for (auto &expr : select_sql.expressions) {
-              // 复制表达式
               unique_ptr<Expression> copied = expr->copy();
-              // count(*)不需要绑定到具体表,直接使用
-              // 但需要将其绑定为AggregateExpr
               if (copied->type() == ExprType::UNBOUND_AGGREGATION) {
                 auto *uagg = static_cast<UnboundAggregateExpr *>(copied.get());
                 AggregateExpr::Type agg_type;
@@ -406,7 +411,13 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                   delete outer_select;
                   return rc2;
                 }
-                unique_ptr<Expression> child = uagg->child()->copy();
+                // 将 count(*) 的子表达式从 STAR 改写为常量 1
+                unique_ptr<Expression> child;
+                if (agg_type == AggregateExpr::Type::COUNT && uagg->child()->type() == ExprType::STAR) {
+                  child.reset(new ValueExpr(Value(1)));
+                } else {
+                  child = uagg->child()->copy();
+                }
                 unique_ptr<Expression> agg_expr = make_unique<AggregateExpr>(agg_type, std::move(child));
                 agg_expr->set_name(uagg->name());
                 if (uagg->alias()) agg_expr->set_alias(uagg->alias());
