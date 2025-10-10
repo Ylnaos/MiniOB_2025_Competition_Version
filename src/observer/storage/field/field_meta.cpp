@@ -103,6 +103,9 @@ void FieldMeta::to_json(Json::Value &json_value) const
   json_value[FIELD_VISIBLE] = visible_;
   json_value[FIELD_FIELD_ID] = field_id_;
   json_value[FIELD_NULLABLE] = nullable_;
+  if (vector_dimension_ >= 0) {
+    json_value["vector_dimension"] = vector_dimension_;
+  }
 }
 
 RC FieldMeta::from_json(const Json::Value &json_value, FieldMeta &field)
@@ -165,5 +168,16 @@ RC FieldMeta::from_json(const Json::Value &json_value, FieldMeta &field)
   int         len     = len_value.asInt();
   bool        visible = visible_value.asBool();
   int         field_id  = field_id_value.asInt();
-  return field.init(name, type, offset, len, visible, field_id, nullable);
+  RC rc = field.init(name, type, offset, len, visible, field_id, nullable);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+
+  // 读取 vector_dimension (如果存在)
+  const Json::Value &vec_dim_value = json_value["vector_dimension"];
+  if (!vec_dim_value.isNull() && vec_dim_value.isInt()) {
+    field.set_vector_dimension(vec_dim_value.asInt());
+  }
+
+  return RC::SUCCESS;
 }

@@ -61,4 +61,9 @@ protected:
   bool     visible_;
   int      field_id_;
   bool     nullable_ = false;
+  int      vector_dimension_ = -1;  // 对于 VECTOR 类型,存储原始维度;非 VECTOR 类型为 -1
+
+public:
+  int vector_dimension() const { return vector_dimension_; }
+  void set_vector_dimension(int dim) { vector_dimension_ = dim; }
 };

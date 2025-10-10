@@ -359,11 +359,28 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
       return RC::INTERNAL;
     }
 
+    // Verify value type
+    if (src->attr_type() != AttrType::VECTORS) {
+      LOG_WARN("vector value type mismatch for LOB. field=%s expect=VECTORS got=%d", field->name(), (int)src->attr_type());
+      return RC::INVALID_ARGUMENT;
+    }
+
     // Vector data length in bytes
     int vec_len = src->length();
     if (vec_len <= 0 || (vec_len % sizeof(float)) != 0) {
       LOG_WARN("Invalid vector data length: %d", vec_len);
       return RC::INVALID_ARGUMENT;
+    }
+
+    // Check dimension match for LOB vectors
+    const int expected_dimension = field->vector_dimension();
+    if (expected_dimension > 0) {
+      const int actual_dimension = vec_len / static_cast<int>(sizeof(float));
+      if (actual_dimension != expected_dimension) {
+        LOG_WARN("vector dimension mismatch for LOB field. field=%s expect_dim=%d actual_dim=%d",
+                 field->name(), expected_dimension, actual_dimension);
+        return RC::INVALID_ARGUMENT;
+      }
     }
 
     // Write vector data into .lob file

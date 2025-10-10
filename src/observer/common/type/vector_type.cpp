@@ -99,12 +99,18 @@ RC VectorType::to_string(const Value &val, string &result) const
   const int dim = len / static_cast<int>(sizeof(float));
   const float *data = reinterpret_cast<const float *>(val.data());
   std::ostringstream oss;
-  // 固定6位小数，避免出现整数样式或科学计数法
-  oss << std::fixed << std::setprecision(6);
   oss << "[";
   for (int i = 0; i < dim; ++i) {
     if (i > 0) oss << ",";
-    oss << data[i];
+    float value = data[i];
+    // 判断是否为整数值
+    if (std::floor(value) == value && std::abs(value) < 1e9) {
+      // 输出为整数格式
+      oss << static_cast<int>(value);
+    } else {
+      // 输出为浮点数,去除尾部零
+      oss << value;
+    }
   }
   oss << "]";
   result = oss.str();
