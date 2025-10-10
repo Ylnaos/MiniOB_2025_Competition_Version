@@ -263,11 +263,13 @@ RC PlainCommunicator::write_tuple_result(SqlResult *sql_result)
   // 打印表头
   const TupleSchema &schema   = sql_result->tuple_schema();
   const int          cell_num = schema.cell_num();
+  bool has_any_alias = false;  // 检查是否有任何非空的alias
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
     // 修复判空逻辑：必须同时非空且非空串
     if (nullptr != alias && alias[0] != 0) {
+      has_any_alias = true;
       if (0 != i) {
         const char *delim = " | ";
         RC wrc = writer_->writen(delim, strlen(delim));
@@ -284,7 +286,8 @@ RC PlainCommunicator::write_tuple_result(SqlResult *sql_result)
       }
     }
   }
-  if (cell_num > 0) {
+  // 只有在有任何非空alias时才打印表头换行
+  if (has_any_alias) {
     char newline = '\n';
     RC wrc = writer_->writen(&newline, 1);
     if (OB_FAIL(wrc)) {
@@ -382,11 +385,13 @@ RC PlainCommunicator::write_chunk_result(SqlResult *sql_result)
   // 打印表头
   const TupleSchema &schema   = sql_result->tuple_schema();
   const int          cell_num = schema.cell_num();
+  bool has_any_alias = false;  // 检查是否有任何非空的alias
   for (int i = 0; i < cell_num; i++) {
     const TupleCellSpec &spec  = schema.cell_at(i);
     const char          *alias = spec.alias();
     // 修复判空逻辑：必须同时非空且非空串
     if (nullptr != alias && alias[0] != 0) {
+      has_any_alias = true;
       if (0 != i) {
         const char *delim = " | ";
         RC wrc = writer_->writen(delim, strlen(delim));
@@ -403,7 +408,8 @@ RC PlainCommunicator::write_chunk_result(SqlResult *sql_result)
       }
     }
   }
-  if (cell_num > 0) {
+  // 只有在有任何非空alias时才打印表头换行
+  if (has_any_alias) {
     char newline = '\n';
     RC wrc = writer_->writen(&newline, 1);
     if (OB_FAIL(wrc)) {

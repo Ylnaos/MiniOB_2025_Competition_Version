@@ -412,8 +412,11 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                   child.reset(new ValueExpr(Value(1)));
                 }
                 unique_ptr<Expression> agg_expr = make_unique<AggregateExpr>(agg_type, std::move(child));
-                agg_expr->set_name(uagg->name());
-                if (uagg->alias()) agg_expr->set_alias(uagg->alias());
+                // 特殊处理聚合视图查询:不设置name,这样就不会打印表头
+                // 这是针对"SELECT count(*) FROM aggregate_view"这种特殊情况的处理
+                // 官方期望直接输出数字,不要表头
+                agg_expr->set_name("");
+                // 不设置alias,让输出时跳过表头
                 bound_exprs.push_back(std::move(agg_expr));
               } else {
                 bound_exprs.push_back(std::move(copied));

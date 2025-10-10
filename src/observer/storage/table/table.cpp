@@ -303,6 +303,24 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     src = &real_value;
   }
 
+  // 对于向量类型，需要额外检查维度是否匹配
+  if (field->type() == AttrType::VECTORS && src->attr_type() == AttrType::VECTORS) {
+    // field->len() 是以字节为单位的向量数据长度，对于高维向量可能是 sizeof(LobRef)
+    // 先判断是否是高维向量（存储为 LOB 引用）
+    if (field->len() == static_cast<int>(sizeof(LobRef))) {
+      // 高维向量，不在这里检查维度，在后面的 LOB 处理中会处理
+    } else {
+      // 普通向量，直接比较字节长度（即维度）
+      int expected_len = field->len();
+      int actual_len = src->length();
+      if (expected_len != actual_len) {
+        LOG_WARN("vector dimension mismatch. field=%s, expected_len=%d, actual_len=%d",
+            field->name(), expected_len, actual_len);
+        return RC::INVALID_ARGUMENT;
+      }
+    }
+  }
+
   // Special handling for TEXT: store into LOB file, and write LobRef to record
   if (field->type() == AttrType::TEXTS) {
     if (lob_handler_ == nullptr) {
