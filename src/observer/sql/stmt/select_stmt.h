@@ -49,6 +49,10 @@ public:
   vector<unique_ptr<Expression>> &group_by() { return group_by_; }
   vector<pair<unique_ptr<Expression>, bool>> &order_by() { return order_by_; }
 
+  // 视图相关:当FROM是一个包含聚合的视图时,inner_view_stmt_保存视图的查询
+  SelectStmt *inner_view_stmt() const { return inner_view_stmt_; }
+  void set_inner_view_stmt(SelectStmt *stmt) { inner_view_stmt_ = stmt; }
+
 private:
   vector<unique_ptr<Expression>> query_expressions_;
   vector<Table *>                tables_;
@@ -57,4 +61,5 @@ private:
   vector<pair<unique_ptr<Expression>, bool>> order_by_;
   unique_ptr<Expression>         where_expr_;
   unique_ptr<Expression>         having_expr_;
+  SelectStmt                    *inner_view_stmt_ = nullptr;  // 内层视图查询(包含聚合时使用)
 };

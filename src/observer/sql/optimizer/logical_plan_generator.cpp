@@ -97,6 +97,45 @@ RC LogicalPlanGenerator::create_plan(CalcStmt *calc_stmt, unique_ptr<LogicalOper
 
 RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  // 特殊处理:如果SelectStmt包含inner_view_stmt,说明这是一个对聚合视图的查询
+  // 需要先生成内层视图的逻辑计划,然后在内层结果上构建外层的聚合
+  if (select_stmt->inner_view_stmt() != nullptr) {
+    LOG_DEBUG("Processing nested view query with aggregation");
+
+    // 生成内层视图的逻辑计划
+    unique_ptr<LogicalOperator> inner_logical_oper;
+    RC rc = create_plan(select_stmt->inner_view_stmt(), inner_logical_oper);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("Failed to create logical plan for inner view");
+      return rc;
+    }
+
+    // 在内层逻辑计划之上构建外层的聚合逻辑
+    // 外层只有一个count(*)聚合,不需要group by
+    unique_ptr<LogicalOperator> group_by_oper;
+    rc = create_group_by_plan(select_stmt, group_by_oper);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("Failed to create group by plan for outer query");
+      return rc;
+    }
+
+    if (group_by_oper) {
+      group_by_oper->add_child(std::move(inner_logical_oper));
+    }
+
+    // 添加project算子
+    unique_ptr<LogicalOperator> project_oper = make_unique<ProjectLogicalOperator>(std::move(select_stmt->query_expressions()));
+    if (group_by_oper) {
+      project_oper->add_child(std::move(group_by_oper));
+    } else {
+      project_oper->add_child(std::move(inner_logical_oper));
+    }
+
+    logical_operator = std::move(project_oper);
+    return RC::SUCCESS;
+  }
+
+  // 正常的SelectStmt处理流程
   unique_ptr<LogicalOperator> *last_oper = nullptr;
 
   unique_ptr<LogicalOperator> table_oper(nullptr);

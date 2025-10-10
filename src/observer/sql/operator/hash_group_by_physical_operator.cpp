@@ -163,14 +163,23 @@ RC HashGroupByPhysicalOperator::find_group(const Tuple &child_tuple, GroupType *
 
     ValueListTuple child_tuple_to_value;
     rc = ValueListTuple::make(child_tuple, child_tuple_to_value);
-    if (OB_FAIL(rc)) {
+
+    CompositeTuple composite_tuple;
+    if (OB_SUCC(rc)) {
+      // 成功转换为 ValueListTuple，将其缓存
+      composite_tuple.add_tuple(make_unique<ValueListTuple>(std::move(child_tuple_to_value)));
+    } else if (rc == RC::NOTFOUND) {
+      // 无法访问子tuple的字段（比如来自聚合视图的结果）
+      // 对于不需要访问子tuple字段的聚合，使用空CompositeTuple即可
+      LOG_DEBUG("Cannot convert child tuple to value list (rc=%s), using empty composite tuple for aggregation", strrc(rc));
+      rc = RC::SUCCESS;
+    } else {
+      // 其他错误
       LOG_WARN("failed to make tuple to value list. rc=%s", strrc(rc));
       return rc;
     }
 
-    CompositeTuple composite_tuple;
-    composite_tuple.add_tuple(make_unique<ValueListTuple>(std::move(child_tuple_to_value)));
-    groups_.emplace_back(std::move(group_by_evaluated_tuple), 
+    groups_.emplace_back(std::move(group_by_evaluated_tuple),
                          GroupValueType(std::move(aggregator_list), std::move(composite_tuple)));
     found_group = &groups_.back();
   }
