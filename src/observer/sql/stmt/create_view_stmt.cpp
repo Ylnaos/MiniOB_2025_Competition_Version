@@ -11,6 +11,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/create_view_stmt.h"
 #include "common/log/log.h"
 #include "storage/db/db.h"
+#include "sql/parser/parse.h"
 
 RC CreateViewStmt::create(Db *db, const CreateViewSqlNode &create_view, Stmt *&stmt)
 {
@@ -28,6 +29,26 @@ RC CreateViewStmt::create(Db *db, const CreateViewSqlNode &create_view, Stmt *&s
     LOG_WARN("view name conflicts with existing table: %s", create_view.view_name.c_str());
     return RC::SCHEMA_TABLE_EXIST;
   }
+
+  // 验证视图定义的SQL语法是否正确
+  ParsedSqlResult parsed;
+  RC parse_rc = parse(create_view.view_select_sql.c_str(), &parsed);
+  if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+    LOG_WARN("parse view select failed. view=%s, sql=%s",
+             create_view.view_name.c_str(), create_view.view_select_sql.c_str());
+    return RC::SQL_SYNTAX;
+  }
+
+  ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+  if (node->flag != SCF_SELECT) {
+    LOG_WARN("view definition is not a SELECT. view=%s", create_view.view_name.c_str());
+    return RC::SQL_SYNTAX;
+  }
+
+  // 注意:这里不做语义验证(不调用SelectStmt::create),因为:
+  // 1. 视图可能包含聚合函数,而聚合视图的展开逻辑比较复杂
+  // 2. 表可能还不存在(创建视图时允许引用尚不存在的表,延迟到查询时检查)
+  // 3. 语义验证应该在查询视图时进行
 
   // 生成语句对象
   auto *view_stmt = new CreateViewStmt();

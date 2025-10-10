@@ -407,6 +407,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                   return rc2;
                 }
                 unique_ptr<Expression> child = uagg->child()->copy();
+                // 特殊处理count(*):将StarExpr替换为ValueExpr(1)
+                if (child->type() == ExprType::STAR && agg_type == AggregateExpr::Type::COUNT) {
+                  child.reset(new ValueExpr(Value(1)));
+                }
                 unique_ptr<Expression> agg_expr = make_unique<AggregateExpr>(agg_type, std::move(child));
                 agg_expr->set_name(uagg->name());
                 if (uagg->alias()) agg_expr->set_alias(uagg->alias());
