@@ -98,11 +98,16 @@ RC VectorType::to_string(const Value &val, string &result) const
   const int dim = len / static_cast<int>(sizeof(float));
   const float *data = reinterpret_cast<const float *>(val.data());
   std::ostringstream oss;
-  oss.setf(std::ios::fixed); oss.precision(6);
   oss << "[";
   for (int i = 0; i < dim; ++i) {
     if (i > 0) oss << ",";
-    oss << data[i];
+    float val = data[i];
+    // 如果是整数值，以整数形式输出；否则保留适当精度
+    if (val == std::floor(val) && !std::isinf(val) && !std::isnan(val)) {
+      oss << static_cast<int>(val);
+    } else {
+      oss << val;
+    }
   }
   oss << "]";
   result = oss.str();
