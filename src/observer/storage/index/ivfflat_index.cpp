@@ -199,14 +199,12 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   vector_field_meta_ = &field_metas[0];
 
   // 从IndexMeta获取向量索引参数
-  // TODO: 需要从index_meta中提取lists和probes参数
-  // 暂时使用默认值
-  lists_ = 245;  // 默认聚类数
-  probes_ = 5;   // 默认探测数
+  lists_  = index_meta.lists() > 0 ? index_meta.lists() : 100;   // 默认100
+  probes_ = index_meta.probes() > 0 ? index_meta.probes() : 10;  // 默认10
 
   // 计算向量维度
   dimension_ = vector_field_meta_->len() / sizeof(float);
-  LOG_INFO("Creating IVF-Flat index with dimension=%d, lists=%d", dimension_, lists_);
+  LOG_INFO("Creating IVF-Flat index with dimension=%d, lists=%d, probes=%d", dimension_, lists_, probes_);
 
   // 扫描表，收集所有向量数据
   vector<vector<float>> all_vectors;
@@ -292,7 +290,10 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
   file_name_ = file_name;
   vector_field_meta_ = &field_metas[0];
 
-  // 从文件加载索引
+  // 计算向量维度
+  dimension_ = vector_field_meta_->len() / sizeof(float);
+
+  // 从文件加载索引（lists和probes会从文件中读取）
   RC rc = load_from_file();
   if (rc != RC::SUCCESS) {
     LOG_WARN("Failed to load index from file: %s", file_name_.c_str());
@@ -300,7 +301,8 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
   }
 
   inited_ = true;
-  LOG_INFO("Successfully opened IVF-Flat index, file=%s", file_name_.c_str());
+  LOG_INFO("Successfully opened IVF-Flat index, file=%s, lists=%d, probes=%d",
+           file_name_.c_str(), lists_, probes_);
   return RC::SUCCESS;
 }
 

@@ -49,6 +49,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/subquery_logical_operator.h"
 #include "sql/operator/subquery_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
+#include "sql/operator/vector_index_scan_physical_operator.h"
+#include "storage/index/ivfflat_index.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
 using namespace std;
@@ -257,6 +259,85 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
   unique_ptr<PhysicalOperator> child_phy_oper;
 
   RC rc = RC::SUCCESS;
+
+  // ANN 查询优化：检测 ORDER BY 向量距离函数 + LIMIT 模式
+  // 模式：Project(LIMIT) -> OrderBy(vector_distance_func) -> TableGet
+  if (!child_opers.empty() && project_oper.limit() > 0) {
+    LogicalOperator *child_oper = child_opers.front().get();
+
+    // 检查子节点是否为 ORDER BY
+    if (child_oper->type() == LogicalOperatorType::ORDER_BY) {
+      OrderByLogicalOperator *order_by_oper = static_cast<OrderByLogicalOperator *>(child_oper);
+      auto &order_items = order_by_oper->order_by_items();
+
+      // 检查是否只有一个排序项
+      if (order_items.size() == 1) {
+        Expression *order_expr = order_items[0].first.get();
+
+        // 检查排序表达式是否为向量距离函数
+        if (order_expr->type() == ExprType::FUNCTION) {
+          ScalarFunctionExpr *func_expr = static_cast<ScalarFunctionExpr *>(order_expr);
+          ScalarFunctionExpr::FuncType func_type = func_expr->function_type();
+
+          // 检查是否为向量距离函数
+          if (func_type == ScalarFunctionExpr::FuncType::L2_DISTANCE ||
+              func_type == ScalarFunctionExpr::FuncType::COSINE_DISTANCE ||
+              func_type == ScalarFunctionExpr::FuncType::INNER_PRODUCT) {
+
+            // 检查函数参数：第一个参数应该是字段，第二个参数应该是常量向量
+            Expression *arg1 = func_expr->child().get();
+            Expression *arg2 = func_expr->child2() ? func_expr->child2().get() : nullptr;
+
+            if (arg1 && arg2 && arg1->type() == ExprType::FIELD && arg2->type() == ExprType::VALUE) {
+              FieldExpr *field_expr = static_cast<FieldExpr *>(arg1);
+              ValueExpr *value_expr = static_cast<ValueExpr *>(arg2);
+
+              // 检查值是否为向量类型
+              const Value &query_vector_value = value_expr->get_value();
+              if (query_vector_value.attr_type() == AttrType::VECTORS) {
+                // 检查是否有向量索引
+                // 需要从 ORDER BY 的子节点找到 TableGet 获取 table
+                if (!order_by_oper->children().empty()) {
+                  LogicalOperator *table_get_oper = order_by_oper->children().front().get();
+                  if (table_get_oper->type() == LogicalOperatorType::TABLE_GET) {
+                    TableGetLogicalOperator *table_get = static_cast<TableGetLogicalOperator *>(table_get_oper);
+                    Table *table = table_get->table();
+
+                    // 查找向量索引
+                    Index *index = table->find_index_by_field(field_expr->field().field_name());
+                    if (index && index->is_vector_index()) {
+                      // 满足所有条件：使用向量索引进行 ANN 查询
+                      // 提取查询向量数据
+                      vector<float> query_vector;
+                      const char *vec_data = query_vector_value.data();
+                      int vec_len = query_vector_value.length();
+                      int num_floats = vec_len / sizeof(float);
+                      const float *float_data = reinterpret_cast<const float *>(vec_data);
+                      query_vector.assign(float_data, float_data + num_floats);
+
+                      // 创建 VectorIndexScanPhysicalOperator
+                      auto vector_scan_oper = new VectorIndexScanPhysicalOperator(
+                          table, index, query_vector, project_oper.limit());
+
+                      // 创建 ProjectPhysicalOperator（不需要 LIMIT，因为已经在 VectorIndexScan 中处理）
+                      auto project_operator = make_unique<ProjectPhysicalOperator>(std::move(project_oper.expressions()));
+                      project_operator->add_child(unique_ptr<PhysicalOperator>(vector_scan_oper));
+                      oper = std::move(project_operator);
+
+                      LOG_TRACE("ANN query optimization: using vector index scan with limit=%d", project_oper.limit());
+                      return RC::SUCCESS;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 默认路径：正常生成物理计划
   if (!child_opers.empty()) {
     LogicalOperator *child_oper = child_opers.front().get();
 

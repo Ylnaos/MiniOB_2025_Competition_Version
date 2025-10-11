@@ -45,6 +45,13 @@ public:
   const vector<string> &fields() const { return fields_; }
   bool                  unique() const { return unique_; }
 
+  // Vector index specific accessors
+  bool         is_vector_index() const { return is_vector_index_; }
+  const string &distance_type() const { return distance_type_; }
+  const string &index_type() const { return index_type_; }
+  int           lists() const { return lists_; }
+  int           probes() const { return probes_; }
+
   void desc(ostream &os) const;
 
 public:
@@ -55,4 +62,21 @@ protected:
   string         name_;    // index's name
   vector<string> fields_;  // field names (ordered)
   bool           unique_ = false; // unique index flag
+
+  // Vector index specific parameters
+  bool    is_vector_index_ = false;  // Whether this is a vector index
+  string  distance_type_;            // Distance type: l2_distance, cosine_distance, inner_product
+  string  index_type_;               // Index type: ivfflat
+  int     lists_ = 0;                // Number of clusters for IVF-Flat
+  int     probes_ = 0;               // Number of probes during search
+
+public:
+  // Vector index setters (used during index creation)
+  void set_vector_index_params(bool is_vector, const string &distance, const string &type, int lists, int probes) {
+    is_vector_index_ = is_vector;
+    distance_type_ = distance;
+    index_type_ = type;
+    lists_ = lists;
+    probes_ = probes;
+  }
 };

@@ -679,43 +679,38 @@ value:
       char *tmp = common::substr($1,1,strlen($1)-2);
       // 检查是否为向量字符串格式 '[...]'
       if (tmp != nullptr && tmp[0] == '[') {
-        // 检查是否包含空格，如果包含则拒绝解析为向量，作为普通字符串处理
-        bool has_space = false;
-        for (const char *check = tmp; *check; ++check) {
-          if (*check == ' ' || *check == '\t') {
-            has_space = true;
-            break;
-          }
-        }
+        // 解析为向量（支持空格）
+        std::vector<float> elems;
+        const char *p = tmp + 1;  // 跳过 '['
+        while (*p && *p != ']') {
+          // 跳过前导空格
+          while (*p == ' ' || *p == '\t') p++;
+          if (*p == ']') break;  // 到达结尾
 
-        if (has_space) {
-          // 包含空格，作为普通字符串处理
-          $$ = new Value(tmp);
-          free(tmp);
-        } else {
-          // 解析为向量（严格格式：不含空格）
-          std::vector<float> elems;
-          const char *p = tmp + 1;  // 跳过 '['
-          while (*p && *p != ']') {
-            if (*p == ' ' || *p == '\t') break;  // 不应该有空格
-            char *end = nullptr;
-            float val = strtof(p, &end);
-            if (end == p) break;  // 解析失败
-            elems.push_back(val);
-            p = end;
-            if (*p == ',') p++;
-            else if (*p != ']') break;  // 非逗号非右括号则格式错误
+          char *end = nullptr;
+          float val = strtof(p, &end);
+          if (end == p) break;  // 解析失败
+          elems.push_back(val);
+          p = end;
+
+          // 跳过尾随空格
+          while (*p == ' ' || *p == '\t') p++;
+
+          if (*p == ',') {
+            p++;
+          } else if (*p != ']') {
+            break;  // 非逗号非右括号则格式错误
           }
-          Value *vec = new Value();
-          vec->set_type(AttrType::VECTORS);
-          if (!elems.empty()) {
-            vec->set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
-          } else {
-            vec->set_data((const char *)nullptr, 0);
-          }
-          free(tmp);
-          $$ = vec;
         }
+        Value *vec = new Value();
+        vec->set_type(AttrType::VECTORS);
+        if (!elems.empty()) {
+          vec->set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+        } else {
+          vec->set_data((const char *)nullptr, 0);
+        }
+        free(tmp);
+        $$ = vec;
       } else {
         $$ = new Value(tmp);
         free(tmp);

@@ -54,7 +54,7 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       return RC::SUCCESS;
     }
     case AttrType::VECTORS: {
-      // 从字符串解析成向量字节序列，形如 "[1,2,3]"
+      // 从字符串解析成向量字节序列，形如 "[1,2,3]" 或 "[1, 2, 3]"
       std::string s = val.get_string();
       // 去除首尾空白
       auto l = s.find_first_not_of(" \t\r\n");
@@ -65,15 +65,7 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
         return RC::INVALID_ARGUMENT;
       }
 
-      // 检查向量字符串内部是否包含空格（拒绝带空格的格式如 '[1, 2, 3]'）
-      for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == ' ' || s[i] == '\t') {
-          // 包含空格，拒绝解析
-          return RC::INVALID_ARGUMENT;
-        }
-      }
-
-      // 严格解析（不跳过空格）
+      // 解析向量（支持空格）
       std::vector<float> elems;
       std::string inner = s.substr(1, s.size() - 2);
       if (inner.empty()) {
@@ -83,9 +75,13 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
         return RC::SUCCESS;
       }
 
-      // 按逗号分割并解析，不trim（因为已经验证无空格）
+      // 按逗号分割并解析，跳过空格
       const char *p = inner.c_str();
       while (*p) {
+        // 跳过前导空格
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') break;
+
         char *endp = nullptr;
         float v = static_cast<float>(strtod(p, &endp));
         if (endp == p) {
@@ -94,6 +90,10 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
         }
         elems.push_back(v);
         p = endp;
+
+        // 跳过尾随空格
+        while (*p == ' ' || *p == '\t') p++;
+
         if (*p == ',') {
           p++;
         } else if (*p != '\0') {
