@@ -28,6 +28,46 @@ RC InsertPhysicalOperator::open(Trx *trx)
   vector<RID> inserted_rids;
 
   for (const auto &row_values : values_rows_) {
+    // 1) 行级列数校验（与表可见列数一致）
+    const TableMeta &table_meta = table_->table_meta();
+    const int expected_values = table_meta.field_num() - table_meta.sys_field_num();
+    if (static_cast<int>(row_values.size()) != expected_values) {
+      LOG_WARN("insert values count mismatch. table=%s expect=%d got=%zu",
+               table_meta.name(), expected_values, row_values.size());
+      rc = RC::SCHEMA_FIELD_MISSING;
+      break;
+    }
+
+    // 2) 向量字段的维度预校验（提前失败，便于与官方期望一致返回 FAILURE）
+    // 与 make_record -> set_value_to_record 的严格校验保持一致
+    for (int i = 0; i < expected_values; ++i) {
+      const FieldMeta *field_meta = table_meta.field(i + table_meta.sys_field_num());
+      if (field_meta == nullptr) {
+        rc = RC::INTERNAL;
+        break;
+      }
+      if (field_meta->type() == AttrType::VECTORS && field_meta->len() != static_cast<int>(sizeof(LobRef))) {
+        Value src = row_values[i];
+        if (src.attr_type() != AttrType::VECTORS) {
+          Value casted;
+          RC    rc2 = Value::cast_to(src, AttrType::VECTORS, casted);
+          if (OB_FAIL(rc2)) { rc = rc2; break; }
+          src = std::move(casted);
+        }
+        const int expect_len = field_meta->len();
+        const int actual_len = src.length();
+        if (actual_len != expect_len || (actual_len % static_cast<int>(sizeof(float)) != 0)) {
+          const int expect_dim = expect_len / static_cast<int>(sizeof(float));
+          const int actual_dim = actual_len / static_cast<int>(sizeof(float));
+          LOG_WARN("vector dimension mismatch before insert. table=%s field=%s expect_dim=%d actual_dim=%d",
+                   table_meta.name(), field_meta->name(), expect_dim, actual_dim);
+          rc = RC::INVALID_ARGUMENT;
+          break;
+        }
+      }
+    }
+    if (OB_FAIL(rc)) { break; }
+
     Record record;
     rc = table_->make_record(static_cast<int>(row_values.size()), row_values.data(), record);
     if (rc != RC::SUCCESS) {
