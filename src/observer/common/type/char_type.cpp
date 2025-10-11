@@ -54,7 +54,7 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       return RC::SUCCESS;
     }
     case AttrType::VECTORS: {
-      // 从字符串解析成向量字节序列，形如 "[1,2,3]"
+      // 从字符串解析成向量字节序列，形如 "[1,2,3]" 或包含空白的 "[1, 2, 3 ]"
       std::string s = val.get_string();
       // 去除首尾空白
       auto l = s.find_first_not_of(" \t\r\n");
@@ -65,27 +65,24 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
         return RC::INVALID_ARGUMENT;
       }
 
-      // 检查向量字符串内部是否包含空格（拒绝带空格的格式如 '[1, 2, 3]'）
-      for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == ' ' || s[i] == '\t') {
-          // 包含空格，拒绝解析
-          return RC::INVALID_ARGUMENT;
-        }
-      }
-
-      // 严格解析（不跳过空格）
       std::vector<float> elems;
       std::string inner = s.substr(1, s.size() - 2);
-      if (inner.empty()) {
+      const char *p = inner.c_str();
+
+      // 跳过可能的空白，判断是否为空向量
+      while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+      if (*p == '\0') {
         // 空向量 "[]"
         result.set_type(AttrType::VECTORS);
         result.set_data(static_cast<const char*>(nullptr), 0);
         return RC::SUCCESS;
       }
 
-      // 按逗号分割并解析，不trim（因为已经验证无空格）
-      const char *p = inner.c_str();
+      // 宽松解析：允许数值与逗号周围出现空白
       while (*p) {
+        // 跳过前导空白
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+        // 解析一个浮点数
         char *endp = nullptr;
         float v = static_cast<float>(strtod(p, &endp));
         if (endp == p) {
@@ -94,12 +91,18 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
         }
         elems.push_back(v);
         p = endp;
+        // 跳过数值后的空白
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
         if (*p == ',') {
-          p++;
-        } else if (*p != '\0') {
-          // 非逗号非结束符，格式错误
-          return RC::INVALID_ARGUMENT;
+          // 逗号后继续
+          ++p;
+          continue;
         }
+        if (*p == '\0') {
+          break;
+        }
+        // 非逗号且非结束，格式错误
+        return RC::INVALID_ARGUMENT;
       }
 
       // 组装结果

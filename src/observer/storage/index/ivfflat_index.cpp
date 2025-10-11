@@ -192,11 +192,13 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
     return RC::INVALID_ARGUMENT;
   }
 
+  // 将字段元数据拷贝到基类中，避免悬空引用
   Index::init(index_meta, field_metas);
 
   table_ = table;
   file_name_ = file_name;
-  vector_field_meta_ = &field_metas[0];
+  // 重要：指向内部持久化副本，避免引用 HeapTableEngine::open() 中临时 vector 的内存
+  vector_field_meta_ = &key_fields()[0];
 
   // 从IndexMeta获取向量索引参数
   // TODO: 需要从index_meta中提取lists和probes参数
@@ -286,11 +288,13 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
     return RC::INVALID_ARGUMENT;
   }
 
+  // 将字段元数据拷贝到基类中，避免悬空引用
   Index::init(index_meta, field_metas);
 
   table_ = table;
   file_name_ = file_name;
-  vector_field_meta_ = &field_metas[0];
+  // 重要：指向内部持久化副本，避免引用 HeapTableEngine::open() 中临时 vector 的内存
+  vector_field_meta_ = &key_fields()[0];
 
   // 从文件加载索引
   RC rc = load_from_file();

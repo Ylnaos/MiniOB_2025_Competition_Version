@@ -831,55 +831,7 @@ update_list:
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by having order_by limit_opt
-    {
-      $$ = new ParsedSqlNode(SCF_SELECT);
-      if ($2 != nullptr) {
-        $$->selection.expressions.swap(*$2);
-        delete $2;
-      }
-
-      if ($4 != nullptr) {
-        $$->selection.relations.swap(*$4);
-        delete $4;
-      }
-
-      if ($5 != nullptr) {
-        $$->selection.conditions.swap(*$5);
-        delete $5;
-      }
-
-      // 合并 JOIN ... ON 条件到 where_expr（与 where 条件共同生效）
-      if (g_join_on_expr != nullptr) {
-        if ($$->selection.where_expr) {
-          vector<unique_ptr<Expression>> children;
-          children.emplace_back($$->selection.where_expr.release());
-          children.emplace_back(g_join_on_expr);
-          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, children));
-        } else {
-          $$->selection.where_expr.reset(g_join_on_expr);
-        }
-        g_join_on_expr = nullptr;
-      }
-
-      if ($6 != nullptr) {
-        $$->selection.group_by.swap(*$6);
-        delete $6;
-      }
-
-      if ($7 != nullptr) {
-        $$->selection.having.swap(*$7);
-        delete $7;
-      }
-
-      if ($8 != nullptr) {
-        $$->selection.order_by.swap(*$8);
-        delete $8;
-      }
-
-      $$->selection.limit = $9;
-    }
-    | SELECT expression_list FROM rel_list where_bool group_by having order_by limit_opt
+    SELECT expression_list FROM rel_list where_bool group_by having order_by limit_opt
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
