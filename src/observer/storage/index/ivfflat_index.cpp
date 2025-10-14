@@ -9,6 +9,7 @@ MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
 #include "storage/index/ivfflat_index.h"
+#include "common/lang/string.h"
 #include "common/log/log.h"
 #include "storage/table/table.h"
 #include "storage/record/record_manager.h"
@@ -180,6 +181,60 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
   return RC::SUCCESS;
 }
 
+void IvfflatIndex::apply_meta_config(const IndexMeta &index_meta)
+{
+  index_type_    = index_meta.index_type();
+  distance_type_ = index_meta.distance_type();
+
+  string index_type_upper = index_type_;
+  if (!index_type_upper.empty()) {
+    common::str_to_upper(index_type_upper);
+  }
+  if (index_type_upper.empty() || index_type_upper == "IVFFLAT") {
+    index_type_ = "IVFFLAT";
+  } else {
+    LOG_WARN("Unsupported vector index type %s, fallback to IVFFLAT", index_type_.c_str());
+    index_type_ = "IVFFLAT";
+  }
+
+  string distance_type_upper = distance_type_;
+  if (!distance_type_upper.empty()) {
+    common::str_to_upper(distance_type_upper);
+  }
+  if (distance_type_upper.empty() || distance_type_upper == "L2_DISTANCE" ||
+      distance_type_upper == "L2" || distance_type_upper == "EUCLIDEAN") {
+    distance_type_ = "L2_DISTANCE";
+  } else if (distance_type_upper == "COSINE_DISTANCE" || distance_type_upper == "COSINE") {
+    LOG_WARN("COSINE distance is not yet supported by IVF-Flat search, fallback to L2");
+    distance_type_ = "L2_DISTANCE";
+  } else if (distance_type_upper == "INNER_PRODUCT" || distance_type_upper == "DOT") {
+    LOG_WARN("INNER_PRODUCT distance is not yet supported by IVF-Flat search, fallback to L2");
+    distance_type_ = "L2_DISTANCE";
+  } else {
+    LOG_WARN("Unsupported distance type %s, fallback to L2_DISTANCE", distance_type_.c_str());
+    distance_type_ = "L2_DISTANCE";
+  }
+
+  int configured_lists = index_meta.lists();
+  if (configured_lists <= 0) {
+    configured_lists = 245;
+  }
+  lists_ = std::max(1, configured_lists);
+
+  int configured_probes = index_meta.probes();
+  if (configured_probes <= 0) {
+    configured_probes = 5;
+  }
+  if (configured_probes > lists_) {
+    LOG_INFO("Adjust probes from %d to %d to match lists", configured_probes, lists_);
+    configured_probes = lists_;
+  }
+  probes_ = std::max(1, configured_probes);
+
+  LOG_INFO("IVF-Flat meta config: index_type=%s distance=%s lists=%d probes=%d",
+           index_type_.c_str(), distance_type_.c_str(), lists_, probes_);
+}
+
 RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &index_meta, span<const FieldMeta> field_metas)
 {
   if (inited_) {
@@ -194,19 +249,16 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
 
   Index::init(index_meta, field_metas);
 
-  table_ = table;
-  file_name_ = file_name;
+  table_             = table;
+  file_name_         = file_name;
   vector_field_meta_ = &field_metas[0];
 
-  // 从IndexMeta获取向量索引参数
-  // TODO: 需要从index_meta中提取lists和probes参数
-  // 暂时使用默认值
-  lists_ = 245;  // 默认聚类数
-  probes_ = 5;   // 默认探测数
+  apply_meta_config(index_meta);
+  int requested_lists = lists_;
 
   // 计算向量维度
   dimension_ = vector_field_meta_->len() / sizeof(float);
-  LOG_INFO("Creating IVF-Flat index with dimension=%d, lists=%d", dimension_, lists_);
+  LOG_INFO("Creating IVF-Flat index with dimension=%d", dimension_);
 
   // 扫描表，收集所有向量数据
   vector<vector<float>> all_vectors;
@@ -241,6 +293,13 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
 
   // 执行K-Means聚类
   int actual_lists = std::min(lists_, static_cast<int>(all_vectors.size()));
+  if (actual_lists <= 0) {
+    actual_lists = std::min(static_cast<int>(all_vectors.size()), 1);
+  }
+  probes_ = std::max(1, std::min(probes_, actual_lists));
+  lists_  = actual_lists;
+  LOG_INFO("Finalize IVF-Flat index config: requested_lists=%d actual_lists=%d probes=%d",
+           requested_lists, lists_, probes_);
   kmeans_clustering(all_vectors, actual_lists, 100);
 
   // 初始化倒排列表
@@ -291,6 +350,7 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
   table_ = table;
   file_name_ = file_name;
   vector_field_meta_ = &field_metas[0];
+  apply_meta_config(index_meta);
 
   // 从文件加载索引
   RC rc = load_from_file();
@@ -298,6 +358,9 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
     LOG_WARN("Failed to load index from file: %s", file_name_.c_str());
     return rc;
   }
+
+  probes_ = std::max(1, std::min(probes_, std::max(1, lists_)));
+  LOG_INFO("Open IVF-Flat index success: lists=%d probes=%d", lists_, probes_);
 
   inited_ = true;
   LOG_INFO("Successfully opened IVF-Flat index, file=%s", file_name_.c_str());

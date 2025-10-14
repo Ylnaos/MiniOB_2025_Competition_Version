@@ -38,14 +38,17 @@ Table *BinderContext::find_table(const char *table_name) const
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-static void wildcard_fields(Table *table, vector<unique_ptr<Expression>> &expressions)
+static void wildcard_fields(
+    Table *table, const string &relation_name, vector<unique_ptr<Expression>> &expressions)
 {
   const TableMeta &table_meta = table->table_meta();
   const int        field_num  = table_meta.field_num();
   for (int i = table_meta.sys_field_num(); i < field_num; i++) {
     Field      field(table, table_meta.field(i));
-    FieldExpr *field_expr = new FieldExpr(field);
+    FieldExpr *field_expr = new FieldExpr(field, relation_name);
     field_expr->set_name(field.field_name());
+    LOG_DEBUG("wildcard bind field: table=%s relation_name=%s field=%s",
+        table->name(), relation_name.c_str(), field.field_name());
     expressions.emplace_back(field_expr);
   }
 }
@@ -65,22 +68,32 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
 
   if (expr->type() == ExprType::FUNCTION) {
     auto *func = static_cast<ScalarFunctionExpr *>(expr.get());
-    vector<unique_ptr<Expression>> child_bound;
-    RC rc = bind_expression(func->child(), child_bound);
-    if (OB_FAIL(rc)) return rc;
-    if (child_bound.size() == 1 && child_bound[0].get() != func->child().get()) {
-      func->child().reset(child_bound[0].release());
-    }
-
-    // 额外绑定 ROUND/DATE_FORMAT 的第二个参数（如果存在）
-    if ((func->function_type() == ScalarFunctionExpr::FuncType::ROUND ||
-         func->function_type() == ScalarFunctionExpr::FuncType::DATE_FORMAT) && func->child2()) {
-      child_bound.clear();
-      rc = bind_expression(func->child2(), child_bound);
-      if (OB_FAIL(rc)) return rc;
-      if (child_bound.size() == 1 && child_bound[0].get() != func->child2().get()) {
-        func->child2().reset(child_bound[0].release());
+    auto bind_child = [&](unique_ptr<Expression> &child) -> RC {
+      if (!child) {
+        return RC::SUCCESS;
       }
+      vector<unique_ptr<Expression>> child_bound;
+      RC rc = bind_expression(child, child_bound);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      if (child_bound.size() == 1 && child_bound[0].get() != child.get()) {
+        child.reset(child_bound[0].release());
+      }
+      return RC::SUCCESS;
+    };
+
+    RC rc = bind_child(func->child());
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    rc = bind_child(func->child2());
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    rc = bind_child(func->child3());
+    if (OB_FAIL(rc)) {
+      return rc;
     }
 
     AttrType arg_type = func->child()->value_type();
@@ -299,7 +312,14 @@ RC ExpressionBinder::bind_star_expression(
   }
 
   for (Table *table : tables_to_wildcard) {
-    wildcard_fields(table, bound_expressions);
+    std::string qualifier;
+    if (!is_blank(table_name) && 0 != strcmp(table_name, "*")) {
+      qualifier = table_name;
+    } else {
+      qualifier = table->name();
+    }
+    common::str_to_upper(qualifier);
+    wildcard_fields(table, qualifier, bound_expressions);
   }
 
   return RC::SUCCESS;
@@ -339,7 +359,15 @@ RC ExpressionBinder::bind_unbound_field_expression(
       LOG_WARN("wildcard 't.*' cannot have alias");
       return RC::INVALID_ARGUMENT;
     }
-    wildcard_fields(table, bound_expressions);
+    std::string qualifier;
+    if (!is_blank(table_name)) {
+      qualifier = table_name;
+    } else {
+      qualifier = table->name();
+    }
+    common::str_to_upper(qualifier);
+    LOG_DEBUG("bind unbound wildcard field: table=%s qualifier=%s", table->name(), qualifier.c_str());
+    wildcard_fields(table, qualifier, bound_expressions);
   } else {
     const FieldMeta *field_meta = table->table_meta().field(field_name);
     if (nullptr == field_meta) {
@@ -348,7 +376,14 @@ RC ExpressionBinder::bind_unbound_field_expression(
     }
 
     Field      field(table, field_meta);
-    FieldExpr *field_expr = new FieldExpr(field);
+    std::string qualifier;
+    if (!is_blank(table_name)) {
+      qualifier = table_name;
+    } else {
+      qualifier = table->name();
+    }
+    common::str_to_upper(qualifier);
+    FieldExpr *field_expr = new FieldExpr(field, qualifier);
     // 如果用户在 SQL 中使用了带表名限定的列名（如 t.col），
     // 则输出表头时也应保留“表.列”的形式，并与测试期望一致（大写）。
     if (!is_blank(table_name)) {
@@ -361,6 +396,8 @@ RC ExpressionBinder::bind_unbound_field_expression(
       // 未带表名限定时，保持列名本身，避免影响单表查询的表头
       field_expr->set_name(field_name);
     }
+    LOG_DEBUG("bind unbound field: table=%s qualifier=%s field=%s alias=%s",
+        table->name(), qualifier.c_str(), field_name, field_expr->name());
     bound_expressions.emplace_back(field_expr);
   }
 

@@ -40,8 +40,20 @@ RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
   for (const FieldMeta *fm : fms) {
     field_metas.push_back(*fm);
   }
+  VectorIndexOptions vector_options;
+  const VectorIndexOptions *vector_options_ptr = nullptr;
+  if (create_index_stmt->is_vector_index()) {
+    vector_options.is_vector_index = true;
+    vector_options.distance_type   = create_index_stmt->distance_type();
+    vector_options.index_type      = create_index_stmt->index_type();
+    vector_options.lists           = create_index_stmt->lists();
+    vector_options.probes          = create_index_stmt->probes();
+    vector_options_ptr             = &vector_options;
+  }
+
   return table->create_index(trx,
                              span<const FieldMeta>(field_metas.data(), field_metas.size()),
                              create_index_stmt->index_name().c_str(),
-                             create_index_stmt->unique());
+                             create_index_stmt->unique(),
+                             vector_options_ptr);
 }

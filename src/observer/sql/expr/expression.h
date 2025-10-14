@@ -201,14 +201,16 @@ class FieldExpr : public Expression
 {
 public:
   FieldExpr() = default;
-  FieldExpr(const Table *table, const FieldMeta *field) : field_(table, field) {}
-  FieldExpr(const Field &field) : field_(field) {}
+  FieldExpr(const Table *table, const FieldMeta *field, const string &relation_name = string())
+      : field_(table, field), relation_name_(relation_name)
+  {}
+  FieldExpr(const Field &field, const string &relation_name = string()) : field_(field), relation_name_(relation_name) {}
 
   virtual ~FieldExpr() = default;
 
   bool equal(const Expression &other) const override;
 
-  unique_ptr<Expression> copy() const override { return make_unique<FieldExpr>(field_); }
+  unique_ptr<Expression> copy() const override { return make_unique<FieldExpr>(field_, relation_name_); }
 
   ExprType type() const override { return ExprType::FIELD; }
   AttrType value_type() const override { return field_.attr_type(); }
@@ -217,6 +219,9 @@ public:
   Field &field() { return field_; }
 
   const Field &field() const { return field_; }
+
+  void set_relation_name(const string &relation_name) { relation_name_ = relation_name; }
+  const string &relation_name() const { return relation_name_; }
 
   const char *table_name() const { return field_.table_name(); }
   const char *field_name() const { return field_.field_name(); }
@@ -227,6 +232,7 @@ public:
 
 private:
   Field field_;
+  string relation_name_;
 };
 
 /**

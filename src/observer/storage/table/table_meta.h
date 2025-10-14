@@ -55,6 +55,7 @@ public:
 
   int field_num() const;  // sys field included
   int sys_field_num() const;
+  int visible_field_num() const;
   int null_bitmap_offset() const { return null_bitmap_offset_; }
   int null_bitmap_size() const { return null_bitmap_size_; }
 

@@ -278,7 +278,11 @@ RC HeapTableEngine::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadW
   return rc;
 }
 
-RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique)
+RC HeapTableEngine::create_index(Trx *trx,
+                                 span<const FieldMeta> field_metas,
+                                 const char *index_name,
+                                 bool unique,
+                                 const VectorIndexOptions *vector_options)
 {
   if (common::is_blank(index_name) || field_metas.empty()) {
     LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or fields empty", table_meta_->name());
@@ -294,8 +298,26 @@ RC HeapTableEngine::create_index(Trx *trx, span<const FieldMeta> field_metas, co
     return rc;
   }
 
-  // 判断是否为向量索引
-  bool is_vector_index = (field_metas.size() == 1 && field_metas[0].type() == AttrType::VECTORS);
+  bool is_vector_index = false;
+  if (vector_options != nullptr) {
+    is_vector_index = vector_options->is_vector_index;
+    if (is_vector_index) {
+      new_index_meta.set_vector_options(true,
+                                        vector_options->index_type,
+                                        vector_options->distance_type,
+                                        vector_options->lists,
+                                        vector_options->probes);
+    }
+  }
+  // 额外兜底：若未显式指定但字段类型为向量，则视为向量索引
+  if (!is_vector_index && field_metas.size() == 1 && field_metas[0].type() == AttrType::VECTORS) {
+    is_vector_index = true;
+    new_index_meta.set_vector_options(true, "", "", 0, 0);
+  }
+  if (is_vector_index && !(field_metas.size() == 1 && field_metas[0].type() == AttrType::VECTORS)) {
+    LOG_WARN("vector index must be built on single vector column. table=%s index=%s", table_meta_->name(), index_name);
+    return RC::INVALID_ARGUMENT;
+  }
 
   Index *index = nullptr;
   string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);

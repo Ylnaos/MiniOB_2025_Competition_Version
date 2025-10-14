@@ -11,6 +11,8 @@
 #include "sql/parser/yacc_sql.hpp"
 #include "sql/parser/lex_sql.h"
 #include "sql/expr/expression.h"
+#include <vector>
+#include "common/type/vector_type.h"
 
 using namespace std;
 
@@ -238,6 +240,8 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
 %type <update_list>         update_list
 %type <cstring>             storage_format
 %type <key_list>            primary_key
+%type <cstring>             vector_index_algo
+%type <cstring>             vector_distance_algo
 %type <key_list>            attr_list
 %type <relation_list>       rel_list
 %type <relation_list>       join_seq
@@ -426,7 +430,7 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       }
       create_index.unique = true;
     }
-    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE identifier EQ identifier COMMA identifier EQ identifier COMMA identifier EQ NUMBER COMMA identifier EQ NUMBER RBRACE
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE WITH LBRACE TYPE EQ vector_index_algo COMMA DISTANCE EQ vector_distance_algo COMMA LISTS EQ NUMBER COMMA PROBES EQ NUMBER RBRACE
     {
       $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
       CreateIndexSqlNode &create_index = $$->create_index;
@@ -434,8 +438,8 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       create_index.relation_name = $6;
       create_index.attribute_names.push_back($8);
       create_index.is_vector_index = true;
-      create_index.distance_type = $14;
-      create_index.index_type = $18;
+      create_index.index_type = $14;
+      create_index.distance_type = $18;
       create_index.lists = $22;
       create_index.probes = $26;
       create_index.unique = false;
@@ -677,35 +681,9 @@ value:
     }
     | SSS {
       char *tmp = common::substr($1,1,strlen($1)-2);
-      // 检查是否为向量字符串格式 '[...]'
-      if (tmp != nullptr && tmp[0] == '[') {
-        // 检查是否包含空格，如果包含则拒绝解析为向量，作为普通字符串处理
-        bool has_space = false;
-        for (const char *check = tmp; *check; ++check) {
-          if (*check == ' ' || *check == '\t') {
-            has_space = true;
-            break;
-          }
-        }
-
-        if (has_space) {
-          // 包含空格，作为普通字符串处理
-          $$ = new Value(tmp);
-          free(tmp);
-        } else {
-          // 解析为向量（严格格式：不含空格）
-          std::vector<float> elems;
-          const char *p = tmp + 1;  // 跳过 '['
-          while (*p && *p != ']') {
-            if (*p == ' ' || *p == '\t') break;  // 不应该有空格
-            char *end = nullptr;
-            float val = strtof(p, &end);
-            if (end == p) break;  // 解析失败
-            elems.push_back(val);
-            p = end;
-            if (*p == ',') p++;
-            else if (*p != ']') break;  // 非逗号非右括号则格式错误
-          }
+      if (tmp != nullptr) {
+        std::vector<float> elems;
+        if (VectorType::parse_literal(tmp, elems)) {
           Value *vec = new Value();
           vec->set_type(AttrType::VECTORS);
           if (!elems.empty()) {
@@ -713,12 +691,13 @@ value:
           } else {
             vec->set_data((const char *)nullptr, 0);
           }
-          free(tmp);
           $$ = vec;
+        } else {
+          $$ = new Value(tmp);
         }
-      } else {
-        $$ = new Value(tmp);
         free(tmp);
+      } else {
+        $$ = new Value("");
       }
     }
     | vector_literal {
@@ -1035,6 +1014,26 @@ identifier:
     | DATA {
       // DATA 关键字可以作为标识符使用
       $$ = alloc_string("data", scanner);
+    }
+    ;
+
+vector_index_algo:
+    identifier { $$ = $1; }
+    | IVFFLAT {
+      $$ = alloc_string("IVFFLAT", scanner);
+    }
+    ;
+
+vector_distance_algo:
+    identifier { $$ = $1; }
+    | L2_DISTANCE_F {
+      $$ = alloc_string("L2_DISTANCE", scanner);
+    }
+    | COSINE_DISTANCE_F {
+      $$ = alloc_string("COSINE_DISTANCE", scanner);
+    }
+    | INNER_PRODUCT_F {
+      $$ = alloc_string("INNER_PRODUCT", scanner);
     }
     ;
 

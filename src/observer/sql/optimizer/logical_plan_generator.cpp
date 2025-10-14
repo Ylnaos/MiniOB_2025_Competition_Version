@@ -467,18 +467,23 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   vector<unique_ptr<Expression>> &query_expressions = select_stmt->query_expressions();
   function<RC(unique_ptr<Expression>&)> collector = [&](unique_ptr<Expression> &expr) -> RC {
     RC rc = RC::SUCCESS;
-    if (expr->type() == ExprType::AGGREGATION) {
-      bool exists = false;
-      for (auto *ag : aggregate_expressions) {
-        if (expr->equal(*ag)) { exists = true; break; }
+      if (expr->type() == ExprType::AGGREGATION) {
+        bool exists = false;
+        for (auto *ag : aggregate_expressions) {
+          if (expr->equal(*ag)) {
+            LOG_WARN("aggregate collector dedup: expr=%s equals existing=%s (可能导致多聚合被合并)",
+                expr->name(), ag->name());
+            exists = true;
+            break;
+          }
+        }
+        if (!exists) {
+          expr->set_pos(aggregate_expressions.size() + group_by_expressions.size());
+          aggregate_expressions.push_back(expr.get());
+        }
       }
-      if (!exists) {
-        expr->set_pos(aggregate_expressions.size() + group_by_expressions.size());
-        aggregate_expressions.push_back(expr.get());
-      }
-    }
-    rc = ExpressionIterator::iterate_child_expr(*expr, collector);
-    return rc;
+      rc = ExpressionIterator::iterate_child_expr(*expr, collector);
+      return rc;
   };
 
   function<RC(unique_ptr<Expression>&)> bind_group_by_expr = [&](unique_ptr<Expression> &expr) -> RC {

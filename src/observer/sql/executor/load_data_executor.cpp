@@ -99,8 +99,7 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
 
   struct timespec begin_time;
   clock_gettime(CLOCK_MONOTONIC, &begin_time);
-  const int sys_field_num = table->table_meta().sys_field_num();
-  const int field_num     = table->table_meta().field_num() - sys_field_num;
+  const int field_num     = table->table_meta().visible_field_num();
 
   vector<Value>       record_values(field_num);
   string              line;

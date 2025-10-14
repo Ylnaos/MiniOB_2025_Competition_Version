@@ -44,6 +44,17 @@ public:
   const char          *field() const;
   const vector<string> &fields() const { return fields_; }
   bool                  unique() const { return unique_; }
+  bool                  is_vector_index() const { return is_vector_index_; }
+  const string         &index_type() const { return index_type_; }
+  const string         &distance_type() const { return distance_type_; }
+  int                   lists() const { return lists_; }
+  int                   probes() const { return probes_; }
+
+  void set_vector_options(bool is_vector_index,
+                          const string &index_type,
+                          const string &distance_type,
+                          int lists,
+                          int probes);
 
   void desc(ostream &os) const;
 
@@ -55,4 +66,9 @@ protected:
   string         name_;    // index's name
   vector<string> fields_;  // field names (ordered)
   bool           unique_ = false; // unique index flag
+  bool           is_vector_index_ = false;
+  string         index_type_;
+  string         distance_type_;
+  int            lists_  = 0;
+  int            probes_ = 0;
 };

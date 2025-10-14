@@ -39,8 +39,12 @@ void GroupByPhysicalOperator::create_aggregator_list(AggregatorList &aggregator_
   aggregator_list.reserve(aggregate_expressions_.size());
   std::ranges::for_each(aggregate_expressions_, [&aggregator_list](Expression *expr) {
     auto *aggregate_expr = static_cast<AggregateExpr *>(expr);
+    LOG_DEBUG("create aggregator: expr=%s type=%d child=%s",
+        aggregate_expr->name(), static_cast<int>(aggregate_expr->aggregate_type()),
+        aggregate_expr->child() ? aggregate_expr->child()->name() : "(null)");
     aggregator_list.emplace_back(aggregate_expr->create_aggregator());
   });
+  LOG_DEBUG("aggregator list created, size=%zu", aggregator_list.size());
 }
 
 RC GroupByPhysicalOperator::aggregate(AggregatorList &aggregator_list, const Tuple &tuple)
@@ -60,6 +64,7 @@ RC GroupByPhysicalOperator::aggregate(AggregatorList &aggregator_list, const Tup
       LOG_WARN("failed to get value from expression. rc=%s", strrc(rc));
       return rc;
     }
+    LOG_DEBUG("aggregate tuple cell[%d]: type=%d", i, value.attr_type());
 
     rc = aggregator->accumulate(value);
     if (OB_FAIL(rc)) {

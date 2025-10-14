@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/functional.h"
 #include "storage/table/table_meta.h"
 #include "storage/common/chunk.h"
+#include <string>
 
 struct RID;
 class Record;
@@ -28,6 +29,18 @@ class IndexScanner;
 class RecordDeleter;
 class Trx;
 class Db;
+
+/**
+ * @brief 向量索引附加参数
+ */
+struct VectorIndexOptions
+{
+  bool        is_vector_index = false;
+  std::string distance_type;
+  std::string index_type;
+  int         lists  = 0;
+  int         probes = 0;
+};
 
 /**
  * @brief table engine
@@ -46,7 +59,11 @@ public:
   virtual RC update_record_with_trx(const Record &old_record, const Record &new_record, Trx *trx) = 0;
   virtual RC get_record(const RID &rid, Record &record)                                           = 0;
 
-  virtual RC     create_index(Trx *trx, span<const FieldMeta> field_metas, const char *index_name, bool unique) = 0;
+  virtual RC     create_index(Trx *trx,
+                              span<const FieldMeta> field_metas,
+                              const char *index_name,
+                              bool unique,
+                              const VectorIndexOptions *vector_options) = 0;
   virtual RC     get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode)   = 0;
   virtual RC     get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode)  = 0;
   virtual RC     visit_record(const RID &rid, function<bool(Record &)> visitor)              = 0;

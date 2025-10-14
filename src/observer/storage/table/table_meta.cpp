@@ -67,6 +67,8 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
   int field_offset  = 0;
   int trx_field_num = 0;
 
+  trx_fields_.clear();
+
   if (trx_fields != nullptr) {
     trx_fields_ = *trx_fields;
 
@@ -169,7 +171,31 @@ const FieldMeta *TableMeta::find_field_by_offset(int offset) const
 }
 int TableMeta::field_num() const { return fields_.size(); }
 
-int TableMeta::sys_field_num() const { return static_cast<int>(trx_fields_.size()); }
+int TableMeta::sys_field_num() const
+{
+  int invisible_count = 0;
+  for (const FieldMeta &field : fields_) {
+    if (!field.visible()) {
+      ++invisible_count;
+    }
+  }
+  LOG_DEBUG("TableMeta::sys_field_num table=%s total_fields=%d invisible_fields=%d",
+      name_.c_str(), static_cast<int>(fields_.size()), invisible_count);
+  return invisible_count;
+}
+
+int TableMeta::visible_field_num() const
+{
+  int visible_count = 0;
+  for (const FieldMeta &field : fields_) {
+    if (field.visible()) {
+      ++visible_count;
+    }
+  }
+  LOG_DEBUG("TableMeta::visible_field_num table=%s total_fields=%d visible_fields=%d",
+      name_.c_str(), static_cast<int>(fields_.size()), visible_count);
+  return visible_count;
+}
 
 const IndexMeta *TableMeta::index(const char *name) const
 {
@@ -315,7 +341,7 @@ int TableMeta::deserialize(istream &is)
   fields_.swap(fields);
 
   // reconstruct trx_fields_
-  
+  trx_fields_.clear();
   for (const FieldMeta &field_meta : fields_) {
     if (!field_meta.visible()) {
       trx_fields_.push_back(field_meta); // 字段加上trx标识更好

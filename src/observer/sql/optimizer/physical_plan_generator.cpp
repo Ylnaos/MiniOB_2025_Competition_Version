@@ -49,6 +49,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/subquery_logical_operator.h"
 #include "sql/operator/subquery_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
+#include "sql/operator/vector_index_scan_logical_operator.h"
+#include "sql/operator/vector_index_scan_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
 using namespace std;
@@ -117,6 +119,10 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
       order_phy->add_child(std::move(child_physical_oper));
       oper = std::move(order_phy);
       return RC::SUCCESS;
+    } break;
+
+    case LogicalOperatorType::VECTOR_INDEX_SCAN: {
+      return create_plan(static_cast<VectorIndexScanLogicalOperator &>(logical_operator), oper, session);
     } break;
 
     case LogicalOperatorType::SUBQUERY: {
@@ -437,6 +443,17 @@ RC PhysicalPlanGenerator::create_plan(GroupByLogicalOperator &logical_oper, uniq
 
   oper = std::move(group_by_oper);
   return rc;
+}
+
+RC PhysicalPlanGenerator::create_plan(
+    VectorIndexScanLogicalOperator &vector_oper, unique_ptr<PhysicalOperator> &oper, Session * /*session*/)
+{
+  size_t limit = vector_oper.limit() > 0 ? static_cast<size_t>(vector_oper.limit()) : 0;
+  auto vector_phy = make_unique<VectorIndexScanPhysicalOperator>(
+      vector_oper.table(), vector_oper.index(), vector_oper.query_vector(), limit);
+  oper = std::move(vector_phy);
+  LOG_TRACE("create a vector index scan physical operator");
+  return RC::SUCCESS;
 }
 
 RC PhysicalPlanGenerator::create_vec_plan(TableGetLogicalOperator &table_get_oper, unique_ptr<PhysicalOperator> &oper, Session* session)

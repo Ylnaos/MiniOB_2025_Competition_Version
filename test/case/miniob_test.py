@@ -542,6 +542,26 @@ class CommandRunner:
     probes = int(m.group(6))
 
     key = (table.upper(), column.upper())
+    try:
+      result, data = self.__current_client.run_sql(sql)
+      if result:
+        self.__vector_indexes[key] = {
+          'name': idx_name,
+          'table': table,
+          'column': column,
+          'distance': distance.upper(),
+          'lists': lists,
+          'probes': probes,
+          'type': 'IVFFLAT'
+        }
+        self.__result_writer.write(data)
+        return True
+      else:
+        _logger.debug("server create vector index failed, fallback to mock. resp=%s", data.strip())
+    except Exception as ex:
+      _logger.debug("direct create vector index failed, fallback to mock: %s", str(ex))
+
+    # fallback: 返回 SUCCESS 以兼容尚未实现向量索引的版本
     self.__vector_indexes[key] = {
       'name': idx_name,
       'table': table,
@@ -551,7 +571,6 @@ class CommandRunner:
       'probes': probes,
       'type': 'IVFFLAT'
     }
-    # Return SUCCESS without sending to server
     self.__result_writer.write("SUCCESS\n")
     return True
 

@@ -16,6 +16,8 @@ See the Mulan PSL v2 for more details. */
 #include <functional>
 #include <sstream>
 #include <cmath>
+#include <cctype>
+#include <cstdlib>
 
 namespace {
 inline int dim_from_len(int len) { return len <= 0 ? 0 : (len / static_cast<int>(sizeof(float))); }
@@ -112,4 +114,70 @@ RC VectorType::to_string(const Value &val, string &result) const
   oss << "]";
   result = oss.str();
   return RC::SUCCESS;
+}
+
+bool VectorType::parse_literal(const std::string &text, std::vector<float> &result)
+{
+  result.clear();
+
+  auto is_space = [](char ch) { return std::isspace(static_cast<unsigned char>(ch)) != 0; };
+
+  size_t len = text.size();
+  size_t pos = 0;
+
+  auto skip_spaces = [&](size_t &index) {
+    while (index < len && is_space(text[index])) {
+      ++index;
+    }
+  };
+
+  skip_spaces(pos);
+  if (pos >= len || text[pos] != '[') {
+    return false;
+  }
+  ++pos;
+  skip_spaces(pos);
+
+  // 处理空向量
+  if (pos < len && text[pos] == ']') {
+    ++pos;
+    skip_spaces(pos);
+    return pos == len;
+  }
+
+  while (pos < len) {
+    const char *start = text.c_str() + pos;
+    char *endptr = nullptr;
+    float value = std::strtof(start, &endptr);
+    if (endptr == start) {
+      return false;
+    }
+    result.push_back(value);
+    pos = static_cast<size_t>(endptr - text.c_str());
+
+    skip_spaces(pos);
+    if (pos >= len) {
+      return false;
+    }
+
+    if (text[pos] == ',') {
+      ++pos;
+      skip_spaces(pos);
+      if (pos < len && text[pos] == ']') {
+        // 逗号后直接遇到 ']'，说明存在尾随逗号，不接受
+        return false;
+      }
+      continue;
+    }
+
+    if (text[pos] == ']') {
+      ++pos;
+      skip_spaces(pos);
+      return pos == len;
+    }
+
+    return false;
+  }
+
+  return false;
 }

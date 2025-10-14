@@ -18,10 +18,16 @@ See the Mulan PSL v2 for more details. */
 #include "storage/field/field_meta.h"
 #include "storage/table/table_meta.h"
 #include "json/json.h"
+#include <algorithm>
 
 const static Json::StaticString FIELD_NAME("name");
 const static Json::StaticString FIELD_FIELD_NAMES("field_names");
 const static Json::StaticString FIELD_UNIQUE("unique");
+const static Json::StaticString FIELD_IS_VECTOR_INDEX("is_vector_index");
+const static Json::StaticString FIELD_INDEX_TYPE("index_type");
+const static Json::StaticString FIELD_DISTANCE_TYPE("distance_type");
+const static Json::StaticString FIELD_LISTS("lists");
+const static Json::StaticString FIELD_PROBES("probes");
 
 RC IndexMeta::init(const char *name, span<const FieldMeta> fields, bool unique)
 {
@@ -41,8 +47,35 @@ RC IndexMeta::init(const char *name, span<const FieldMeta> fields, bool unique)
   for (const FieldMeta &f : fields) {
     fields_.push_back(f.name());
   }
-  unique_ = unique;
+  unique_            = unique;
+  is_vector_index_   = false;
+  index_type_.clear();
+  distance_type_.clear();
+  lists_  = 0;
+  probes_ = 0;
   return RC::SUCCESS;
+}
+
+void IndexMeta::set_vector_options(bool is_vector_index,
+                                   const string &index_type,
+                                   const string &distance_type,
+                                   int lists,
+                                   int probes)
+{
+  if (!is_vector_index) {
+    is_vector_index_ = false;
+    index_type_.clear();
+    distance_type_.clear();
+    lists_  = 0;
+    probes_ = 0;
+    return;
+  }
+
+  is_vector_index_ = true;
+  index_type_      = index_type;
+  distance_type_   = distance_type;
+  lists_           = std::max(0, lists);
+  probes_          = std::max(0, probes);
 }
 
 void IndexMeta::to_json(Json::Value &json_value) const
@@ -53,7 +86,18 @@ void IndexMeta::to_json(Json::Value &json_value) const
     field_list.append(fn);
   }
   json_value[FIELD_FIELD_NAMES] = field_list;
-  json_value[FIELD_UNIQUE]     = unique_;
+  json_value[FIELD_UNIQUE]      = unique_;
+  if (is_vector_index_) {
+    json_value[FIELD_IS_VECTOR_INDEX] = true;
+    if (!index_type_.empty()) {
+      json_value[FIELD_INDEX_TYPE] = index_type_;
+    }
+    if (!distance_type_.empty()) {
+      json_value[FIELD_DISTANCE_TYPE] = distance_type_;
+    }
+    json_value[FIELD_LISTS]  = lists_;
+    json_value[FIELD_PROBES] = probes_;
+  }
 }
 
 RC IndexMeta::from_json(const TableMeta &table, const Json::Value &json_value, IndexMeta &index)
@@ -94,7 +138,43 @@ RC IndexMeta::from_json(const TableMeta &table, const Json::Value &json_value, I
     unique = unique_value.asBool();
   }
 
-  return index.init(name_value.asCString(), span<const FieldMeta>(fields.data(), fields.size()), unique);
+  RC rc = index.init(name_value.asCString(), span<const FieldMeta>(fields.data(), fields.size()), unique);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+
+  bool is_vector_index = false;
+  const Json::Value &vector_flag_value = json_value[FIELD_IS_VECTOR_INDEX];
+  if (vector_flag_value.isBool()) {
+    is_vector_index = vector_flag_value.asBool();
+  }
+
+  string index_type;
+  string distance_type;
+  int    lists  = 0;
+  int    probes = 0;
+
+  if (is_vector_index) {
+    const Json::Value &index_type_value = json_value[FIELD_INDEX_TYPE];
+    if (index_type_value.isString()) {
+      index_type = index_type_value.asString();
+    }
+    const Json::Value &distance_type_value = json_value[FIELD_DISTANCE_TYPE];
+    if (distance_type_value.isString()) {
+      distance_type = distance_type_value.asString();
+    }
+    const Json::Value &lists_value = json_value[FIELD_LISTS];
+    if (lists_value.isInt()) {
+      lists = lists_value.asInt();
+    }
+    const Json::Value &probes_value = json_value[FIELD_PROBES];
+    if (probes_value.isInt()) {
+      probes = probes_value.asInt();
+    }
+  }
+
+  index.set_vector_options(is_vector_index, index_type, distance_type, lists, probes);
+  return RC::SUCCESS;
 }
 
 const char *IndexMeta::name() const { return name_.c_str(); }
@@ -108,4 +188,10 @@ void IndexMeta::desc(ostream &os) const {
     os << fields_[i];
   }
   os << "], unique=" << (unique_ ? 1 : 0);
+  if (is_vector_index_) {
+    os << ", vector(index_type=" << index_type_
+       << ", distance_type=" << distance_type_
+       << ", lists=" << lists_
+       << ", probes=" << probes_ << ")";
+  }
 }

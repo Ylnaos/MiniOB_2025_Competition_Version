@@ -71,7 +71,13 @@ bool FieldExpr::equal(const Expression &other) const
     return false;
   }
   const auto &other_field_expr = static_cast<const FieldExpr &>(other);
-  return table_name() == other_field_expr.table_name() && field_name() == other_field_expr.field_name();
+  const string this_rel = relation_name_.empty() ? string(table_name()) : relation_name_;
+  const string other_rel =
+      other_field_expr.relation_name_.empty() ? string(other_field_expr.table_name()) : other_field_expr.relation_name_;
+  LOG_DEBUG("FieldExpr::equal compare %s.%s (rel=%s) vs %s.%s (rel=%s)",
+      table_name(), field_name(), this_rel.c_str(),
+      other_field_expr.table_name(), other_field_expr.field_name(), other_rel.c_str());
+  return this_rel == other_rel && field_name() == other_field_expr.field_name();
 }
 
 // TODO: 鍦ㄨ繘琛岃〃杈惧紡璁＄畻鏃讹紝`chunk` 鍖呭惈浜嗘墍鏈夊垪锛屽洜姝ゅ彲浠ラ€氳繃 `field_id` 鑾峰彇鍒板搴斿垪銆?// 鍚庣画鍙互浼樺寲鎴愬湪 `FieldExpr` 涓瓨鍌?`chunk` 涓煇鍒楃殑浣嶇疆淇℃伅銆?

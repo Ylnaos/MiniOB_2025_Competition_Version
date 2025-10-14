@@ -118,6 +118,8 @@ private:
    */
   RC load_from_file();
 
+  void apply_meta_config(const IndexMeta &index_meta);
+
 private:
   bool   inited_ = false;
   Table *table_  = nullptr;
@@ -127,6 +129,8 @@ private:
   int lists_  = 100;   // 聚类数量
   int probes_ = 10;    // 查询时探测的聚类数量
   int dimension_ = 0;  // 向量维度
+  string distance_type_;
+  string index_type_;
 
   // 向量字段信息
   const FieldMeta *vector_field_meta_ = nullptr;

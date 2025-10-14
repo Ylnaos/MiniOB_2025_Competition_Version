@@ -269,7 +269,7 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
   // check the fields number for each row
   const TableMeta &table_meta = table->table_meta();
   const int        sys_num    = table_meta.sys_field_num();
-  const int        field_num  = table_meta.field_num() - sys_num;
+  const int        field_num  = table_meta.visible_field_num();
 
   // 如果指定了列名，需要进行列映射和默认值填充
   if (!inserts.attribute_names.empty()) {
@@ -325,6 +325,8 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
   // 检查每行的字段数量
   for (size_t i = 0; i < normalized_rows.size(); i++) {
     const int value_num = static_cast<int>(normalized_rows[i].size());
+    LOG_DEBUG("insert value count check table=%s row=%zu field_num=%d sys_field_num=%d value_num=%d",
+        table->name(), i, field_num, sys_num, value_num);
     if (field_num != value_num) {
       LOG_WARN("schema mismatch at row %d. value num=%d, field num in schema=%d", (int)i, value_num, field_num);
       return RC::SCHEMA_FIELD_MISSING;

@@ -264,31 +264,12 @@ char *substr(const char *s, int n1, int n2)
 }
 
 /**
- * Round half to even (banker's rounding)
- * 当小数部分为0.5时，舍入到最近的偶数
+ * Round half away from zero（标准四舍五入）
+ * 确保 6.125 -> 6.13，同时对负数执行对称处理 -6.125 -> -6.13
  */
-static inline double round_half_to_even(double x)
+static inline double round_half_away_from_zero(double x)
 {
-  // 使用 modf 分离整数与小数部分（整数部分向 0 截断）
-  double i;
-  double f = std::modf(x, &i); // x = i + f, f ∈ (-1, 1)
-
-  double af = std::fabs(f);
-  if (af < 0.5) {
-    return i;
-  }
-  if (af > 0.5) {
-    return i + (f > 0 ? 1.0 : -1.0);
-  }
-  // 精确 .5（允许极小误差）按偶数就近舍入
-  // 这里 f 的绝对值非常接近 0.5，判断 i 的奇偶性
-  // 使用 fmod 判断偶数（|i| % 2 == 0）
-  double ai = std::fabs(i);
-  bool i_is_even = (std::fmod(ai, 2.0) == 0.0);
-  if (i_is_even) {
-    return i;
-  }
-  return i + (f > 0 ? 1.0 : -1.0);
+  return std::round(x);
 }
 
 /**
@@ -299,8 +280,8 @@ static inline double round_half_to_even(double x)
 string double_to_str(double v)
 {
   char buf[256];
-  // 使用 banker's rounding 而不是标准 round
-  double rounded_v = round_half_to_even(v * 100.0) / 100.0;
+  // 标准四舍五入，先按两位小数放大，再执行 round 再缩放
+  double rounded_v = round_half_away_from_zero(v * 100.0) / 100.0;
   snprintf(buf, sizeof(buf), "%.2f", rounded_v);
   size_t len = strlen(buf);
   while (buf[len - 1] == '0') {

@@ -12,7 +12,9 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "common/type/char_type.h"
 #include "common/type/data_type.h"
+#include "common/type/vector_type.h"
 #include <cstdlib>
+#include <vector>
 #include "common/value.h"
 
 int CharType::compare(const Value &left, const Value &right) const
@@ -54,57 +56,16 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
       return RC::SUCCESS;
     }
     case AttrType::VECTORS: {
-      // 从字符串解析成向量字节序列，形如 "[1,2,3]"
-      std::string s = val.get_string();
-      // 去除首尾空白
-      auto l = s.find_first_not_of(" \t\r\n");
-      auto r = s.find_last_not_of(" \t\r\n");
-      if (l == std::string::npos) return RC::INVALID_ARGUMENT;
-      s = s.substr(l, r - l + 1);
-      if (s.size() < 2 || s.front() != '[' || s.back() != ']') {
+      std::vector<float> elems;
+      if (!VectorType::parse_literal(val.get_string(), elems)) {
         return RC::INVALID_ARGUMENT;
       }
-
-      // 检查向量字符串内部是否包含空格（拒绝带空格的格式如 '[1, 2, 3]'）
-      for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == ' ' || s[i] == '\t') {
-          // 包含空格，拒绝解析
-          return RC::INVALID_ARGUMENT;
-        }
-      }
-
-      // 严格解析（不跳过空格）
-      std::vector<float> elems;
-      std::string inner = s.substr(1, s.size() - 2);
-      if (inner.empty()) {
-        // 空向量 "[]"
-        result.set_type(AttrType::VECTORS);
-        result.set_data(static_cast<const char*>(nullptr), 0);
-        return RC::SUCCESS;
-      }
-
-      // 按逗号分割并解析，不trim（因为已经验证无空格）
-      const char *p = inner.c_str();
-      while (*p) {
-        char *endp = nullptr;
-        float v = static_cast<float>(strtod(p, &endp));
-        if (endp == p) {
-          // 解析失败
-          return RC::INVALID_ARGUMENT;
-        }
-        elems.push_back(v);
-        p = endp;
-        if (*p == ',') {
-          p++;
-        } else if (*p != '\0') {
-          // 非逗号非结束符，格式错误
-          return RC::INVALID_ARGUMENT;
-        }
-      }
-
-      // 组装结果
       result.set_type(AttrType::VECTORS);
-      result.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+      if (!elems.empty()) {
+        result.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+      } else {
+        result.set_data(static_cast<const char *>(nullptr), 0);
+      }
       return RC::SUCCESS;
     }
     case AttrType::TEXTS: {
