@@ -1091,6 +1091,14 @@ int sql_parse(const char *s, ParsedSqlResult *sql_result) {
         if (order_pos != std::string::npos) where_end = std::min(where_end, order_pos);
         orig_where = trim(orig_sql.substr(where_pos + 7, where_end - (where_pos + 7)));
         tail       = orig_sql.substr(where_end);
+        if (!orig_where.empty() && orig_where.back() == ';') {
+          // 将分号移交给 tail，避免重写后的 WHERE 子句提前结束
+          orig_where.pop_back();
+          while (!orig_where.empty() && isspace(static_cast<unsigned char>(orig_where.back()))) {
+            orig_where.pop_back();
+          }
+          tail = std::string(";") + tail;
+        }
       } else {
         tail = orig_sql.substr(after_from_end);
       }
