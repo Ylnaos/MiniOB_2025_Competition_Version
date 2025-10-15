@@ -216,6 +216,7 @@ RC VectorRewriteRule::rewrite(std::unique_ptr<LogicalOperator> &oper, bool &chan
   auto vector_scan_oper =
       make_unique<VectorIndexScanLogicalOperator>(table, index, std::move(query_vector), project_oper->limit());
   proj_children.front() = std::move(vector_scan_oper);
+  project_oper->set_limit(-1);  // LIMIT 由向量索引算子内部处理，避免再包装 LIMIT 算子
 
   change_made = true;
   LOG_TRACE("vector rewrite applied on table %s, field %s", table->name(), target_field->field().field_name());
