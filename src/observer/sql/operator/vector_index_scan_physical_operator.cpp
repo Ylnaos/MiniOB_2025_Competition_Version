@@ -12,6 +12,8 @@ See the Mulan PSL v2 for more details. */
 #include "storage/index/ivfflat_index.h"
 #include "storage/table/table.h"
 #include "common/log/log.h"
+#include <algorithm>
+#include <limits>
 
 VectorIndexScanPhysicalOperator::VectorIndexScanPhysicalOperator(
     Table *table,
@@ -41,8 +43,27 @@ RC VectorIndexScanPhysicalOperator::open(Trx *trx)
     LOG_WARN("index is not an IvfflatIndex");
     return RC::INTERNAL;
   }
+  if (!ivfflat_index->ready()) {
+    LOG_WARN("vector index not ready, fallback to empty result. table=%s index=%s",
+        table_->name(), index_->index_meta().name());
+    result_rids_.clear();
+    current_idx_ = 0;
+    return RC::SUCCESS;
+  }
+  const int index_dim = ivfflat_index->dimension();
+  if (index_dim > 0 && static_cast<int>(query_vector_.size()) != index_dim) {
+    LOG_WARN("query vector dimension mismatch. expect=%d actual=%zu", index_dim, query_vector_.size());
+    result_rids_.clear();
+    current_idx_ = 0;
+    return RC::SUCCESS;
+  }
 
-  result_rids_ = ivfflat_index->ann_search(query_vector_, limit_);
+  size_t search_limit = limit_;
+  if (search_limit == 0) {
+    search_limit = static_cast<size_t>(std::max(index_dim, 1));
+  }
+
+  result_rids_ = ivfflat_index->ann_search(query_vector_, search_limit);
   current_idx_ = 0;
   trx_ = trx;
 
@@ -56,17 +77,20 @@ RC VectorIndexScanPhysicalOperator::next()
     return RC::RECORD_EOF;
   }
 
-  const RID &rid = result_rids_[current_idx_];
-  RC rc = table_->get_record(rid, current_record_);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to get record. rid=%s, rc=%s", rid.to_string().c_str(), strrc(rc));
-    return rc;
+  RC rc = RC::RECORD_EOF;
+  while (current_idx_ < result_rids_.size()) {
+    const RID &rid = result_rids_[current_idx_];
+    rc = table_->get_record(rid, current_record_);
+    current_idx_++;
+    if (rc == RC::SUCCESS) {
+      tuple_.set_record(&current_record_);
+      return RC::SUCCESS;
+    }
+    LOG_WARN("skip invalid record from vector index. rid=%s rc=%s",
+        rid.to_string().c_str(), strrc(rc));
   }
 
-  tuple_.set_record(&current_record_);
-  current_idx_++;
-
-  return RC::SUCCESS;
+  return RC::RECORD_EOF;
 }
 
 RC VectorIndexScanPhysicalOperator::close()
