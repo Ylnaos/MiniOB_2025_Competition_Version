@@ -61,3 +61,13 @@ Tuple *LimitPhysicalOperator::current_tuple()
 {
   return children_[0]->current_tuple();
 }
+
+RC LimitPhysicalOperator::tuple_schema(TupleSchema &schema) const
+{
+  if (children_.empty()) {
+    schema = TupleSchema{};
+    return RC::SUCCESS;
+  }
+  // LIMIT 算子不改变列结构，直接沿用子算子的列描述
+  return children_[0]->tuple_schema(schema);
+}

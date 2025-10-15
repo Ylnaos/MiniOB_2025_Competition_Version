@@ -94,12 +94,14 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     const AttrInfoSqlNode &attr_info = attributes[i];
     // `i` is the col_id of fields[i]
     int field_len = static_cast<int>(attr_info.length);
+    int vector_dim = 0;
     if (attr_info.type == AttrType::VECTORS) {
       // 将 vector(N) 的长度解释为维度，存储按 float(N) 字节数
       if (field_len < 0 || field_len > 16000) {
         LOG_WARN("invalid vector dimension: %d (must be 0..16000)", field_len);
         return RC::INVALID_ARGUMENT;
       }
+      vector_dim = field_len;
       // 高维向量(>1000维)使用LobRef存储，类似TEXT类型
       if (field_len > 1000) {
         field_len = static_cast<int>(sizeof(LobRef));
@@ -115,6 +117,9 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     if (OB_FAIL(rc)) {
       LOG_ERROR("Failed to init field meta. table name=%s, field name: %s", name, attr_info.name.c_str());
       return rc;
+    }
+    if (attr_info.type == AttrType::VECTORS) {
+      fields_[i + trx_field_num].set_vector_length(vector_dim);
     }
 
     field_offset += field_len;

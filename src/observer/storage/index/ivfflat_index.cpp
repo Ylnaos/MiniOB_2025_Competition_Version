@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/table/table.h"
 #include "storage/record/record_manager.h"
 #include "storage/record/record_scanner.h"
+#include "storage/record/lob_ref.h"
 #include <fstream>
 #include <algorithm>
 #include <random>
@@ -165,18 +166,53 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
     return RC::INTERNAL;
   }
 
-  const char *vector_data = record + vector_field_meta_->offset();
-  int vector_len = vector_field_meta_->len();
+  const int schema_dim = vector_field_meta_->vector_length();
+  const bool vector_lob =
+      (schema_dim > 1000) ||
+      (schema_dim <= 0 && vector_field_meta_->len() == static_cast<int>(sizeof(LobRef)));
 
-  // 向量数据以float数组形式存储
-  int num_floats = vector_len / sizeof(float);
-  if (num_floats != dimension_) {
-    LOG_WARN("Vector dimension mismatch: expected=%d, got=%d", dimension_, num_floats);
+  const char      *payload = nullptr;
+  int              payload_len = 0;
+  std::vector<char> tmp_buffer;
+
+  if (vector_lob) {
+    LobRef ref;
+    memcpy(&ref, record + vector_field_meta_->offset(), sizeof(LobRef));
+    if (ref.length <= 0 || (ref.length % static_cast<int>(sizeof(float)) != 0)) {
+      LOG_WARN("Invalid LobRef length for vector column. table=%s length=%d",
+               table_ != nullptr ? table_->name() : "<unknown>", ref.length);
+      return RC::INTERNAL;
+    }
+    if (table_ == nullptr || table_->lob_handler() == nullptr) {
+      LOG_WARN("Table or LOB handler unavailable when extracting vector");
+      return RC::INTERNAL;
+    }
+    tmp_buffer.resize(static_cast<size_t>(ref.length));
+    RC rc = table_->lob_handler()->get_data(ref.offset, ref.length, tmp_buffer.data());
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("Failed to load vector LOB payload. rc=%s", strrc(rc));
+      return rc;
+    }
+    payload     = tmp_buffer.data();
+    payload_len = ref.length;
+  } else {
+    payload     = record + vector_field_meta_->offset();
+    payload_len = vector_field_meta_->len();
+  }
+
+  if (payload_len <= 0 || (payload_len % static_cast<int>(sizeof(float)) != 0)) {
+    LOG_WARN("Vector payload length is invalid: %d", payload_len);
     return RC::INTERNAL;
   }
 
-  const float *float_data = reinterpret_cast<const float *>(vector_data);
-  vec.assign(float_data, float_data + num_floats);
+  const int actual_dim = payload_len / static_cast<int>(sizeof(float));
+  if (dimension_ > 0 && actual_dim != dimension_) {
+    LOG_WARN("Vector dimension mismatch: expected=%d, got=%d", dimension_, actual_dim);
+    return RC::INTERNAL;
+  }
+
+  const float *float_data = reinterpret_cast<const float *>(payload);
+  vec.assign(float_data, float_data + actual_dim);
 
   return RC::SUCCESS;
 }
@@ -257,8 +293,19 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   int requested_lists = lists_;
 
   // 计算向量维度
-  dimension_ = vector_field_meta_->len() / sizeof(float);
-  LOG_INFO("Creating IVF-Flat index with dimension=%d", dimension_);
+  dimension_ = vector_field_meta_->vector_length();
+  if (dimension_ <= 0) {
+    const int physical_len = vector_field_meta_->len();
+    if (physical_len != static_cast<int>(sizeof(LobRef)) &&
+        physical_len % static_cast<int>(sizeof(float)) == 0) {
+      dimension_ = physical_len / static_cast<int>(sizeof(float));
+    }
+  }
+  if (dimension_ > 0) {
+    LOG_INFO("Creating IVF-Flat index with dimension=%d", dimension_);
+  } else {
+    LOG_INFO("Creating IVF-Flat index with unknown dimension, will infer from data");
+  }
 
   // 扫描表，收集所有向量数据
   vector<vector<float>> all_vectors;
@@ -289,6 +336,15 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
     LOG_WARN("No vectors found in table");
     inited_ = true;
     return RC::SUCCESS;
+  }
+
+  if (dimension_ <= 0) {
+    dimension_ = static_cast<int>(all_vectors.front().size());
+    LOG_INFO("Infer IVF-Flat dimension from data: %d", dimension_);
+    if (dimension_ <= 0) {
+      LOG_WARN("Failed to infer positive vector dimension for IVF-Flat index");
+      return RC::INVALID_ARGUMENT;
+    }
   }
 
   // 执行K-Means聚类

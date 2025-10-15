@@ -282,6 +282,10 @@ string double_to_str(double v)
   char buf[256];
   // 标准四舍五入，先按两位小数放大，再执行 round 再缩放
   double rounded_v = round_half_away_from_zero(v * 100.0) / 100.0;
+  if (rounded_v == 0.0) {
+    // 避免输出负零，统一归一化为正零
+    rounded_v = 0.0;
+  }
   snprintf(buf, sizeof(buf), "%.2f", rounded_v);
   size_t len = strlen(buf);
   while (buf[len - 1] == '0') {

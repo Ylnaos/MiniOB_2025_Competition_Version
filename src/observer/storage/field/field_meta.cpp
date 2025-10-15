@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/string.h"
 #include "common/log/log.h"
 #include "sql/parser/parse_defs.h"
+#include "storage/record/lob_ref.h"
 
 #include "json/json.h"
 
@@ -26,8 +27,12 @@ const static Json::StaticString FIELD_LEN("len");
 const static Json::StaticString FIELD_VISIBLE("visible");
 const static Json::StaticString FIELD_FIELD_ID("FIELD_id");
 const static Json::StaticString FIELD_NULLABLE("nullable");
+const static Json::StaticString FIELD_VECTOR_LEN("vector_dim");
 
-FieldMeta::FieldMeta() : attr_type_(AttrType::UNDEFINED), attr_offset_(-1), attr_len_(0), visible_(false), field_id_(0), nullable_(false) {}
+FieldMeta::FieldMeta()
+    : attr_type_(AttrType::UNDEFINED), attr_offset_(-1), attr_len_(0), visible_(false), field_id_(0), nullable_(false),
+      vector_length_(0)
+{}
 
 FieldMeta::FieldMeta(const char *name, AttrType attr_type, int attr_offset, int attr_len, bool visible, int field_id)
 {
@@ -48,13 +53,14 @@ RC FieldMeta::init(const char *name, AttrType attr_type, int attr_offset, int at
     return RC::INVALID_ARGUMENT;
   }
 
-  name_        = name;
-  attr_type_   = attr_type;
-  attr_len_    = attr_len;
-  attr_offset_ = attr_offset;
-  visible_     = visible;
-  field_id_ = field_id;
-  nullable_ = false;
+  name_           = name;
+  attr_type_      = attr_type;
+  attr_len_       = attr_len;
+  attr_offset_    = attr_offset;
+  visible_        = visible;
+  field_id_       = field_id;
+  nullable_       = false;
+  vector_length_  = 0;
 
   LOG_INFO("Init a field with name=%s", name);
   return RC::SUCCESS;
@@ -103,6 +109,9 @@ void FieldMeta::to_json(Json::Value &json_value) const
   json_value[FIELD_VISIBLE] = visible_;
   json_value[FIELD_FIELD_ID] = field_id_;
   json_value[FIELD_NULLABLE] = nullable_;
+  if (attr_type_ == AttrType::VECTORS && vector_length_ > 0) {
+    json_value[FIELD_VECTOR_LEN] = vector_length_;
+  }
 }
 
 RC FieldMeta::from_json(const Json::Value &json_value, FieldMeta &field)
@@ -119,6 +128,7 @@ RC FieldMeta::from_json(const Json::Value &json_value, FieldMeta &field)
   const Json::Value &visible_value = json_value[FIELD_VISIBLE];
   const Json::Value &field_id_value = json_value[FIELD_FIELD_ID];
   const Json::Value &nullable_value = json_value[FIELD_NULLABLE];
+  const Json::Value &vector_len_value = json_value[FIELD_VECTOR_LEN];
 
   if (!name_value.isString()) {
     LOG_ERROR("Field name is not a string. json value=%s", name_value.toStyledString().c_str());
@@ -165,5 +175,27 @@ RC FieldMeta::from_json(const Json::Value &json_value, FieldMeta &field)
   int         len     = len_value.asInt();
   bool        visible = visible_value.asBool();
   int         field_id  = field_id_value.asInt();
-  return field.init(name, type, offset, len, visible, field_id, nullable);
+  RC          rc      = field.init(name, type, offset, len, visible, field_id, nullable);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  if (type == AttrType::VECTORS) {
+    if (!vector_len_value.isNull()) {
+      if (!vector_len_value.isInt()) {
+        LOG_ERROR("Vector dimension is not an integer. json value=%s", vector_len_value.toStyledString().c_str());
+        return RC::INTERNAL;
+      }
+      field.set_vector_length(vector_len_value.asInt());
+    } else {
+      // 兼容旧版本：有些历史表没有显式记录维度。若物理长度不是 LobRef，则可推断维度。
+      if (len > 0 && len % static_cast<int>(sizeof(float)) == 0 && len != static_cast<int>(sizeof(LobRef))) {
+        field.set_vector_length(len / static_cast<int>(sizeof(float)));
+      } else {
+        field.set_vector_length(0);
+      }
+    }
+  }
+
+  return RC::SUCCESS;
 }

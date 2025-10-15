@@ -31,6 +31,7 @@ public:
   RC close() override;
 
   Tuple *current_tuple() override;
+  RC     tuple_schema(TupleSchema &schema) const override;
 
 private:
   int  limit_;         ///< 最多返回多少行（-1表示不限制）

@@ -352,67 +352,61 @@ RC Table::set_value_to_record(char *record_data, const Value &value, const Field
     return RC::SUCCESS;
   }
 
-  // Special handling for high-dimensional VECTORS (>1000 dims): store into LOB file, similar to TEXT
-  if (field->type() == AttrType::VECTORS && field->len() == static_cast<int>(sizeof(LobRef))) {
-    if (lob_handler_ == nullptr) {
-      LOG_WARN("LOB handler not initialized for table %s", table_meta_.name());
-      return RC::INTERNAL;
-    }
-
-    // Vector data length in bytes
-    int vec_len = src->length();
-    if (vec_len <= 0 || (vec_len % sizeof(float)) != 0) {
-      LOG_WARN("Invalid vector data length: %d", vec_len);
-      return RC::INVALID_ARGUMENT;
-    }
-
-    // Dimension check: even for LOB-stored vectors, we need to validate dimension from field name/meta
-    // The original field definition has the dimension (e.g., VECTOR(4) means 4 dimensions = 16 bytes)
-    // But since it's stored as LOB when dim > 1000, we need to extract the expected dimension
-    // from somewhere... However, looking at table_meta.cpp:95-107, only vectors with dim > 1000
-    // get sizeof(LobRef) as field length. So this branch should ONLY handle those.
-    // For VECTOR(4), field_len = 4 * sizeof(float) = 16, which != sizeof(LobRef).
-    // This means this code path is CORRECT - it only handles high-dim vectors without strict dim check.
-    // But we should still add a sanity check to prevent extremely large vectors.
-
-    // Write vector data into .lob file
-    int64_t offset = 0;
-    RC      lrc    = lob_handler_->insert_data(offset, vec_len, src->data());
-    if (OB_FAIL(lrc)) {
-      LOG_WARN("failed to append vector LOB. rc=%s", strrc(lrc));
-      return lrc;
-    }
-
-    // Fill LobRef into record
-    LobRef ref;
-    ref.length = vec_len;
-    ref.offset = offset;
-    const size_t record_size   = table_meta_.record_size();
-    const size_t field_offset  = static_cast<size_t>(field->offset());
-    const size_t field_len     = static_cast<size_t>(field->len());
-    const size_t avail_in_rec  = (field_offset < record_size) ? (record_size - field_offset) : 0;
-    const size_t writable_size = std::min(field_len, avail_in_rec);
-    if (writable_size >= sizeof(LobRef)) {
-      memcpy(record_data + field_offset, &ref, sizeof(LobRef));
-    }
-    return RC::SUCCESS;
-  }
-
-  // Strict dimension check for normal VECTORS (stored inline, not LOB)
-  if (field->type() == AttrType::VECTORS && field->len() != static_cast<int>(sizeof(LobRef))) {
+  if (field->type() == AttrType::VECTORS) {
     if (src->attr_type() != AttrType::VECTORS) {
       LOG_WARN("vector value type mismatch. field=%s expect=VECTORS got=%d", field->name(), (int)src->attr_type());
       return RC::INVALID_ARGUMENT;
     }
-    const int expect_len = field->len();                    // bytes in record = dim * sizeof(float)
-    const int actual_len = src->length();                   // bytes from value
-    // actual_len must equal expect_len exactly; otherwise reject
-    if (actual_len != expect_len || (actual_len % static_cast<int>(sizeof(float)) != 0)) {
-      const int expect_dim = expect_len / static_cast<int>(sizeof(float));
-      const int actual_dim = actual_len / static_cast<int>(sizeof(float));
-      LOG_WARN("vector dimension mismatch. field=%s expect_dim=%d actual_dim=%d (bytes %d vs %d)",
-               field->name(), expect_dim, actual_dim, expect_len, actual_len);
+    const int actual_len = src->length();
+    if (actual_len <= 0 || (actual_len % static_cast<int>(sizeof(float)) != 0)) {
+      LOG_WARN("Invalid vector data length. field=%s bytes=%d", field->name(), actual_len);
       return RC::INVALID_ARGUMENT;
+    }
+    const int actual_dim = actual_len / static_cast<int>(sizeof(float));
+    const int schema_dim = field->vector_length();
+    if (schema_dim > 0 && actual_dim != schema_dim) {
+      LOG_WARN("vector dimension mismatch. field=%s expect_dim=%d actual_dim=%d", field->name(), schema_dim, actual_dim);
+      return RC::INVALID_ARGUMENT;
+    }
+
+    const bool store_as_lob =
+        (schema_dim > 1000) ||
+        (schema_dim <= 0 && field->len() == static_cast<int>(sizeof(LobRef)));
+
+    if (store_as_lob) {
+      if (lob_handler_ == nullptr) {
+        LOG_WARN("LOB handler not initialized for table %s", table_meta_.name());
+        return RC::INTERNAL;
+      }
+      // Write vector data into .lob file
+      int64_t offset = 0;
+      RC      lrc    = lob_handler_->insert_data(offset, actual_len, src->data());
+      if (OB_FAIL(lrc)) {
+        LOG_WARN("failed to append vector LOB. rc=%s", strrc(lrc));
+        return lrc;
+      }
+
+      // Fill LobRef into record
+      LobRef ref;
+      ref.length = actual_len;
+      ref.offset = offset;
+      const size_t record_size   = table_meta_.record_size();
+      const size_t field_offset  = static_cast<size_t>(field->offset());
+      const size_t field_len     = static_cast<size_t>(field->len());
+      const size_t avail_in_rec  = (field_offset < record_size) ? (record_size - field_offset) : 0;
+      const size_t writable_size = std::min(field_len, avail_in_rec);
+      if (writable_size >= sizeof(LobRef)) {
+        memcpy(record_data + field_offset, &ref, sizeof(LobRef));
+      }
+      return RC::SUCCESS;
+    } else {
+      const int expect_bytes =
+          (schema_dim > 0) ? schema_dim * static_cast<int>(sizeof(float)) : field->len();
+      if (actual_len != expect_bytes) {
+        LOG_WARN("vector byte size mismatch. field=%s expect_bytes=%d actual_bytes=%d",
+                 field->name(), expect_bytes, actual_len);
+        return RC::INVALID_ARGUMENT;
+      }
     }
   }
 

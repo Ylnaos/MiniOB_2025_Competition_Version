@@ -1512,6 +1512,10 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         if (na <= 0.0 || nb <= 0.0) { value.set_null(); return RC::SUCCESS; }
         double cos = dot / (std::sqrt(na) * std::sqrt(nb));
         acc = 1.0 - cos;
+        // 数值抖动可能导致 acc 落到极小的负值，需对理论上应为 0 的结果钳位
+        if (acc < 0.0 && std::fabs(acc) < 1e-6) {
+          acc = 0.0;
+        }
       }
       // 保留两位小数（与 ROUND 使用的一致的银行家舍入）
       double p = std::pow(10.0, 2.0);

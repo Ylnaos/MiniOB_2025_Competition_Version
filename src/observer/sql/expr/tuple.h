@@ -244,33 +244,52 @@ public:
       cell.set_data(buf.data(), length);
       return RC::SUCCESS;
     }
-    // High-dimensional VECTORS (>1000 dims) are stored as LobRef in record; need to fetch from LOB file
-    else if (field_meta->type() == AttrType::VECTORS && field_meta->len() == static_cast<int>(sizeof(LobRef))) {
-      // Decode LobRef
-      const char *p = this->record_->data() + field_meta->offset();
-      LobRef ref;
-      memcpy(&ref, p, sizeof(LobRef));
+    // 向量字段：高维或历史 LobRef 存储需要回表取数据
+    else if (field_meta->type() == AttrType::VECTORS) {
+      const int  schema_dim = field_meta->vector_length();
+      const bool vector_lob =
+          (schema_dim > 1000) ||
+          (schema_dim <= 0 && field_meta->len() == static_cast<int>(sizeof(LobRef)));
+      if (vector_lob) {
+        // Decode LobRef
+        const char *p = this->record_->data() + field_meta->offset();
+        LobRef ref;
+        memcpy(&ref, p, sizeof(LobRef));
 
-      const int32_t length = ref.length;
-      const int64_t offset = ref.offset;
+        const int32_t length = ref.length;
+        const int64_t offset = ref.offset;
 
-      if (length <= 0 || (length % sizeof(float)) != 0) {
-        // empty or invalid vector
+        if (length <= 0 || (length % sizeof(float)) != 0) {
+          // empty or invalid vector
+          cell.set_type(AttrType::VECTORS);
+          cell.set_data("", 0);
+          return RC::SUCCESS;
+        }
+        if (table_ == nullptr || table_->lob_handler() == nullptr) {
+          return RC::INTERNAL;
+        }
+        std::vector<char> buf;
+        buf.resize(static_cast<size_t>(length));
+        RC rc = table_->lob_handler()->get_data(offset, length, buf.data());
+        if (rc != RC::SUCCESS) {
+          return rc;
+        }
+        cell.set_type(AttrType::VECTORS);
+        cell.set_data(buf.data(), length);
+        return RC::SUCCESS;
+      }
+      // 向量字段也可能以内联方式存储，此时直接从记录里取定长数据
+      int data_len = field_meta->len();
+      if (data_len <= 0 && schema_dim > 0) {
+        data_len = schema_dim * sizeof(float);
+      }
+      if (data_len <= 0 || (data_len % static_cast<int>(sizeof(float))) != 0) {
         cell.set_type(AttrType::VECTORS);
         cell.set_data("", 0);
         return RC::SUCCESS;
       }
-      if (table_ == nullptr || table_->lob_handler() == nullptr) {
-        return RC::INTERNAL;
-      }
-      std::vector<char> buf;
-      buf.resize(static_cast<size_t>(length));
-      RC rc = table_->lob_handler()->get_data(offset, length, buf.data());
-      if (rc != RC::SUCCESS) {
-        return rc;
-      }
       cell.set_type(AttrType::VECTORS);
-      cell.set_data(buf.data(), length);
+      cell.set_data(this->record_->data() + field_meta->offset(), data_len);
       return RC::SUCCESS;
     } else {
       cell.set_type(field_meta->type());

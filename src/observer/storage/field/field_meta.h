@@ -45,6 +45,8 @@ public:
   bool        visible() const;
   int         field_id() const;
   bool        nullable() const { return nullable_; }
+  int         vector_length() const { return vector_length_; }
+  void        set_vector_length(int length) { vector_length_ = length; }
 
 public:
   void desc(ostream &os) const;
@@ -61,4 +63,5 @@ protected:
   bool     visible_;
   int      field_id_;
   bool     nullable_ = false;
+  int      vector_length_ = 0;
 };
