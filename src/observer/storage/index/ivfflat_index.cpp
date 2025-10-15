@@ -560,6 +560,11 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
   return results;
 }
 
+bool IvfflatIndex::ready() const
+{
+  return inited_ && dimension_ > 0 && !centroids_.empty();
+}
+
 RC IvfflatIndex::save_to_file()
 {
   std::ofstream ofs(file_name_, std::ios::binary);

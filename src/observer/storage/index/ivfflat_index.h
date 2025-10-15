@@ -84,6 +84,16 @@ public:
    */
   bool is_vector_index() override { return true; }
 
+  /**
+   * @brief 判断索引是否已经完成初始化并具备查询能力
+   */
+  bool ready() const;
+
+  /**
+   * @brief 获取索引配置的向量维度（未就绪时返回0）
+   */
+  int dimension() const { return dimension_; }
+
 private:
   /**
    * @brief K-Means聚类算法

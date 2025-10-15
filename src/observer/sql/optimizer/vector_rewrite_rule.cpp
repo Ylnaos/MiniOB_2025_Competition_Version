@@ -23,6 +23,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/vector_index_scan_logical_operator.h"
 #include "storage/field/field_meta.h"
 #include "storage/index/index.h"
+#include "storage/index/ivfflat_index.h"
 #include "storage/table/table.h"
 
 namespace {
@@ -200,6 +201,15 @@ RC VectorRewriteRule::rewrite(std::unique_ptr<LogicalOperator> &oper, bool &chan
   Index *index = table->find_index_by_field(target_field->field().meta()->name());
   if (index == nullptr || !index->is_vector_index()) {
     LOG_TRACE("vector rewrite skip: no matching vector index");
+    return RC::SUCCESS;
+  }
+  auto *ivf_index = dynamic_cast<IvfflatIndex *>(index);
+  if (ivf_index == nullptr) {
+    LOG_TRACE("vector rewrite skip: vector index type unsupported");
+    return RC::SUCCESS;
+  }
+  if (!ivf_index->ready()) {
+    LOG_TRACE("vector rewrite skip: vector index not ready for ANN search");
     return RC::SUCCESS;
   }
 
