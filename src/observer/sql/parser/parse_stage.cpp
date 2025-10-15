@@ -105,7 +105,6 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     common::str_to_lower(lowered);
     const string create_kw = "create";
     const string index_kw  = " index";
-    const string pattern   = " if not exists";
     size_t search_pos = 0;
     while (true) {
       size_t create_pos = lowered.find(create_kw, search_pos);
@@ -117,16 +116,44 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
         search_pos = create_pos + create_kw.size();
         continue;
       }
-      size_t if_pos = lowered.find(pattern, index_pos + index_kw.size());
-      if (if_pos == string::npos) {
+      size_t scan_pos = index_pos + index_kw.size();
+      size_t ws_pos = scan_pos;
+      while (ws_pos < lowered.size() && isspace(static_cast<unsigned char>(lowered[ws_pos]))) {
+        ++ws_pos;
+      }
+      size_t cursor = ws_pos;
+      if (cursor + 2 > lowered.size() || lowered.compare(cursor, 2, "if") != 0) {
         search_pos = index_pos + index_kw.size();
         continue;
       }
+      cursor += 2;
+      while (cursor < lowered.size() && isspace(static_cast<unsigned char>(lowered[cursor]))) {
+        ++cursor;
+      }
+      if (cursor + 3 > lowered.size() || lowered.compare(cursor, 3, "not") != 0) {
+        search_pos = index_pos + index_kw.size();
+        continue;
+      }
+      cursor += 3;
+      while (cursor < lowered.size() && isspace(static_cast<unsigned char>(lowered[cursor]))) {
+        ++cursor;
+      }
+      if (cursor + 6 > lowered.size() || lowered.compare(cursor, 6, "exists") != 0) {
+        search_pos = index_pos + index_kw.size();
+        continue;
+      }
+      cursor += 6;
+
+      size_t remove_start = scan_pos;
+      size_t remove_end   = cursor;
+
       mark_index_if_not_exists = true;
-      lowered.erase(if_pos, pattern.size());
-      sql_to_parse.erase(if_pos, pattern.size());
+      lowered.erase(remove_start, remove_end - remove_start);
+      sql_to_parse.erase(remove_start, remove_end - remove_start);
+      lowered.insert(remove_start, " ");
+      sql_to_parse.insert(remove_start, " ");
       LOG_INFO("normalize create index: removed IF NOT EXISTS");
-      search_pos = if_pos;
+      search_pos = remove_start + 1;
     }
   }
 
