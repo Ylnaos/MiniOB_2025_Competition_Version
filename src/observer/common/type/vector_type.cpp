@@ -103,12 +103,33 @@ RC VectorType::to_string(const Value &val, string &result) const
   oss << "[";
   for (int i = 0; i < dim; ++i) {
     if (i > 0) oss << ",";
-    float val = data[i];
-    // 如果是整数值，以整数形式输出；否则保留适当精度
-    if (val == std::floor(val) && !std::isinf(val) && !std::isnan(val)) {
-      oss << static_cast<int>(val);
+    float elem = data[i];
+    if (std::isnan(elem)) {
+      oss << "NaN";
+      continue;
+    }
+    if (std::isinf(elem)) {
+      oss << (elem > 0 ? "Inf" : "-Inf");
+      continue;
+    }
+    if (elem == std::floor(elem)) {
+      oss << static_cast<int>(elem);
     } else {
-      oss << val;
+      // 四舍五入保留两位小数，并清理尾随零
+      float rounded = std::round(elem * 100.0f) / 100.0f;
+      char buffer[32];
+      std::snprintf(buffer, sizeof(buffer), "%.2f", rounded);
+      char *dot = std::strchr(buffer, '.');
+      if (dot != nullptr) {
+        char *end = buffer + std::strlen(buffer) - 1;
+        while (end > dot && *end == '0') {
+          *end-- = '\0';
+        }
+        if (end == dot) {
+          *end = '\0';
+        }
+      }
+      oss << buffer;
     }
   }
   oss << "]";

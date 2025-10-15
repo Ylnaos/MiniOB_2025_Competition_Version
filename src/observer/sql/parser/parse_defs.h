@@ -254,6 +254,7 @@ struct CreateIndexSqlNode
   string              relation_name;  ///< Relation name
   vector<string>      attribute_names;///< Attribute names (support multi-column)
   bool                unique = false; ///< Whether the index is UNIQUE
+  bool                if_not_exists = false; ///< 是否使用 IF NOT EXISTS
 
   // Vector index specific parameters
   bool                is_vector_index = false;  ///< Whether this is a vector index

@@ -33,6 +33,7 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
 
   SqlResult         *sql_result = sql_event->session_event()->sql_result();
   const string &sql        = sql_event->sql();
+  LOG_INFO("parse stage receive sql: %s", sql.c_str());
 
   // quick path: handle CREATE TABLE ... AS SELECT ... without relying on yacc rule
   auto trim_copy = [&](const string &s) -> string {
@@ -97,8 +98,39 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
   }
 
   ParsedSqlResult parsed_sql_result;
+  string sql_to_parse = sql;
+  bool   mark_index_if_not_exists = false;
+  {
+    string lowered = sql_to_parse;
+    common::str_to_lower(lowered);
+    const string create_kw = "create";
+    const string index_kw  = " index";
+    const string pattern   = " if not exists";
+    size_t search_pos = 0;
+    while (true) {
+      size_t create_pos = lowered.find(create_kw, search_pos);
+      if (create_pos == string::npos) {
+        break;
+      }
+      size_t index_pos = lowered.find(index_kw, create_pos + create_kw.size());
+      if (index_pos == string::npos) {
+        search_pos = create_pos + create_kw.size();
+        continue;
+      }
+      size_t if_pos = lowered.find(pattern, index_pos + index_kw.size());
+      if (if_pos == string::npos) {
+        search_pos = index_pos + index_kw.size();
+        continue;
+      }
+      mark_index_if_not_exists = true;
+      lowered.erase(if_pos, pattern.size());
+      sql_to_parse.erase(if_pos, pattern.size());
+      LOG_INFO("normalize create index: removed IF NOT EXISTS");
+      search_pos = if_pos;
+    }
+  }
 
-  parse(sql.c_str(), &parsed_sql_result);
+  parse(sql_to_parse.c_str(), &parsed_sql_result);
   if (parsed_sql_result.sql_nodes().empty()) {
     sql_result->set_return_code(RC::SUCCESS);
     sql_result->set_state_string("");
@@ -145,6 +177,10 @@ RC ParseStage::handle_request(SQLStageEvent *sql_event)
     sql_result->set_return_code(rc);
     sql_result->set_state_string("Failed to parse sql");
     return rc;
+  }
+
+  if (mark_index_if_not_exists && sql_node && sql_node->flag == SCF_CREATE_INDEX) {
+    sql_node->create_index.if_not_exists = true;
   }
 
   sql_event->set_sql_node(std::move(sql_node));

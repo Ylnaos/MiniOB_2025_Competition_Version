@@ -74,13 +74,26 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
       // 已存在完全相同定义的索引：幂等返回成功，符合官方期望
       return RC::SUCCESS;
     }
+    if (create_index.if_not_exists) {
+      // IF NOT EXISTS 语义：索引存在即可视为成功，避免报错
+      LOG_INFO("skip creating index since it already exists. table=%s, index=%s",
+               table_name, create_index.index_name.c_str());
+      return RC::SUCCESS;
+    }
     LOG_WARN("index with name(%s) already exists but definition differs. table=%s",
              create_index.index_name.c_str(), table_name);
     return RC::SCHEMA_INDEX_NAME_REPEAT;
   }
 
-  stmt = new CreateIndexStmt(table, std::move(field_metas), create_index.index_name, create_index.unique,
-                             create_index.is_vector_index, create_index.distance_type, create_index.index_type,
-                             create_index.lists, create_index.probes);
+  stmt = new CreateIndexStmt(table,
+                             std::move(field_metas),
+                             create_index.index_name,
+                             create_index.unique,
+                             create_index.if_not_exists,
+                             create_index.is_vector_index,
+                             create_index.distance_type,
+                             create_index.index_type,
+                             create_index.lists,
+                             create_index.probes);
   return RC::SUCCESS;
 }

@@ -27,11 +27,23 @@ class FieldMeta;
 class CreateIndexStmt : public Stmt
 {
 public:
-  CreateIndexStmt(Table *table, vector<const FieldMeta *> field_metas, const string &index_name, bool unique,
-                  bool is_vector_index = false, const string &distance_type = "", const string &index_type = "",
+  CreateIndexStmt(Table *table,
+                  vector<const FieldMeta *> field_metas,
+                  const string &index_name,
+                  bool unique,
+                  bool if_not_exists = false,
+                  bool is_vector_index = false,
+                  const string &distance_type = "",
+                  const string &index_type = "",
                   int lists = 0, int probes = 0)
-      : table_(table), field_metas_(std::move(field_metas)), index_name_(index_name), unique_(unique),
-        is_vector_index_(is_vector_index), distance_type_(distance_type), index_type_(index_type),
+      : table_(table),
+        field_metas_(std::move(field_metas)),
+        index_name_(index_name),
+        unique_(unique),
+        if_not_exists_(if_not_exists),
+        is_vector_index_(is_vector_index),
+        distance_type_(distance_type),
+        index_type_(index_type),
         lists_(lists), probes_(probes)
   {}
 
@@ -43,6 +55,7 @@ public:
   const vector<const FieldMeta *> &field_metas() const { return field_metas_; }
   const string                   &index_name() const { return index_name_; }
   bool                            unique() const { return unique_; }
+  bool                            if_not_exists() const { return if_not_exists_; }
 
   // Vector index specific accessors
   bool                            is_vector_index() const { return is_vector_index_; }
@@ -59,6 +72,7 @@ private:
   vector<const FieldMeta *>       field_metas_;
   string                          index_name_;
   bool                            unique_ = false;
+  bool                            if_not_exists_ = false;
 
   // Vector index specific members
   bool                            is_vector_index_ = false;

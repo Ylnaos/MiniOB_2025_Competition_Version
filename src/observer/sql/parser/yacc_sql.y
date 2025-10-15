@@ -731,6 +731,7 @@ vector_literal:
       $$ = vec;
     }
     ;
+
 nullable_opt:
     /* empty */
     {
