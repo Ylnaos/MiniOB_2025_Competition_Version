@@ -261,10 +261,19 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
   vector<unique_ptr<LogicalOperator>> &child_opers = project_oper.children();
 
   unique_ptr<PhysicalOperator> child_phy_oper;
+  bool limit_consumed_by_child = false;
 
   RC rc = RC::SUCCESS;
   if (!child_opers.empty()) {
     LogicalOperator *child_oper = child_opers.front().get();
+
+    if (project_oper.limit() >= 0 && child_oper->type() == LogicalOperatorType::VECTOR_INDEX_SCAN) {
+      auto *vector_child = static_cast<VectorIndexScanLogicalOperator *>(child_oper);
+      if (vector_child->consume_limit()) {
+        vector_child->set_consume_limit(false);  // 仅消费一次，防止重复判断
+        limit_consumed_by_child = true;
+      }
+    }
 
     rc = create(*child_oper, child_phy_oper, session);
     if (OB_FAIL(rc)) {
@@ -279,7 +288,7 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
   }
 
   // 如果有LIMIT，包装LimitPhysicalOperator
-  if (project_oper.limit() >= 0) {
+  if (project_oper.limit() >= 0 && !limit_consumed_by_child) {
     auto limit_operator = make_unique<LimitPhysicalOperator>(project_oper.limit());
     limit_operator->add_child(std::move(project_operator));
     oper = std::move(limit_operator);

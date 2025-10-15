@@ -34,10 +34,13 @@ public:
   Index                     *index() const { return index_; }
   const std::vector<float>  &query_vector() const { return query_vector_; }
   int                        limit() const { return limit_; }
+  bool                       consume_limit() const { return consume_limit_; }
+  void                       set_consume_limit(bool flag) { consume_limit_ = flag; }
 
 private:
   Table                    *table_        = nullptr;
   Index                    *index_        = nullptr;
   std::vector<float>        query_vector_;
   int                       limit_        = -1;
+  bool                      consume_limit_ = false;
 };
