@@ -507,8 +507,12 @@ vector<int> IvfflatIndex::find_nearest_clusters(const vector<float> &query_vecto
 
 vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t limit)
 {
-  if (!inited_ || centroids_.empty()) {
-    LOG_WARN("Index not initialized or no centroids");
+  if (!inited_) {
+    LOG_WARN("Index not initialized");
+    return {};
+  }
+  if (centroids_.empty()) {
+    LOG_TRACE("IVF-Flat index has no centroids yet, return empty result");
     return {};
   }
 
@@ -562,7 +566,7 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
 
 bool IvfflatIndex::ready() const
 {
-  return inited_ && dimension_ > 0 && !centroids_.empty();
+  return inited_ && dimension_ > 0;
 }
 
 RC IvfflatIndex::save_to_file()
