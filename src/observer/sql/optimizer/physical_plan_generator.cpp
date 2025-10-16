@@ -279,7 +279,14 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
   }
 
   // 如果有LIMIT，包装LimitPhysicalOperator
-  if (project_oper.limit() >= 0) {
+  bool child_is_vector_scan = false;
+  if (!project_operator->children().empty() &&
+      project_operator->children().front() &&
+      project_operator->children().front()->type() == PhysicalOperatorType::VECTOR_INDEX_SCAN) {
+    child_is_vector_scan = true;
+  }
+
+  if (project_oper.limit() >= 0 && !child_is_vector_scan) {
     auto limit_operator = make_unique<LimitPhysicalOperator>(project_oper.limit());
     limit_operator->add_child(std::move(project_operator));
     oper = std::move(limit_operator);

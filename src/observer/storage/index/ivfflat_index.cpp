@@ -333,8 +333,34 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   LOG_INFO("Collected %zu vectors from table", all_vectors.size());
 
   if (all_vectors.empty()) {
-    LOG_WARN("No vectors found in table");
+    LOG_INFO("No vectors found in table, initialize empty IVF-Flat index");
+
+    if (dimension_ <= 0) {
+      const int physical_len = vector_field_meta_->len();
+      if (physical_len > 0 && physical_len % static_cast<int>(sizeof(float)) == 0) {
+        dimension_ = physical_len / static_cast<int>(sizeof(float));
+      }
+    }
+    if (dimension_ <= 0) {
+      LOG_WARN("Cannot infer positive dimension for empty IVF-Flat index");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    lists_  = std::max(1, lists_);
+    probes_ = std::max(1, std::min(probes_, lists_));
+
+    centroids_.assign(lists_, std::vector<float>(dimension_, 0.0f));
+    inverted_lists_.assign(lists_, std::vector<IvfEntry>());
+
+    RC save_rc = save_to_file();
+    if (save_rc != RC::SUCCESS) {
+      LOG_WARN("Failed to save empty IVF-Flat index to file");
+      return save_rc;
+    }
+
     inited_ = true;
+    LOG_INFO("Empty IVF-Flat index initialized with dimension=%d lists=%d probes=%d",
+             dimension_, lists_, probes_);
     return RC::SUCCESS;
   }
 
@@ -449,8 +475,18 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
 
   // 找到最近的聚类中心
   if (centroids_.empty()) {
-    LOG_WARN("No centroids available, cannot insert");
-    return RC::INTERNAL;
+    LOG_WARN("Centroids missing before insert, rebuild default clusters");
+
+    if (dimension_ <= 0) {
+      LOG_WARN("Invalid dimension while rebuilding centroids");
+      return RC::INTERNAL;
+    }
+
+    lists_  = std::max(1, lists_);
+    probes_ = std::max(1, std::min(probes_, lists_));
+
+    centroids_.assign(lists_, std::vector<float>(dimension_, 0.0f));
+    inverted_lists_.assign(lists_, std::vector<IvfEntry>());
   }
 
   float min_dist = std::numeric_limits<float>::max();
