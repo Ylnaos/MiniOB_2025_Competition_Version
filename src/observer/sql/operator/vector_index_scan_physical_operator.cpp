@@ -94,5 +94,6 @@ RC VectorIndexScanPhysicalOperator::close()
 
 Tuple *VectorIndexScanPhysicalOperator::current_tuple()
 {
+  tuple_.set_record(&current_record_);
   return &tuple_;
 }

@@ -87,3 +87,4 @@ EXPLAIN SELECT * FROM TEST25 ORDER BY L2_DISTANCE(C1, '[1,2,3]') LIMIT 3;
 -- 5. 结果应该按距离从小到大排序
 -- 6. 不应该出现"failed to receive response from observer"错误
 -- ============================================
+进行测试要先cd bin ./observer 不能中断 在另一边 /obclient 然后在obclient 里输入指令测试 使用这个指令帮我测试上面提供给你的问题是否已经修复这两个都在一个文件夹下

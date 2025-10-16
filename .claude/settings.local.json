@@ -6,7 +6,8 @@
       "Bash(winpty docker run -it --name miniob-container ubuntu:20.04 /bin/bash)",
       "Bash(cd:*)",
       "Bash(dir:*)",
-      "mcp__codex__codex"
+      "mcp__codex__codex",
+      "Read(//d/迅雷下载/miniob-2024-main/miniob-2024-main/**)"
     ],
     "deny": [],
     "ask": []
