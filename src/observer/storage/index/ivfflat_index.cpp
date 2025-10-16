@@ -160,16 +160,25 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
   LOG_INFO("K-Means clustering completed with k=%d, iterations=%d", k, max_iter);
 }
 
+const FieldMeta *IvfflatIndex::get_vector_field_meta() const
+{
+  if (!table_) {
+    return nullptr;
+  }
+  return table_->table_meta().field(vector_field_name_.c_str());
+}
+
 RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &vec) const
 {
-  if (!vector_field_meta_) {
+  const FieldMeta *vector_field_meta = get_vector_field_meta();
+  if (!vector_field_meta) {
     return RC::INTERNAL;
   }
 
-  const int schema_dim = vector_field_meta_->vector_length();
+  const int schema_dim = vector_field_meta->vector_length();
   const bool vector_lob =
       (schema_dim > 1000) ||
-      (schema_dim <= 0 && vector_field_meta_->len() == static_cast<int>(sizeof(LobRef)));
+      (schema_dim <= 0 && vector_field_meta->len() == static_cast<int>(sizeof(LobRef)));
 
   const char      *payload = nullptr;
   int              payload_len = 0;
@@ -177,7 +186,7 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
 
   if (vector_lob) {
     LobRef ref;
-    memcpy(&ref, record + vector_field_meta_->offset(), sizeof(LobRef));
+    memcpy(&ref, record + vector_field_meta->offset(), sizeof(LobRef));
     if (ref.length <= 0 || (ref.length % static_cast<int>(sizeof(float)) != 0)) {
       LOG_WARN("Invalid LobRef length for vector column. table=%s length=%d",
                table_ != nullptr ? table_->name() : "<unknown>", ref.length);
@@ -196,8 +205,8 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
     payload     = tmp_buffer.data();
     payload_len = ref.length;
   } else {
-    payload     = record + vector_field_meta_->offset();
-    payload_len = vector_field_meta_->len();
+    payload     = record + vector_field_meta->offset();
+    payload_len = vector_field_meta->len();
   }
 
   if (payload_len <= 0 || (payload_len % static_cast<int>(sizeof(float)) != 0)) {
@@ -287,15 +296,16 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
 
   table_             = table;
   file_name_         = file_name;
-  vector_field_meta_ = &field_metas[0];
+  vector_field_name_ = field_metas[0].name();
 
   apply_meta_config(index_meta);
   int requested_lists = lists_;
 
   // 计算向量维度
-  dimension_ = vector_field_meta_->vector_length();
+  const FieldMeta *vector_field_meta = &field_metas[0];
+  dimension_ = vector_field_meta->vector_length();
   if (dimension_ <= 0) {
-    const int physical_len = vector_field_meta_->len();
+    const int physical_len = vector_field_meta->len();
     if (physical_len != static_cast<int>(sizeof(LobRef)) &&
         physical_len % static_cast<int>(sizeof(float)) == 0) {
       dimension_ = physical_len / static_cast<int>(sizeof(float));
@@ -336,7 +346,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
     LOG_INFO("No vectors found in table, initialize empty IVF-Flat index");
 
     if (dimension_ <= 0) {
-      const int physical_len = vector_field_meta_->len();
+      const int physical_len = vector_field_meta->len();
       if (physical_len > 0 && physical_len % static_cast<int>(sizeof(float)) == 0) {
         dimension_ = physical_len / static_cast<int>(sizeof(float));
       }
@@ -431,7 +441,7 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
 
   table_ = table;
   file_name_ = file_name;
-  vector_field_meta_ = &field_metas[0];
+  vector_field_name_ = field_metas[0].name();
   apply_meta_config(index_meta);
 
   // 从文件加载索引
@@ -502,6 +512,68 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
 
   // 插入到倒排列表
   inverted_lists_[best_cluster].emplace_back(*rid, vec);
+
+  // 检查是否需要重建索引（如果centroids_是全零且已累积足够数据）
+  bool has_zero_centroids = true;
+  for (const auto &centroid : centroids_) {
+    for (float val : centroid) {
+      if (std::abs(val) > 1e-9f) {
+        has_zero_centroids = false;
+        break;
+      }
+    }
+    if (!has_zero_centroids) {
+      break;
+    }
+  }
+
+  if (has_zero_centroids) {
+    // 统计当前已插入的向量总数
+    size_t total_vectors = 0;
+    for (const auto &list : inverted_lists_) {
+      total_vectors += list.size();
+    }
+
+    // 如果已有足够的向量（至少是lists_的2倍），触发重建
+    if (total_vectors >= static_cast<size_t>(lists_ * 2)) {
+      LOG_INFO("Rebuilding index with %zu vectors after zero-centroid detection", total_vectors);
+
+      // 收集所有向量
+      vector<vector<float>> all_vectors;
+      all_vectors.reserve(total_vectors);
+      for (const auto &list : inverted_lists_) {
+        for (const auto &entry : list) {
+          all_vectors.push_back(entry.vector_data);
+        }
+      }
+
+      // 重新聚类
+      int actual_lists = std::min(lists_, static_cast<int>(all_vectors.size()));
+      if (actual_lists > 0) {
+        kmeans_clustering(all_vectors, actual_lists, 50);
+
+        // 重新分配向量到新的聚类中心
+        vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
+        for (const auto &list : inverted_lists_) {
+          for (const auto &entry : list) {
+            float min_d = std::numeric_limits<float>::max();
+            int best_c = 0;
+            for (int j = 0; j < actual_lists; ++j) {
+              float d = compute_l2_distance(entry.vector_data, centroids_[j]);
+              if (d < min_d) {
+                min_d = d;
+                best_c = j;
+              }
+            }
+            new_inverted_lists[best_c].push_back(entry);
+          }
+        }
+        inverted_lists_ = std::move(new_inverted_lists);
+
+        LOG_INFO("Index rebuilt successfully with %d clusters", actual_lists);
+      }
+    }
+  }
 
   return RC::SUCCESS;
 }
@@ -598,7 +670,25 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
 
 bool IvfflatIndex::ready() const
 {
-  return inited_ && dimension_ > 0 && !centroids_.empty();
+  if (!inited_ || dimension_ <= 0 || centroids_.empty()) {
+    return false;
+  }
+
+  // 检查是否有至少一个非零的聚类中心（避免全零初始化的情况）
+  bool has_nonzero_centroid = false;
+  for (const auto &centroid : centroids_) {
+    for (float val : centroid) {
+      if (std::abs(val) > 1e-9f) {
+        has_nonzero_centroid = true;
+        break;
+      }
+    }
+    if (has_nonzero_centroid) {
+      break;
+    }
+  }
+
+  return has_nonzero_centroid;
 }
 
 RC IvfflatIndex::save_to_file()

@@ -58,6 +58,15 @@ RC VectorIndexScanPhysicalOperator::open(Trx *trx)
     return RC::INTERNAL;
   }
 
+  // 检查索引是否已经准备好
+  if (!ivfflat_index->ready()) {
+    LOG_WARN("VectorIndexScanPhysicalOperator::open - index not ready for ANN search");
+    result_rids_.clear();
+    current_idx_ = 0;
+    trx_ = trx;
+    return RC::SUCCESS;  // 返回空结果而不是错误
+  }
+
   result_rids_ = ivfflat_index->ann_search(query_vector_, limit_);
   current_idx_ = 0;
   trx_ = trx;

@@ -143,7 +143,12 @@ private:
   string index_type_;
 
   // 向量字段信息
-  const FieldMeta *vector_field_meta_ = nullptr;
+  string vector_field_name_;  // 保存字段名而不是指针，避免悬空指针
+
+  /**
+   * @brief 从table中安全地获取FieldMeta
+   */
+  const FieldMeta *get_vector_field_meta() const;
 
   // 核心数据结构
   vector<vector<float>>        centroids_;       // 聚类中心 [lists][dimension]

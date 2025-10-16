@@ -213,6 +213,14 @@ RC VectorRewriteRule::rewrite(std::unique_ptr<LogicalOperator> &oper, bool &chan
     return RC::SUCCESS;
   }
 
+  // 验证查询向量维度是否与索引匹配
+  int index_dimension = ivf_index->dimension();
+  if (index_dimension > 0 && static_cast<int>(query_vector.size()) != index_dimension) {
+    LOG_TRACE("vector rewrite skip: query vector dimension %zu does not match index dimension %d",
+              query_vector.size(), index_dimension);
+    return RC::SUCCESS;
+  }
+
   auto vector_scan_oper =
       make_unique<VectorIndexScanLogicalOperator>(table, index, std::move(query_vector), project_oper->limit());
   proj_children.front() = std::move(vector_scan_oper);
