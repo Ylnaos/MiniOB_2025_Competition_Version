@@ -20,25 +20,41 @@ VectorIndexScanPhysicalOperator::VectorIndexScanPhysicalOperator(
     size_t limit)
     : table_(table), index_(index), query_vector_(query_vector), limit_(limit)
 {
-  tuple_.set_schema(table_, table_->table_meta().field_metas());
+  if (table_) {
+    tuple_.set_schema(table_, table_->table_meta().field_metas());
+  } else {
+    LOG_WARN("VectorIndexScanPhysicalOperator created with null table");
+  }
+  if (!index_) {
+    LOG_WARN("VectorIndexScanPhysicalOperator created with null index");
+  }
 }
 
 string VectorIndexScanPhysicalOperator::param() const
 {
-  return std::string(table_->name()) + " ON " + index_->index_meta().name() +
-         " (limit=" + std::to_string(limit_) + ")";
+  if (!table_ || !index_) {
+    return "INVALID(table or index is null)";
+  }
+  return index_->index_meta().name() + string(" ON ") + table_->name();
 }
 
 RC VectorIndexScanPhysicalOperator::open(Trx *trx)
 {
-  if (nullptr == table_ || nullptr == index_) {
+  if (nullptr == table_) {
+    LOG_WARN("VectorIndexScanPhysicalOperator::open - table is null");
+    return RC::INTERNAL;
+  }
+
+  if (nullptr == index_) {
+    LOG_WARN("VectorIndexScanPhysicalOperator::open - index is null");
     return RC::INTERNAL;
   }
 
   // 调用IvfflatIndex的ann_search方法
   IvfflatIndex *ivfflat_index = dynamic_cast<IvfflatIndex *>(index_);
   if (ivfflat_index == nullptr) {
-    LOG_WARN("index is not an IvfflatIndex");
+    LOG_WARN("index is not an IvfflatIndex, index name: %s",
+             index_->index_meta().name());
     return RC::INTERNAL;
   }
 
