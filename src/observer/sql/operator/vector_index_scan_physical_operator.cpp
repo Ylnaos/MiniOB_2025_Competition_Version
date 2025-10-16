@@ -35,7 +35,7 @@ string VectorIndexScanPhysicalOperator::param() const
   if (!table_ || !index_) {
     return "INVALID(table or index is null)";
   }
-  return index_->index_meta().name() + string(" ON ") + table_->name();
+  return string(index_->index_meta().name()) + " ON " + table_->name();
 }
 
 RC VectorIndexScanPhysicalOperator::open(Trx *trx)
