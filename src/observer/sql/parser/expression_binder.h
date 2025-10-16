@@ -17,6 +17,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "common/lang/unordered_map.h"
 
+class SelectStmt;
+
 class BinderContext
 {
 public:
@@ -29,10 +31,13 @@ public:
   Table *find_table(const char *table_name) const;
 
   const vector<Table *> &query_tables() const { return query_tables_; }
+  void set_inner_view_stmt(SelectStmt *stmt) { inner_view_stmt_ = stmt; }
+  SelectStmt *inner_view_stmt() const { return inner_view_stmt_; }
 
 private:
   vector<Table *> query_tables_;
   unordered_map<string, Table *> alias_map_;
+  SelectStmt *inner_view_stmt_ = nullptr;
 };
 
 /**

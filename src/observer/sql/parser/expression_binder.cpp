@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/ranges.h"
 #include "sql/parser/expression_binder.h"
 #include "sql/expr/expression_iterator.h"
+#include "sql/stmt/select_stmt.h"
 
 using namespace common;
 
@@ -336,6 +337,54 @@ RC ExpressionBinder::bind_unbound_field_expression(
 
   const char *table_name = unbound_field_expr->table_name();
   const char *field_name = unbound_field_expr->field_name();
+
+  SelectStmt *inner_view_stmt = context_.inner_view_stmt();
+  if (context_.query_tables().empty() && inner_view_stmt != nullptr) {
+    if (!is_blank(table_name)) {
+      LOG_INFO("inner view binding does not support qualified column: %s.%s", table_name, field_name);
+      return RC::SCHEMA_TABLE_NOT_EXIST;
+    }
+    if (is_blank(field_name)) {
+      LOG_INFO("inner view binding missing column name");
+      return RC::SCHEMA_FIELD_MISSING;
+    }
+
+    string target_name = field_name;
+    common::str_to_upper(target_name);
+
+    const auto &inner_exprs = inner_view_stmt->query_expressions();
+    for (size_t idx = 0; idx < inner_exprs.size(); idx++) {
+      const auto &inner_expr = inner_exprs[idx];
+      if (!inner_expr) {
+        continue;
+      }
+      const char *candidate = inner_expr->alias();
+      if (is_blank(candidate)) {
+        candidate = inner_expr->name();
+      }
+      string candidate_name;
+      if (!is_blank(candidate)) {
+        candidate_name = candidate;
+      } else {
+        candidate_name = string("COLUMN_") + std::to_string(idx + 1);
+      }
+      common::str_to_upper(candidate_name);
+      if (candidate_name == target_name) {
+        auto *field_expr = new FieldExpr();
+        field_expr->set_pos(static_cast<int>(idx));
+        field_expr->set_name(candidate_name);
+        if (expr->alias() != nullptr) {
+          field_expr->set_alias(expr->alias());
+        }
+        LOG_DEBUG("Bind field '%s' from inner view at position %zu", candidate_name.c_str(), idx);
+        bound_expressions.emplace_back(field_expr);
+        return RC::SUCCESS;
+      }
+    }
+
+    LOG_INFO("no such field in inner view output: %s", field_name);
+    return RC::SCHEMA_FIELD_MISSING;
+  }
 
   Table *table = nullptr;
   if (is_blank(table_name)) {

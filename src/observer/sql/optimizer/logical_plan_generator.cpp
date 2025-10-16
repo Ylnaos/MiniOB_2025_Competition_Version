@@ -103,6 +103,9 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
   // 外层查询可以像访问表一样访问子查询结果
   if (select_stmt->inner_view_stmt() != nullptr) {
     LOG_DEBUG("Processing subquery in FROM clause");
+    LOG_DEBUG("create_plan: SelectStmt %p has inner_view_stmt %p",
+        static_cast<void *>(select_stmt),
+        static_cast<void *>(select_stmt->inner_view_stmt()));
 
     // 1. 生成内层子查询的完整逻辑计划
     unique_ptr<LogicalOperator> inner_logical_oper;
@@ -129,8 +132,11 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     }
 
     if (group_by_oper) {
+      LOG_DEBUG("Outer query has GroupBy operator, adding SubqueryLogicalOperator as child");
       group_by_oper->add_child(std::move(last_oper));
       last_oper = std::move(group_by_oper);
+    } else {
+      LOG_WARN("Outer query has NO GroupBy operator - this may be unexpected for aggregation query");
     }
 
     // 添加外层的PROJECT算子
@@ -465,6 +471,8 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   vector<unique_ptr<Expression>> &group_by_expressions = select_stmt->group_by();
   vector<Expression *> aggregate_expressions;
   vector<unique_ptr<Expression>> &query_expressions = select_stmt->query_expressions();
+  LOG_DEBUG("create_group_by_plan: processing %d query expressions",
+      static_cast<int>(query_expressions.size()));
   function<RC(unique_ptr<Expression>&)> collector = [&](unique_ptr<Expression> &expr) -> RC {
     RC rc = RC::SUCCESS;
       if (expr->type() == ExprType::AGGREGATION) {
@@ -480,6 +488,10 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
         if (!exists) {
           expr->set_pos(aggregate_expressions.size() + group_by_expressions.size());
           aggregate_expressions.push_back(expr.get());
+          LOG_DEBUG("create_group_by_plan: added aggregation expression '%s' at pos=%d (aggregate count=%d)",
+              expr->name() ? expr->name() : "",
+              expr->pos(),
+              static_cast<int>(aggregate_expressions.size()));
         }
       }
       rc = ExpressionIterator::iterate_child_expr(*expr, collector);
@@ -534,8 +546,13 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
     collector(select_stmt->having_expr());
   }
 
+  LOG_DEBUG("create_group_by_plan: group_by count=%d aggregate count=%d",
+      static_cast<int>(group_by_expressions.size()),
+      static_cast<int>(aggregate_expressions.size()));
+
   if (group_by_expressions.empty() && aggregate_expressions.empty()) {
     // 既没有group by也没有聚合函数，不需要group by
+    LOG_DEBUG("create_group_by_plan: no grouping or aggregation, returning empty plan");
     return RC::SUCCESS;
   }
 
@@ -545,6 +562,10 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   }
 
   // 如果只需要聚合，但是没有group by 语句，需要生成一个空的group by 语句
+
+  LOG_DEBUG("create_group_by_plan: creating GroupByLogicalOperator with %d group_by expressions and %d aggregate expressions",
+      static_cast<int>(group_by_expressions.size()),
+      static_cast<int>(aggregate_expressions.size()));
 
   auto group_by_oper = make_unique<GroupByLogicalOperator>(std::move(group_by_expressions),
                                                            std::move(aggregate_expressions));

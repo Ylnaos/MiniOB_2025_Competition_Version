@@ -59,6 +59,13 @@ static inline double round_half_to_even(double x)
 
 RC FieldExpr::get_value(const Tuple &tuple, Value &value) const
 {
+  if (field_.table() == nullptr) {
+    if (pos_ < 0) {
+      LOG_WARN("FieldExpr with null table lacks position");
+      return RC::INTERNAL;
+    }
+    return tuple.cell_at(pos_, value);
+  }
   return tuple.find_cell(TupleCellSpec(table_name(), field_name()), value);
 }
 

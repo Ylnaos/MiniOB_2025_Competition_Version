@@ -355,6 +355,13 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         // 使用通用的子查询机制处理
         if (view_has_aggregation) {
           LOG_DEBUG("View '%s' contains aggregation, using subquery mechanism", view->name());
+          LOG_DEBUG("Outer SELECT expression count: %d", static_cast<int>(select_sql.expressions.size()));
+          for (size_t idx = 0; idx < select_sql.expressions.size(); idx++) {
+            Expression *expr_ptr = select_sql.expressions[idx].get();
+            LOG_DEBUG("Outer SELECT expression[%d] initial type=%d",
+                static_cast<int>(idx),
+                expr_ptr ? static_cast<int>(expr_ptr->type()) : -1);
+          }
 
           // 1. 创建视图的SelectStmt作为内层子查询
           Stmt *inner_stmt = nullptr;
@@ -368,13 +375,41 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           // 2. 创建外层SelectStmt,将内层查询设置为子查询数据源
           SelectStmt *outer_select = new SelectStmt();
           outer_select->set_inner_view_stmt(inner_select);
+          LOG_DEBUG("Created outer SelectStmt %p with inner view stmt %p",
+              static_cast<void *>(outer_select),
+              static_cast<void *>(inner_select));
 
           // 3. 处理外层的表达式：将UNBOUND_AGGREGATION转换为AggregateExpr
           // 这是必需的，因为执行器需要明确的AggregateExpr类型
           vector<unique_ptr<Expression>> bound_exprs;
+          int expr_idx = 0;
           for (auto &expr : select_sql.expressions) {
             unique_ptr<Expression> copied = expr->copy();
-            if (copied->type() == ExprType::UNBOUND_AGGREGATION) {
+            if (copied->type() == ExprType::STAR) {
+              const auto &inner_exprs = inner_select->query_expressions();
+              LOG_DEBUG("Expanding STAR for aggregate view: inner column size=%zu", inner_exprs.size());
+              for (size_t inner_idx = 0; inner_idx < inner_exprs.size(); inner_idx++) {
+                const auto &inner_expr = inner_exprs[inner_idx];
+                if (!inner_expr) {
+                  continue;
+                }
+                const char *label = inner_expr->alias();
+                if (is_blank(label)) {
+                  label = inner_expr->name();
+                }
+                string column_name;
+                if (!is_blank(label)) {
+                  column_name = label;
+                } else {
+                  column_name = string("COLUMN_") + std::to_string(inner_idx + 1);
+                }
+                common::str_to_upper(column_name);
+                auto expanded = make_unique<UnboundFieldExpr>("", column_name);
+                expanded->set_name(column_name);
+                LOG_DEBUG("  STAR expands to column '%s' (index=%zu)", column_name.c_str(), inner_idx);
+                bound_exprs.emplace_back(std::move(expanded));
+              }
+            } else if (copied->type() == ExprType::UNBOUND_AGGREGATION) {
               auto *uagg = static_cast<UnboundAggregateExpr *>(copied.get());
               AggregateExpr::Type agg_type;
               RC rc2 = AggregateExpr::type_from_string(uagg->aggregate_name(), agg_type);
@@ -384,6 +419,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 return rc2;
               }
               // 将 count(*) 的子表达式从 STAR 改写为常量 1
+              LOG_DEBUG("Converting outer expression[%d] UNBOUND_AGG '%s' to AggregateExpr type=%d",
+                  expr_idx,
+                  uagg->aggregate_name(),
+                  static_cast<int>(agg_type));
               unique_ptr<Expression> child;
               if (agg_type == AggregateExpr::Type::COUNT && uagg->child()->type() == ExprType::STAR) {
                 child.reset(new ValueExpr(Value(1)));
@@ -397,8 +436,43 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             } else {
               bound_exprs.push_back(std::move(copied));
             }
+            expr_idx++;
           }
-          outer_select->query_expressions().swap(bound_exprs);
+          vector<unique_ptr<Expression>> final_exprs;
+          if (!bound_exprs.empty()) {
+            BinderContext subquery_binder_context;
+            subquery_binder_context.set_inner_view_stmt(inner_select);
+            ExpressionBinder subquery_binder(subquery_binder_context);
+            for (auto &candidate : bound_exprs) {
+              if (candidate != nullptr && candidate->type() == ExprType::UNBOUND_FIELD) {
+                vector<unique_ptr<Expression>> tmp;
+                RC bind_rc = subquery_binder.bind_expression(candidate, tmp);
+                if (OB_FAIL(bind_rc) || tmp.size() != 1) {
+                  LOG_WARN("Failed to bind STAR expanded column for aggregate view. rc=%s, size=%zu",
+                      strrc(bind_rc), tmp.size());
+                  delete inner_select;
+                  delete outer_select;
+                  return bind_rc == RC::SUCCESS ? RC::INVALID_ARGUMENT : bind_rc;
+                }
+                final_exprs.emplace_back(std::move(tmp[0]));
+              } else {
+                final_exprs.emplace_back(std::move(candidate));
+              }
+            }
+          }
+          outer_select->query_expressions().swap(final_exprs);
+
+          // 验证外层SelectStmt设置正确
+          LOG_DEBUG("Outer SelectStmt configured: query_exprs=%d, has_aggregation=%s",
+              static_cast<int>(outer_select->query_expressions().size()),
+              outer_select->query_expressions().empty() ? "NO" : "YES");
+          for (size_t i = 0; i < outer_select->query_expressions().size(); i++) {
+            const auto &expr = outer_select->query_expressions()[i];
+            LOG_DEBUG("  expr[%d]: type=%d name=%s",
+                static_cast<int>(i),
+                static_cast<int>(expr->type()),
+                expr->name() ? expr->name() : "(null)");
+          }
 
           stmt = outer_select;
           return RC::SUCCESS;
