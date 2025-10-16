@@ -479,8 +479,11 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
         bool exists = false;
         for (auto *ag : aggregate_expressions) {
           if (expr->equal(*ag)) {
-            LOG_WARN("aggregate collector dedup: expr=%s equals existing=%s (可能导致多聚合被合并)",
-                expr->name(), ag->name());
+            // 发现重复的聚合表达式，设置pos指向已存在的聚合表达式位置
+            // 这样在后续求值时可以正确找到聚合结果
+            expr->set_pos(ag->pos());
+            LOG_DEBUG("aggregate collector dedup: expr=%s equals existing=%s at pos=%d",
+                expr->name(), ag->name(), ag->pos());
             exists = true;
             break;
           }

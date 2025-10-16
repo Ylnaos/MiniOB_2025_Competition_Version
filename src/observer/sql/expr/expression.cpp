@@ -1150,6 +1150,11 @@ unique_ptr<Aggregator> AggregateExpr::create_aggregator() const
 
 RC AggregateExpr::get_value(const Tuple &tuple, Value &value) const
 {
+  // 优先使用 pos（用于去重的聚合表达式）
+  if (pos_ != -1) {
+    return tuple.cell_at(pos_, value);
+  }
+  // 回退到使用 name 查找（用于首次出现的聚合表达式）
   return tuple.find_cell(TupleCellSpec(name()), value);
 }
 
@@ -1478,16 +1483,30 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       rc = child2_->get_value(tuple, arg2);
       if (OB_FAIL(rc)) return rc;
 
+      // 提前检查 NULL 值，避免不必要的类型转换
+      if (arg.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+
       // 支持字符串字面量到向量的自动转换
       Value vec_arg1 = arg;
       Value vec_arg2 = arg2;
       if (arg.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
-        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
+        if (OB_FAIL(rc)) {
+          // 转换失败，返回 NULL（而不是错误）
+          value.set_null();
+          return RC::SUCCESS;
+        }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
-        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
+        if (OB_FAIL(rc)) {
+          // 转换失败，返回 NULL
+          value.set_null();
+          return RC::SUCCESS;
+        }
       }
 
       // 现在使用转换后的向量值
@@ -1769,16 +1788,28 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
         return RC::UNIMPLEMENTED;
       }
 
+      // 提前检查 NULL 值，避免不必要的类型转换
+      if (arg1.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+
       // 执行类型转换和距离计算（复用get_value中的逻辑）
       Value vec_arg1 = arg1;
       Value vec_arg2 = arg2;
       if (arg1.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg1, AttrType::VECTORS, vec_arg1);
-        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
-        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
       }
 
       const int len1 = vec_arg1.length();
@@ -1983,13 +2014,36 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
       case FuncType::COSINE_DISTANCE:
       case FuncType::INNER_PRODUCT: {
         Value argb = has_arg2 ? arg2_col.get_value(i) : Value();
-        if (arg.attr_type() != AttrType::VECTORS || argb.attr_type() != AttrType::VECTORS) return RC::INVALID_ARGUMENT;
-        const int len1 = arg.length();
-        const int len2 = argb.length();
+
+        // 支持字符串字面量到向量的自动转换（与 get_value 保持一致）
+        Value vec_arg1 = arg;
+        Value vec_arg2 = argb;
+
+        // 类型转换：如果参数不是 VECTORS 类型，尝试转换
+        if (arg.attr_type() != AttrType::VECTORS) {
+          RC rc_cast = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
+          if (OB_FAIL(rc_cast)) {
+            // 转换失败（例如 NULL 值或格式错误），返回 NULL
+            out.set_null();
+            break;
+          }
+        }
+        if (argb.attr_type() != AttrType::VECTORS) {
+          RC rc_cast = Value::cast_to(argb, AttrType::VECTORS, vec_arg2);
+          if (OB_FAIL(rc_cast)) {
+            // 转换失败，返回 NULL
+            out.set_null();
+            break;
+          }
+        }
+
+        // 现在使用转换后的向量值进行计算
+        const int len1 = vec_arg1.length();
+        const int len2 = vec_arg2.length();
         if (len1 <= 0 || len2 <= 0 || len1 != len2) { out.set_null(); break; }
         const int dim = len1 / static_cast<int>(sizeof(float));
-        const float *a = reinterpret_cast<const float *>(arg.data());
-        const float *b = reinterpret_cast<const float *>(argb.data());
+        const float *a = reinterpret_cast<const float *>(vec_arg1.data());
+        const float *b = reinterpret_cast<const float *>(vec_arg2.data());
         double acc = 0.0;
         if (func_type_ == FuncType::L2_DISTANCE) {
           for (int j = 0; j < dim; ++j) { double d = (double)a[j] - (double)b[j]; acc += d*d; }
