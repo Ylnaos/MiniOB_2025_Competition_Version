@@ -69,6 +69,24 @@ RC AggregateVecPhysicalOperator::open(Trx *trx)
     rc = RC::SUCCESS;
   }
 
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  // 无论输入是否为空，聚合查询都必须返回一行结果：
+  // COUNT -> 0，其它聚合(SUM/AVG/MIN/MAX)在无输入时返回 NULL
+  // 在 open() 完成后立即 finalize 所有聚合状态到 output_chunk_
+  for (size_t i = 0; i < aggr_values_.size(); i++) {
+    ASSERT(aggregate_expressions_[i]->type() == ExprType::AGGREGATION, "expect aggregation expression");
+    auto *aggregate_expr = static_cast<AggregateExpr *>(aggregate_expressions_[i]);
+    rc = finialize_aggregate_state(aggr_values_.at(i), aggregate_expr->aggregate_type(),
+                                   aggregate_expr->child()->value_type(), output_chunk_.column(i));
+    if (OB_FAIL(rc)) {
+      LOG_INFO("failed to finialize aggregate state. rc=%s", strrc(rc));
+      return rc;
+    }
+  }
+
   return rc;
 }
 
@@ -85,17 +103,8 @@ RC AggregateVecPhysicalOperator::next(Chunk &chunk)
   if (outputed_) {
     return RC::RECORD_EOF;
   }
-  for (size_t i = 0; i < aggr_values_.size(); i++) {
-    auto pos = i;
-    ASSERT(aggregate_expressions_[pos]->type() == ExprType::AGGREGATION, "expect aggregation expression");
-    auto *aggregate_expr = static_cast<AggregateExpr *>(aggregate_expressions_[pos]);
-    RC rc = finialize_aggregate_state(aggr_values_.at(pos), aggregate_expr->aggregate_type(), aggregate_expr->child()->value_type(), output_chunk_.column(i));
-    if (OB_FAIL(rc)) {
-      LOG_INFO("failed to finialize aggregate state. rc=%s", strrc(rc));
-      return rc;
-    }
-  }
 
+  // 聚合状态已在 open() 中完成 finalize，这里只需引用结果
   chunk.reference(output_chunk_);
   outputed_ = true;
 
