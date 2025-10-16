@@ -200,8 +200,10 @@ RC PlainCommunicator::write_result_internal(SessionEvent *event, bool &need_disc
 
   rc = sql_result->open();
   if (OB_FAIL(rc)) {
+    LOG_ERROR("sql_result->open() failed with rc=%s", strrc(rc));
     sql_result->close();
     sql_result->set_return_code(rc);
+    need_disconnect = false;  // 确保不断开连接，返回错误响应
     return write_state(event, need_disconnect);
   }
 

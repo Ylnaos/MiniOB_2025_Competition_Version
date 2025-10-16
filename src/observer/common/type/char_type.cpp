@@ -58,6 +58,7 @@ RC CharType::cast_to(const Value &val, AttrType type, Value &result) const
     case AttrType::VECTORS: {
       std::vector<float> elems;
       if (!VectorType::parse_literal(val.get_string(), elems)) {
+        LOG_WARN("Failed to parse vector literal: '%s'", val.get_string().c_str());
         return RC::INVALID_ARGUMENT;
       }
       result.set_type(AttrType::VECTORS);

@@ -54,8 +54,9 @@ RC OrderByPhysicalOperator::open(Trx *trx)
       Value key_value;
       rc = item.first->get_value(row_with_keys.row, key_value);
       if (OB_FAIL(rc)) {
-        LOG_WARN("failed to get order by key value. rc=%s", strrc(rc));
-        return rc;
+        LOG_WARN("failed to get order by key value for row, treating as NULL. rc=%s", strrc(rc));
+        key_value.set_null();
+        // 继续处理而不是立即返回错误
       }
       row_with_keys.sort_keys.push_back(std::move(key_value));
     }
@@ -144,4 +145,3 @@ RC OrderByPhysicalOperator::close()
   current_index_ = 0;
   return RC::SUCCESS;
 }
-

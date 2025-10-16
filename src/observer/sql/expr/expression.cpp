@@ -1750,9 +1750,74 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
     case FuncType::L2_DISTANCE:
     case FuncType::COSINE_DISTANCE:
     case FuncType::INNER_PRODUCT: {
-      // 这些函数需要两个参数,在try_get_value中不支持常量折叠
-      // 它们的实际计算在get_column中处理
-      return RC::UNIMPLEMENTED;
+      // 支持常量折叠：如果两个参数都是常量，可以直接计算
+      if (!child2_) return RC::INVALID_ARGUMENT;
+
+      Value arg1, arg2;
+      RC rc1 = child_->try_get_value(arg1);
+      RC rc2 = child2_->try_get_value(arg2);
+
+      // 如果有任一参数不是常量，返回UNIMPLEMENTED（保持原有行为）
+      if (OB_FAIL(rc1) || OB_FAIL(rc2)) {
+        return RC::UNIMPLEMENTED;
+      }
+
+      // 执行类型转换和距离计算（复用get_value中的逻辑）
+      Value vec_arg1 = arg1;
+      Value vec_arg2 = arg2;
+      if (arg1.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg1, AttrType::VECTORS, vec_arg1);
+        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
+      }
+      if (arg2.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
+        if (OB_FAIL(rc)) return RC::INVALID_ARGUMENT;
+      }
+
+      const int len1 = vec_arg1.length();
+      const int len2 = vec_arg2.length();
+      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      const int dim = len1 / static_cast<int>(sizeof(float));
+      const float *a = reinterpret_cast<const float *>(vec_arg1.data());
+      const float *b = reinterpret_cast<const float *>(vec_arg2.data());
+      double acc = 0.0;
+      if (func_type_ == FuncType::L2_DISTANCE) {
+        for (int i = 0; i < dim; ++i) {
+          double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+          acc += d * d;
+        }
+        acc = std::sqrt(acc);
+      } else if (func_type_ == FuncType::INNER_PRODUCT) {
+        for (int i = 0; i < dim; ++i) {
+          acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+        }
+      } else {  // COSINE_DISTANCE
+        double dot = 0.0, na = 0.0, nb = 0.0;
+        for (int i = 0; i < dim; ++i) {
+          double va = static_cast<double>(a[i]);
+          double vb = static_cast<double>(b[i]);
+          dot += va * vb;
+          na += va * va;
+          nb += vb * vb;
+        }
+        if (na <= 0.0 || nb <= 0.0) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
+        double cos = dot / (std::sqrt(na) * std::sqrt(nb));
+        acc = 1.0 - cos;
+        if (acc < 0.0 && std::fabs(acc) < 1e-6) {
+          acc = 0.0;
+        }
+      }
+      // 保留两位小数
+      double p = std::pow(10.0, 2.0);
+      double rf = round_half_to_even(acc * p) / p;
+      value.set_float(static_cast<float>(rf));
+      return RC::SUCCESS;
     }
     case FuncType::STRING_TO_VECTOR:
     case FuncType::VECTOR_TO_STRING:
