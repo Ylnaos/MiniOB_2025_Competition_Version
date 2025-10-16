@@ -8,7 +8,9 @@
       "Bash(dir:*)",
       "mcp__codex__codex",
       "Read(//d/迅雷下载/miniob-2024-main/miniob-2024-main/**)",
-      "Bash(python miniob_test.py:*)"
+      "Bash(python miniob_test.py:*)",
+      "Bash(git log:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

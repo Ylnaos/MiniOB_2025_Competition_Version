@@ -211,6 +211,41 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
   return rc;
 }
 
+void reset_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrType attr_type)
+{
+  if (state == nullptr) {
+    return;
+  }
+
+  if (aggr_type == AggregateExpr::Type::SUM) {
+    if (attr_type == AttrType::INTS) {
+      auto *st = static_cast<SumState<int> *>(state);
+      st->value     = 0;
+      st->has_value = false;
+    } else if (attr_type == AttrType::FLOATS) {
+      auto *st = static_cast<SumState<float> *>(state);
+      st->value     = 0.0f;
+      st->has_value = false;
+    }
+  } else if (aggr_type == AggregateExpr::Type::COUNT) {
+    auto *st = static_cast<CountState<int> *>(state);
+    st->value = 0;
+  } else if (aggr_type == AggregateExpr::Type::AVG) {
+    if (attr_type == AttrType::INTS) {
+      auto *st = static_cast<AvgState<int> *>(state);
+      st->value = 0;
+      st->count = 0;
+    } else if (attr_type == AttrType::FLOATS) {
+      auto *st = static_cast<AvgState<float> *>(state);
+      st->value = 0.0f;
+      st->count = 0;
+    }
+  } else if (aggr_type == AggregateExpr::Type::MAX || aggr_type == AggregateExpr::Type::MIN) {
+    auto *st = static_cast<MinMaxState *>(state);
+    st->has_value = false;
+  }
+}
+
 template <class STATE, typename T>
 void update_aggregate_state(void *state, const Column &column)
 {

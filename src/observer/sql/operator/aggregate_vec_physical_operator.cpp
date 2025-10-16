@@ -42,6 +42,16 @@ AggregateVecPhysicalOperator::AggregateVecPhysicalOperator(vector<Expression *> 
 
 RC AggregateVecPhysicalOperator::open(Trx *trx)
 {
+  // Reset internal states so the operator can be reopened safely (join RHS, subquery, view, etc.)
+  outputed_ = false;
+  output_chunk_.reset_data();
+  for (size_t i = 0; i < aggregate_expressions_.size(); i++) {
+    ASSERT(aggregate_expressions_[i]->type() == ExprType::AGGREGATION, "expect aggregation expression");
+    auto *aggregate_expr = static_cast<AggregateExpr *>(aggregate_expressions_[i]);
+    reset_aggregate_state(
+        aggr_values_.at(i), aggregate_expr->aggregate_type(), aggregate_expr->child()->value_type());
+  }
+
   ASSERT(children_.size() == 1, "group by operator only support one child, but got %d", children_.size());
 
   PhysicalOperator &child = *children_[0];
