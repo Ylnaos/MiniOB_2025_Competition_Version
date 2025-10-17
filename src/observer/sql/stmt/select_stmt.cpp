@@ -430,7 +430,17 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 child = uagg->child()->copy();
               }
               unique_ptr<Expression> agg_expr = make_unique<AggregateExpr>(agg_type, std::move(child));
-              agg_expr->set_name(uagg->name());
+              // 设置聚合表达式的名字
+              // 如果原始表达式有名字，使用它；否则生成默认名字 (如 "COUNT(*)")
+              const char *name = uagg->name();
+              if (name == nullptr || name[0] == '\0') {
+                // 生成默认名字，格式: "AGGREGATE_NAME(*)"
+                string default_name = string(uagg->aggregate_name()) + "(*)";
+                agg_expr->set_name(default_name);  // set_name 接受 string，会自动复制
+                LOG_DEBUG("  Generated default name '%s' for aggregate expression", default_name.c_str());
+              } else {
+                agg_expr->set_name(string(name));
+              }
               if (uagg->alias()) agg_expr->set_alias(uagg->alias());
               bound_exprs.push_back(std::move(agg_expr));
             } else {

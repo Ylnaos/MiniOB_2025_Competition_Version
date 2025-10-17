@@ -136,7 +136,33 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
       group_by_oper->add_child(std::move(last_oper));
       last_oper = std::move(group_by_oper);
     } else {
-      LOG_WARN("Outer query has NO GroupBy operator - this may be unexpected for aggregation query");
+      // 检查外层查询是否包含聚合表达式
+      // 如果包含聚合表达式但 GroupBy 算子未创建,说明有 bug
+      bool has_agg = false;
+      for (const auto &expr : select_stmt->query_expressions()) {
+        if (expr && expr->type() == ExprType::AGGREGATION) {
+          has_agg = true;
+          break;
+        }
+      }
+
+      if (has_agg) {
+        // 有聚合表达式但没有创建 GroupBy 算子,这是严重错误
+        LOG_ERROR("CRITICAL: Outer query has aggregate expressions but NO GroupBy operator! "
+                  "query_expressions size=%d",
+                  static_cast<int>(select_stmt->query_expressions().size()));
+        for (size_t i = 0; i < select_stmt->query_expressions().size(); i++) {
+          const auto &expr = select_stmt->query_expressions()[i];
+          LOG_ERROR("  expr[%d]: type=%d name=%s",
+              static_cast<int>(i),
+              static_cast<int>(expr->type()),
+              expr->name() ? expr->name() : "(null)");
+        }
+        return RC::INTERNAL;
+      } else {
+        // 外层查询没有聚合表达式(如 SELECT * FROM view),不需要 GroupBy 算子
+        LOG_DEBUG("Outer query has NO aggregation (e.g., SELECT * FROM view), no GroupBy needed");
+      }
     }
 
     // 添加外层的PROJECT算子
@@ -542,16 +568,34 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   }
 
   // collect all aggregate expressions（来自 SELECT 列与 HAVING 表达式）
-  for (unique_ptr<Expression> &expression : query_expressions) {
-    collector(expression);
+  LOG_DEBUG("create_group_by_plan: collecting aggregate expressions from %d query expressions",
+      static_cast<int>(query_expressions.size()));
+  for (size_t idx = 0; idx < query_expressions.size(); idx++) {
+    const auto &expression = query_expressions[idx];
+    LOG_DEBUG("  [%d] before collect: type=%d (%s) name=%s",
+        static_cast<int>(idx),
+        static_cast<int>(expression->type()),
+        expression->type() == ExprType::AGGREGATION ? "AGGREGATION" :
+        expression->type() == ExprType::UNBOUND_AGGREGATION ? "UNBOUND_AGGREGATION" :
+        expression->type() == ExprType::FIELD ? "FIELD" :
+        expression->type() == ExprType::VALUE ? "VALUE" : "OTHER",
+        expression->name() ? expression->name() : "(null)");
+    collector(query_expressions[idx]);
   }
   if (select_stmt->having_expr()) {
+    LOG_DEBUG("  collecting from HAVING expression");
     collector(select_stmt->having_expr());
   }
 
-  LOG_DEBUG("create_group_by_plan: group_by count=%d aggregate count=%d",
+  LOG_DEBUG("create_group_by_plan: after collection: group_by count=%d aggregate count=%d",
       static_cast<int>(group_by_expressions.size()),
       static_cast<int>(aggregate_expressions.size()));
+  for (size_t i = 0; i < aggregate_expressions.size(); i++) {
+    LOG_DEBUG("  aggregate[%d]: name=%s pos=%d",
+        static_cast<int>(i),
+        aggregate_expressions[i]->name() ? aggregate_expressions[i]->name() : "(null)",
+        aggregate_expressions[i]->pos());
+  }
 
   if (group_by_expressions.empty() && aggregate_expressions.empty()) {
     // 既没有group by也没有聚合函数，不需要group by
