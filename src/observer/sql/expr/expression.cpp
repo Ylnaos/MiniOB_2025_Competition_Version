@@ -1150,11 +1150,6 @@ unique_ptr<Aggregator> AggregateExpr::create_aggregator() const
 
 RC AggregateExpr::get_value(const Tuple &tuple, Value &value) const
 {
-  // 优先使用 pos（用于去重的聚合表达式）
-  if (pos_ != -1) {
-    return tuple.cell_at(pos_, value);
-  }
-  // 回退到使用 name 查找（用于首次出现的聚合表达式）
   return tuple.find_cell(TupleCellSpec(name()), value);
 }
 
