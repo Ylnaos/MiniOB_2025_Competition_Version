@@ -455,6 +455,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             ExpressionBinder subquery_binder(subquery_binder_context);
             for (auto &candidate : bound_exprs) {
               if (candidate != nullptr && candidate->type() == ExprType::UNBOUND_FIELD) {
+                // 绑定 UNBOUND_FIELD（如 SELECT * 展开的列）
                 vector<unique_ptr<Expression>> tmp;
                 RC bind_rc = subquery_binder.bind_expression(candidate, tmp);
                 if (OB_FAIL(bind_rc) || tmp.size() != 1) {
@@ -465,6 +466,22 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                   return bind_rc == RC::SUCCESS ? RC::INVALID_ARGUMENT : bind_rc;
                 }
                 final_exprs.emplace_back(std::move(tmp[0]));
+              } else if (candidate != nullptr && candidate->type() == ExprType::AGGREGATION) {
+                // 绑定 AGGREGATION 的子表达式（如 SUM(num) 中的 num）
+                auto *agg = static_cast<AggregateExpr *>(candidate.get());
+                vector<unique_ptr<Expression>> tmp;
+                RC bind_rc = subquery_binder.bind_expression(agg->child(), tmp);
+                if (OB_FAIL(bind_rc) || tmp.size() != 1) {
+                  LOG_WARN("Failed to bind aggregate child expression for view. rc=%s, size=%zu",
+                      strrc(bind_rc), tmp.size());
+                  delete inner_select;
+                  delete outer_select;
+                  return bind_rc == RC::SUCCESS ? RC::INVALID_ARGUMENT : bind_rc;
+                }
+                // 用绑定后的表达式替换聚合函数的子表达式
+                agg->child().reset(tmp[0].release());
+                LOG_DEBUG("Successfully bound aggregate expression child for view");
+                final_exprs.emplace_back(std::move(candidate));
               } else {
                 final_exprs.emplace_back(std::move(candidate));
               }
