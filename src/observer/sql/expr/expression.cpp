@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_iterator.h"
 #include <cmath>
+#include <limits>
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -233,7 +234,30 @@ if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
     return RC::SUCCESS;
   }
 
-  int cmp_result = left.compare(right);
+  auto is_numeric = [](AttrType t) {
+    return t == AttrType::INTS || t == AttrType::FLOATS;
+  };
+
+  int cmp_result = 0;
+  if ((left.attr_type() == AttrType::FLOATS || right.attr_type() == AttrType::FLOATS) && is_numeric(left.attr_type())
+      && is_numeric(right.attr_type())) {
+    double left_num  = static_cast<double>(left.get_float());
+    double right_num = static_cast<double>(right.get_float());
+    double base_tol =
+        static_cast<double>(std::numeric_limits<float>::epsilon())
+        * std::max({std::fabs(left_num), std::fabs(right_num), 1.0});
+    double tol = std::max(1e-6, std::min(0.005, base_tol * 8.0));
+    double diff = left_num - right_num;
+    if (diff > tol) {
+      cmp_result = 1;
+    } else if (diff < -tol) {
+      cmp_result = -1;
+    } else {
+      cmp_result = 0;
+    }
+  } else {
+    cmp_result = left.compare(right);
+  }
   switch (comp_) {
     case EQUAL_TO: {
       result = (0 == cmp_result);

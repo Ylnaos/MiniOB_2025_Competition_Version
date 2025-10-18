@@ -280,8 +280,15 @@ static inline double round_half_away_from_zero(double x)
 string double_to_str(double v)
 {
   char buf[256];
-  // 标准四舍五入，先按两位小数放大，再执行 round 再缩放
-  double rounded_v = round_half_away_from_zero(v * 100.0) / 100.0;
+  // 先扩大 100 倍，再执行"远离零"的四舍五入。为抵消 float->double 过程中常见的尾数丢失，
+  // 引入一个极小的校正量（与符号一致），避免 155.764999... 等值被错误截断到 155.76。
+  constexpr double SCALE_FACTOR = 100.0;
+  constexpr double ROUNDING_FUDGE = 1e-4;  // 影响到原值约 1e-6，足以覆盖 float32 的表示误差
+
+  double scaled = v * SCALE_FACTOR;
+  double fudge  = (std::fabs(scaled) < 1e-9) ? 0.0 : std::copysign(ROUNDING_FUDGE, scaled);
+  double rounded_v = round_half_away_from_zero(scaled + fudge) / SCALE_FACTOR;
+
   if (rounded_v == 0.0) {
     // 避免输出负零，统一归一化为正零
     rounded_v = 0.0;

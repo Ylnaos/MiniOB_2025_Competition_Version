@@ -243,17 +243,32 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     vector<vector<float>> new_centroids(k, vector<float>(dim, 0.0f));
     vector<int> counts(k, 0);
 
-    for (size_t i = 0; i < n; ++i) {
-      int cluster = assignments[i];
-      if (cluster >= 0 && cluster < k) {
-        counts[cluster]++;
-        for (size_t d = 0; d < dim; ++d) {
-          new_centroids[cluster][d] += vectors[i][d];
-        }
+    auto accumulate_point = [&](size_t data_index) {
+      if (data_index >= n) {
+        return;
+      }
+      int cluster = assignments[data_index];
+      if (cluster < 0 || cluster >= k) {
+        return;
+      }
+      counts[cluster]++;
+      const vector<float> &vec = vectors[data_index];
+      for (size_t d = 0; d < dim; ++d) {
+        new_centroids[cluster][d] += vec[d];
+      }
+    };
+
+    if (use_mini_batch) {
+      for (size_t idx : sample_indices) {
+        accumulate_point(idx);
+      }
+    } else {
+      for (size_t idx = 0; idx < n; ++idx) {
+        accumulate_point(idx);
       }
     }
 
-    float max_shift = 0.0f;
+    float max_shift_sq = 0.0f;
     for (int j = 0; j < k; ++j) {
       if (counts[j] > 0) {
         float inv_count = 1.0f / static_cast<float>(counts[j]);
@@ -262,14 +277,14 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
         }
         // 使用平方距离计算shift（开根号得到真实shift）
         float shift_sq = compute_l2_squared(centroids_[j], new_centroids[j]);
-        float shift = std::sqrt(shift_sq);
-        if (shift > max_shift) {
-          max_shift = shift;
+        if (shift_sq > max_shift_sq) {
+          max_shift_sq = shift_sq;
         }
         centroids_[j] = new_centroids[j];
       }
     }
 
+    float max_shift = std::sqrt(max_shift_sq);
     // 优化的早停策略：跟踪最近3次的shift
     recent_shifts.push_back(max_shift);
     if (recent_shifts.size() > 3) {
@@ -546,6 +561,13 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
 
   std::vector<std::mutex> list_mutexes(actual_lists);
 
+  size_t avg_list_size = actual_lists > 0 ? (total_vectors + actual_lists - 1) / actual_lists : 0;
+  for (auto &list : inverted_lists_) {
+    if (avg_list_size > 0) {
+      list.reserve(avg_list_size);
+    }
+  }
+
   auto assign_to_list = [this, &all_vectors, &all_rids, &list_mutexes, actual_lists](size_t start, size_t end) {
     for (size_t i = start; i < end; ++i) {
       float min_dist_sq = std::numeric_limits<float>::max();
@@ -560,7 +582,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
       }
 
       std::lock_guard<std::mutex> lock(list_mutexes[best_cluster]);
-      this->inverted_lists_[best_cluster].emplace_back(all_rids[i], all_vectors[i]);
+      this->inverted_lists_[best_cluster].emplace_back(all_rids[i], std::move(all_vectors[i]));
     }
   };
 
@@ -761,8 +783,8 @@ vector<int> IvfflatIndex::find_nearest_clusters(const vector<float> &query_vecto
   distances.reserve(centroids_.size());
 
   for (size_t i = 0; i < centroids_.size(); ++i) {
-    float dist = compute_l2_distance(query_vector, centroids_[i]);
-    distances.emplace_back(dist, static_cast<int>(i));
+    float dist_sq = compute_l2_squared(query_vector, centroids_[i]);
+    distances.emplace_back(dist_sq, static_cast<int>(i));
   }
 
   // 鎺掑簭骞惰繑鍥炴渶杩戠殑n涓?
@@ -785,6 +807,9 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
     LOG_WARN("Index not initialized or no centroids");
     return {};
   }
+  if (limit == 0) {
+    return {};
+  }
 
   if (query_vector.size() != static_cast<size_t>(dimension_)) {
     LOG_WARN("Query vector dimension mismatch: expected=%d, got=%zu", dimension_, query_vector.size());
@@ -800,6 +825,11 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
   };
   std::priority_queue<pair<float, RID>, vector<pair<float, RID>>, decltype(cmp)> top_k(cmp);
   // 鍦ㄩ€変腑鐨勭皣涓繘琛岀簿纭悳绱?
+  const float *query_data = query_vector.data();
+  const size_t dim = static_cast<size_t>(dimension_);
+  if (dim == 0) {
+    return {};
+  }
   for (int cluster_id : nearest_clusters) {
     if (cluster_id < 0 || cluster_id >= static_cast<int>(inverted_lists_.size())) {
       continue;
@@ -807,13 +837,29 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
 
     const auto &entries = inverted_lists_[cluster_id];
     for (const auto &entry : entries) {
-      float dist = compute_l2_distance(query_vector, entry.vector_data);
+      const float *vec_data = entry.vector_data.data();
+      if (vec_data == nullptr) {
+        continue;
+      }
+      float dist_sq = 0.0f;
+      float cutoff = (top_k.size() == limit && limit > 0) ? top_k.top().first : std::numeric_limits<float>::max();
+      for (size_t d = 0; d < dim; ++d) {
+        float diff = query_data[d] - vec_data[d];
+        dist_sq += diff * diff;
+        if (dist_sq >= cutoff) {
+          break;
+        }
+      }
+
+      if (top_k.size() == limit && limit > 0 && dist_sq >= cutoff) {
+        continue;
+      }
 
       if (top_k.size() < limit) {
-        top_k.emplace(dist, entry.rid);
-      } else if (dist < top_k.top().first) {
+        top_k.emplace(dist_sq, entry.rid);
+      } else if (dist_sq < top_k.top().first) {
         top_k.pop();
-        top_k.emplace(dist, entry.rid);
+        top_k.emplace(dist_sq, entry.rid);
       }
     }
   }

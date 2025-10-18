@@ -97,8 +97,8 @@ RC TableMeta::init(int32_t table_id, const char *name, const vector<FieldMeta> *
     int vector_dim = 0;
     if (attr_info.type == AttrType::VECTORS) {
       // 将 vector(N) 的长度解释为维度，存储按 float(N) 字节数
-      if (field_len < 0 || field_len > 16000) {
-        LOG_WARN("invalid vector dimension: %d (must be 0..16000)", field_len);
+      if (field_len < 0 || field_len > 16383) {
+        LOG_WARN("invalid vector dimension: %d (must be 0..16383)", field_len);
         return RC::INVALID_ARGUMENT;
       }
       vector_dim = field_len;
