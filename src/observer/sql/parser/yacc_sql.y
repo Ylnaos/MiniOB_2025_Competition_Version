@@ -556,7 +556,8 @@ attr_def:
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = 4;
+      // VECTOR 类型默认维度为 2048，其他类型默认为 4
+      $$->length = ($$->type == AttrType::VECTORS) ? 2048 : 4;
       $$->nullable = ($3 != 0);
     }
     ;

@@ -23,8 +23,13 @@ struct IvfEntry
   RID           rid;
   vector<float> vector_data;
 
-  IvfEntry() = default;
+  IvfEntry()                                   = default;
   IvfEntry(const RID &r, const vector<float> &v) : rid(r), vector_data(v) {}
+  IvfEntry(const RID &r, vector<float> &&v) : rid(r), vector_data(std::move(v)) {}
+  IvfEntry(const IvfEntry &)            = default;
+  IvfEntry &operator=(const IvfEntry &) = default;
+  IvfEntry(IvfEntry &&) noexcept        = default;
+  IvfEntry &operator=(IvfEntry &&) noexcept = default;
 };
 
 /**
