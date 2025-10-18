@@ -18,12 +18,14 @@ See the Mulan PSL v2 for more details. */
 #include <fstream>
 #include <algorithm>
 #include <random>
-#include <queue>
 #include <cmath>
 #include <limits>
 #include <atomic>
 #include <thread>
+#include <mutex>
+#include <iterator>
 #include <numeric>
+#include <cstring>
 
 namespace {
 
@@ -107,7 +109,47 @@ inline float l2_squared_with_cap(const float *a, const float *b, size_t dim, flo
   return total;
 }
 
+inline float dot_product_unrolled(const float *a, const float *b, size_t dim)
+{
+  size_t i     = 0;
+  size_t bound = dim & ~static_cast<size_t>(7);
+
+  float sum0 = 0.0f;
+  float sum1 = 0.0f;
+  float sum2 = 0.0f;
+  float sum3 = 0.0f;
+  float sum4 = 0.0f;
+  float sum5 = 0.0f;
+  float sum6 = 0.0f;
+  float sum7 = 0.0f;
+
+  for (; i < bound; i += 8) {
+    sum0 += a[i] * b[i];
+    sum1 += a[i + 1] * b[i + 1];
+    sum2 += a[i + 2] * b[i + 2];
+    sum3 += a[i + 3] * b[i + 3];
+    sum4 += a[i + 4] * b[i + 4];
+    sum5 += a[i + 5] * b[i + 5];
+    sum6 += a[i + 6] * b[i + 6];
+    sum7 += a[i + 7] * b[i + 7];
+  }
+
+  float total = ((sum0 + sum1) + (sum2 + sum3)) + ((sum4 + sum5) + (sum6 + sum7));
+
+  for (; i < dim; ++i) {
+    total += a[i] * b[i];
+  }
+
+  return total;
+}
+
 }  // namespace
+
+namespace {
+
+thread_local std::vector<char> g_lob_tmp_buffer;
+
+}
 
 IvfflatIndex::~IvfflatIndex() noexcept
 {
@@ -249,7 +291,7 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
 
   int effective_max_iter = std::max(1, max_iter);
   if (use_mini_batch) {
-    effective_max_iter = std::min(effective_max_iter, 40);
+    effective_max_iter = std::min(effective_max_iter, 15);
   }
 
   for (int iter = 0; iter < effective_max_iter; ++iter) {
@@ -390,6 +432,7 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     }
   }
 
+  refresh_centroid_norms();
   LOG_INFO("K-Means clustering completed with k=%d, iterations=%d", k, completed_iterations);
 }
 
@@ -415,7 +458,6 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
 
   const char      *payload = nullptr;
   int              payload_len = 0;
-  std::vector<char> tmp_buffer;
 
   if (vector_lob) {
     LobRef ref;
@@ -429,6 +471,7 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
       LOG_WARN("Table or LOB handler unavailable when extracting vector");
       return RC::INTERNAL;
     }
+    auto &tmp_buffer = g_lob_tmp_buffer;
     tmp_buffer.resize(static_cast<size_t>(ref.length));
     RC rc = table_->lob_handler()->get_data(ref.offset, ref.length, tmp_buffer.data());
     if (rc != RC::SUCCESS) {
@@ -454,7 +497,8 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
   }
 
   const float *float_data = reinterpret_cast<const float *>(payload);
-  vec.assign(float_data, float_data + actual_dim);
+  vec.resize(actual_dim);
+  std::memcpy(vec.data(), float_data, static_cast<size_t>(payload_len));
 
   return RC::SUCCESS;
 }
@@ -511,6 +555,257 @@ void IvfflatIndex::apply_meta_config(const IndexMeta &index_meta)
 
   LOG_INFO("IVF-Flat meta config: index_type=%s distance=%s lists=%d probes=%d",
            index_type_.c_str(), distance_type_.c_str(), lists_, probes_);
+}
+
+RC IvfflatIndex::enqueue_pending_entry(IvfEntry &&entry, bool force_flush)
+{
+  std::vector<IvfEntry> batch;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_entries_.emplace_back(std::move(entry));
+    if (!force_flush && pending_entries_.size() < pending_batch_limit_) {
+      return RC::SUCCESS;
+    }
+    batch.swap(pending_entries_);
+  }
+
+  RC rc = process_batch(batch);
+  if (rc != RC::SUCCESS) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_entries_.insert(
+        pending_entries_.end(), std::make_move_iterator(batch.begin()), std::make_move_iterator(batch.end()));
+  }
+  return rc;
+}
+
+RC IvfflatIndex::flush_pending_entries()
+{
+  if (!inited_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_entries_.clear();
+    return RC::SUCCESS;
+  }
+
+  std::vector<IvfEntry> batch;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pending_entries_.empty()) {
+      return RC::SUCCESS;
+    }
+    batch.swap(pending_entries_);
+  }
+
+  RC rc = process_batch(batch);
+  if (rc != RC::SUCCESS) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_entries_.insert(
+        pending_entries_.end(), std::make_move_iterator(batch.begin()), std::make_move_iterator(batch.end()));
+  }
+  return rc;
+}
+
+RC IvfflatIndex::process_batch(std::vector<IvfEntry> &batch)
+{
+  if (batch.empty()) {
+    return RC::SUCCESS;
+  }
+
+  if (centroids_.empty()) {
+    LOG_WARN("Centroids missing before batch insert, rebuild default clusters");
+
+    if (dimension_ <= 0) {
+      LOG_WARN("Invalid dimension while rebuilding centroids");
+      return RC::INTERNAL;
+    }
+
+    lists_  = std::max(1, lists_);
+    probes_ = std::max(1, std::min(probes_, lists_));
+
+    centroids_.assign(lists_, std::vector<float>(dimension_, 0.0f));
+    inverted_lists_.assign(lists_, std::vector<IvfEntry>());
+    centroid_norms_.assign(lists_, 0.0f);
+  }
+
+  const size_t lists = centroids_.size();
+  if (lists == 0) {
+    return RC::SUCCESS;
+  }
+
+  if (centroid_norms_.size() != lists) {
+    refresh_centroid_norms();
+  }
+
+  std::vector<int> assignments(batch.size(), 0);
+  const size_t     dim = (dimension_ > 0) ? static_cast<size_t>(dimension_)
+                                          : (batch.empty() ? 0 : batch.front().vector_data.size());
+
+  if (dim == 0) {
+    LOG_WARN("Invalid dimension detected while processing batch insert");
+    return RC::INTERNAL;
+  }
+
+  const size_t max_threads = std::max<size_t>(1, std::thread::hardware_concurrency());
+  const size_t worker_count =
+      std::max<size_t>(1, std::min({max_threads, batch.size(), static_cast<size_t>(lists)}));
+  const size_t block_size = (batch.size() + worker_count - 1) / worker_count;
+
+  std::vector<std::vector<size_t>> local_counts(worker_count, std::vector<size_t>(lists, 0));
+
+  auto assign_worker = [&](size_t worker_id, size_t start, size_t end) {
+    auto &counts_local = local_counts[worker_id];
+    for (size_t i = start; i < end; ++i) {
+      const float *vec_ptr = batch[i].vector_data.data();
+      float        vec_norm_sq = batch[i].norm_sq;
+      if (vec_norm_sq <= 0.0f) {
+        vec_norm_sq = l2_squared_unrolled(vec_ptr, vec_ptr, dim);
+        batch[i].norm_sq = vec_norm_sq;
+      }
+
+      float min_dist_sq = std::numeric_limits<float>::max();
+      int   best_cluster = 0;
+
+      for (size_t j = 0; j < lists; ++j) {
+        float dot     = dot_product_unrolled(vec_ptr, centroids_[j].data(), dim);
+        float dist_sq = centroid_norms_[j] + vec_norm_sq - 2.0f * dot;
+        if (dist_sq < 0.0f) {
+          dist_sq = 0.0f;
+        }
+        if (dist_sq < min_dist_sq) {
+          min_dist_sq = dist_sq;
+          best_cluster = static_cast<int>(j);
+        }
+      }
+
+      assignments[i] = best_cluster;
+      counts_local[best_cluster]++;
+    }
+  };
+
+  if (worker_count == 1) {
+    assign_worker(0, 0, batch.size());
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (size_t worker_id = 0; worker_id < worker_count; ++worker_id) {
+      size_t start = worker_id * block_size;
+      if (start >= batch.size()) {
+        break;
+      }
+      size_t end = std::min(start + block_size, batch.size());
+      workers.emplace_back(assign_worker, worker_id, start, end);
+    }
+    for (auto &worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+  }
+
+  std::vector<size_t> counts(lists, 0);
+  for (size_t worker_id = 0; worker_id < local_counts.size(); ++worker_id) {
+    for (size_t j = 0; j < lists; ++j) {
+      counts[j] += local_counts[worker_id][j];
+    }
+  }
+
+  // 优化锁策略：先预留空间，再插入数据（两次短锁替代一次长锁）
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (size_t cluster = 0; cluster < lists; ++cluster) {
+      if (counts[cluster] > 0) {
+        size_t current = inverted_lists_[cluster].size();
+        size_t needed = current + counts[cluster];
+        // 预留20%额外空间，减少后续realloc
+        size_t reserved = static_cast<size_t>(needed * 1.2);
+        if (reserved > inverted_lists_[cluster].capacity()) {
+          inverted_lists_[cluster].reserve(reserved);
+        }
+      }
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (size_t i = 0; i < batch.size(); ++i) {
+      inverted_lists_[assignments[i]].emplace_back(std::move(batch[i]));
+    }
+  }
+
+  // 优化零质心检测：只在第一次检测，避免重复O(lists×dim)开销
+  if (!centroids_ready_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!centroids_ready_) {  // 双重检查锁定
+      bool has_zero_centroids = true;
+      for (const auto &centroid : centroids_) {
+        for (float val : centroid) {
+          if (std::abs(val) > 1e-9f) {
+            has_zero_centroids = false;
+            break;
+          }
+        }
+        if (!has_zero_centroids) {
+          break;
+        }
+      }
+
+      if (has_zero_centroids) {
+    size_t total_vectors = 0;
+    for (const auto &list : inverted_lists_) {
+      total_vectors += list.size();
+    }
+
+    if (total_vectors >= static_cast<size_t>(lists_ * 2)) {
+      LOG_INFO("Rebuilding index with %zu vectors after zero-centroid detection", total_vectors);
+
+      vector<vector<float>> all_vectors;
+      all_vectors.reserve(total_vectors);
+      for (const auto &list : inverted_lists_) {
+        for (const auto &entry : list) {
+          all_vectors.push_back(entry.vector_data);
+        }
+      }
+
+      int actual_lists = std::min(static_cast<int>(lists), static_cast<int>(all_vectors.size()));
+      if (actual_lists > 0) {
+        kmeans_clustering(all_vectors, actual_lists, 50);
+
+        vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
+        for (const auto &list : inverted_lists_) {
+          for (const auto &entry : list) {
+            float        min_d_sq = std::numeric_limits<float>::max();
+            int          best_c   = 0;
+            const float *vec_ptr2 = entry.vector_data.data();
+            for (int j = 0; j < actual_lists; ++j) {
+              float d_sq = l2_squared_unrolled(vec_ptr2, centroids_[j].data(), dim);
+              if (d_sq < min_d_sq) {
+                min_d_sq = d_sq;
+                best_c   = j;
+              }
+            }
+            new_inverted_lists[best_c].push_back(entry);
+          }
+        }
+        inverted_lists_ = std::move(new_inverted_lists);
+        LOG_INFO("Index rebuilt successfully with %d clusters", actual_lists);
+      }
+    }
+      }
+      // 标记质心已就绪，后续batch无需重复检测
+      centroids_ready_ = true;
+    }
+  }
+
+  return RC::SUCCESS;
+}
+
+void IvfflatIndex::refresh_centroid_norms()
+{
+  centroid_norms_.resize(centroids_.size());
+  for (size_t i = 0; i < centroids_.size(); ++i) {
+    const auto &centroid = centroids_[i];
+    centroid_norms_[i] = centroid.empty() ? 0.0f
+                                         : l2_squared_unrolled(centroid.data(), centroid.data(), centroid.size());
+  }
 }
 
 RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &index_meta, span<const FieldMeta> field_metas)
@@ -627,7 +922,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   lists_  = actual_lists;
   LOG_INFO("Finalize IVF-Flat index config: requested_lists=%d actual_lists=%d probes=%d",
            requested_lists, lists_, probes_);
-  kmeans_clustering(all_vectors, actual_lists, 100);
+  kmeans_clustering(all_vectors, actual_lists, 30);
 
   // 鍒濆鍖栧€掓帓鍒楄〃
   inverted_lists_.resize(actual_lists);
@@ -659,7 +954,9 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
         }
       }
 
-      local_lists[best_cluster].emplace_back(all_rids[i], std::move(all_vectors[i]));
+      auto &entry = local_lists[best_cluster].emplace_back(all_rids[i], std::move(all_vectors[i]));
+      entry.norm_sq = entry.vector_data.empty() ? 0.0f
+                      : l2_squared_unrolled(entry.vector_data.data(), entry.vector_data.data(), entry.vector_data.size());
     }
   };
 
@@ -755,6 +1052,11 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
 
 RC IvfflatIndex::close()
 {
+  flush_pending_entries();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_entries_.clear();
+  }
   if (inited_) {
     LOG_INFO("Closing IVF-Flat index");
     centroids_.clear();
@@ -770,110 +1072,16 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
     return RC::INTERNAL;
   }
 
-  // 鎻愬彇鍚戦噺
   vector<float> vec;
   RC rc = extract_vector_from_record(record, vec);
   if (rc != RC::SUCCESS) {
     return rc;
   }
 
-  // 鎵惧埌鏈€杩戠殑鑱氱被涓績
-  if (centroids_.empty()) {
-    LOG_WARN("Centroids missing before insert, rebuild default clusters");
-
-    if (dimension_ <= 0) {
-      LOG_WARN("Invalid dimension while rebuilding centroids");
-      return RC::INTERNAL;
-    }
-
-    lists_  = std::max(1, lists_);
-    probes_ = std::max(1, std::min(probes_, lists_));
-
-    centroids_.assign(lists_, std::vector<float>(dimension_, 0.0f));
-    inverted_lists_.assign(lists_, std::vector<IvfEntry>());
-  }
-
-  float        min_dist_sq = std::numeric_limits<float>::max();
-  int          best_cluster = 0;
-  const float *vec_ptr      = vec.data();
-  const size_t dim          = vec.size();
-
-  for (size_t i = 0; i < centroids_.size(); ++i) {
-    float dist_sq = l2_squared_unrolled(vec_ptr, centroids_[i].data(), dim);
-    if (dist_sq < min_dist_sq) {
-      min_dist_sq = dist_sq;
-      best_cluster = static_cast<int>(i);
-    }
-  }
-
-  // 鎻掑叆鍒板€掓帓鍒楄〃
-  inverted_lists_[best_cluster].emplace_back(*rid, vec);
-
-  // 妫€鏌ユ槸鍚﹂渶瑕侀噸寤虹储寮曪紙濡傛灉centroids_鏄叏闆朵笖宸茬疮绉冻澶熸暟鎹級
-  bool has_zero_centroids = true;
-  for (const auto &centroid : centroids_) {
-    for (float val : centroid) {
-      if (std::abs(val) > 1e-9f) {
-        has_zero_centroids = false;
-        break;
-      }
-    }
-    if (!has_zero_centroids) {
-      break;
-    }
-  }
-
-  if (has_zero_centroids) {
-    // 缁熻褰撳墠宸叉彃鍏ョ殑鍚戦噺鎬绘暟
-    size_t total_vectors = 0;
-    for (const auto &list : inverted_lists_) {
-      total_vectors += list.size();
-    }
-
-    // 濡傛灉宸叉湁瓒冲鐨勫悜閲忥紙鑷冲皯鏄痩ists_鐨?鍊嶏級锛岃Е鍙戦噸寤?
-    if (total_vectors >= static_cast<size_t>(lists_ * 2)) {
-      LOG_INFO("Rebuilding index with %zu vectors after zero-centroid detection", total_vectors);
-
-      // 鏀堕泦鎵€鏈夊悜閲?
-      vector<vector<float>> all_vectors;
-      all_vectors.reserve(total_vectors);
-      for (const auto &list : inverted_lists_) {
-        for (const auto &entry : list) {
-          all_vectors.push_back(entry.vector_data);
-        }
-      }
-
-      // 閲嶆柊鑱氱被
-      int actual_lists = std::min(lists_, static_cast<int>(all_vectors.size()));
-      if (actual_lists > 0) {
-        kmeans_clustering(all_vectors, actual_lists, 50);
-        // 閲嶆柊鍒嗛厤鍚戦噺鍒版柊鐨勮仛绫讳腑蹇?
-        vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
-        for (const auto &list : inverted_lists_) {
-          for (const auto &entry : list) {
-            float        min_d_sq = std::numeric_limits<float>::max();
-            int          best_c   = 0;
-            const float *vec_ptr  = entry.vector_data.data();
-            const size_t dim_ptr  = entry.vector_data.size();
-            for (int j = 0; j < actual_lists; ++j) {
-              float d_sq = l2_squared_unrolled(vec_ptr, centroids_[j].data(), dim_ptr);
-              if (d_sq < min_d_sq) {
-                min_d_sq = d_sq;
-                best_c = j;
-              }
-            }
-            new_inverted_lists[best_c].push_back(entry);
-          }
-        }
-        inverted_lists_ = std::move(new_inverted_lists);
-
-        LOG_INFO("Index rebuilt successfully with %d clusters", actual_lists);
-      }
-    }
-  }
-
-  return RC::SUCCESS;
+  IvfEntry entry(*rid, std::move(vec));
+  return enqueue_pending_entry(std::move(entry), false);
 }
+
 
 RC IvfflatIndex::delete_entry(const char *record, const RID *rid)
 {
@@ -928,6 +1136,21 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
     LOG_WARN("Index not initialized or no centroids");
     return {};
   }
+
+  // 优化flush策略：只在pending条目过多时才flush，避免每次查询阻塞
+  size_t pending_size = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_size = pending_entries_.size();
+  }
+
+  if (pending_size > 4096) {
+    RC flush_rc = flush_pending_entries();
+    if (flush_rc != RC::SUCCESS) {
+      LOG_WARN("Failed to flush pending entries before ANN search. rc=%s", strrc(flush_rc));
+    }
+  }
+
   if (limit == 0) {
     return {};
   }
@@ -940,58 +1163,100 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
   // 鎵惧埌鏈€杩戠殑probes_涓仛绫讳腑蹇?
   vector<int> nearest_clusters = find_nearest_clusters(query_vector, probes_);
 
-  // 浣跨敤浼樺厛闃熷垪缁存姢Top-K缁撴灉 (鏈€澶у爢)
-  auto cmp = [](const pair<float, RID> &a, const pair<float, RID> &b) {
-    return a.first < b.first;  // 鏈€澶у爢锛氳窛绂诲ぇ鐨勫湪鍫嗛《
+  // 浣跨敤heap缁存姢Top-K缁撴灉锛孫(log k)鎻掑叆澶嶆潅搴?
+  struct TopKHeap
+  {
+    explicit TopKHeap(size_t k) : limit_(k) { heap_.reserve(k); }
+
+    float cutoff() const
+    {
+      return (heap_.size() < limit_) ? std::numeric_limits<float>::max() : heap_.front().first;
+    }
+
+    void consider(float dist_sq, const RID &rid)
+    {
+      if (heap_.size() < limit_) {
+        heap_.emplace_back(dist_sq, rid);
+        if (heap_.size() == limit_) {
+          // 鑷畾涔夋瘮杈冨櫒锛氬彧姣旇緝璺濈锛屼笉姣旇緝RID
+          auto cmp = [](const pair<float, RID> &a, const pair<float, RID> &b) {
+            return a.first < b.first;
+          };
+          std::make_heap(heap_.begin(), heap_.end(), cmp);
+        }
+      } else if (dist_sq < heap_.front().first) {
+        auto cmp = [](const pair<float, RID> &a, const pair<float, RID> &b) {
+          return a.first < b.first;
+        };
+        std::pop_heap(heap_.begin(), heap_.end(), cmp);
+        heap_.back() = {dist_sq, rid};
+        std::push_heap(heap_.begin(), heap_.end(), cmp);
+      }
+    }
+
+    vector<RID> materialize() const
+    {
+      auto sorted = heap_;
+      auto cmp = [](const pair<float, RID> &a, const pair<float, RID> &b) {
+        return a.first < b.first;
+      };
+      std::sort_heap(sorted.begin(), sorted.end(), cmp);
+      vector<RID> result;
+      result.reserve(sorted.size());
+      for (const auto &p : sorted) {
+        result.push_back(p.second);
+      }
+      return result;
+    }
+
+  private:
+    size_t                   limit_;
+    vector<pair<float, RID>> heap_;
   };
-  std::priority_queue<pair<float, RID>, vector<pair<float, RID>>, decltype(cmp)> top_k(cmp);
-  // 鍦ㄩ€変腑鐨勭皣涓繘琛岀簿纭悳绱?
+
+  TopKHeap top_k(limit);
+
   const float *query_data = query_vector.data();
   const size_t dim = static_cast<size_t>(dimension_);
   if (dim == 0) {
     return {};
   }
+
+  float query_norm_sq = l2_squared_unrolled(query_data, query_data, dim);
+
   for (int cluster_id : nearest_clusters) {
     if (cluster_id < 0 || cluster_id >= static_cast<int>(inverted_lists_.size())) {
       continue;
     }
 
-    const auto &entries = inverted_lists_[cluster_id];
-    for (const auto &entry : entries) {
+    auto &entries = inverted_lists_[cluster_id];
+    for (auto &entry : entries) {
       const float *vec_data = entry.vector_data.data();
       if (vec_data == nullptr) {
         continue;
       }
-      float cutoff = (top_k.size() == limit && limit > 0) ? top_k.top().first : std::numeric_limits<float>::max();
-      float dist_sq = l2_squared_with_cap(query_data, vec_data, dim, cutoff);
+      float entry_norm_sq = entry.norm_sq;
+      if (entry_norm_sq <= 0.0f) {
+        entry_norm_sq = l2_squared_unrolled(vec_data, vec_data, dim);
+        entry.norm_sq = entry_norm_sq;
+      }
 
-      if (top_k.size() == limit && limit > 0 && dist_sq >= cutoff) {
+      float dot     = dot_product_unrolled(query_data, vec_data, dim);
+      float dist_sq = query_norm_sq + entry_norm_sq - 2.0f * dot;
+      if (dist_sq < 0.0f) {
+        dist_sq = 0.0f;
+      }
+
+      float current_cutoff = top_k.cutoff();
+      if (dist_sq >= current_cutoff) {
         continue;
       }
 
-      if (top_k.size() < limit) {
-        top_k.emplace(dist_sq, entry.rid);
-      } else if (dist_sq < top_k.top().first) {
-        top_k.pop();
-        top_k.emplace(dist_sq, entry.rid);
-      }
+      top_k.consider(dist_sq, entry.rid);
     }
   }
 
-  // 鎻愬彇缁撴灉锛堥渶瑕佸弽杞『搴忥紝鍥犱负鏄渶澶у爢锛?
-  vector<RID> results;
-
-  results.reserve(top_k.size());
-
-  while (!top_k.empty()) {
-    results.push_back(top_k.top().second);
-    top_k.pop();
-  }
-
-  // 鍙嶈浆浠ュ緱鍒拌窛绂讳粠灏忓埌澶х殑椤哄簭
-  std::reverse(results.begin(), results.end());
-
-  return results;
+  return top_k.materialize();
 }
 
 bool IvfflatIndex::ready() const
@@ -1024,6 +1289,8 @@ RC IvfflatIndex::save_to_file()
     LOG_WARN("Failed to open file for writing: %s", file_name_.c_str());
     return RC::IOERR_OPEN;
   }
+
+  std::lock_guard<std::mutex> lock(mutex_);
 
   // 鍐欏叆绱㈠紩鍏冩暟鎹?  ofs.write(reinterpret_cast<const char *>(&lists_), sizeof(lists_));
   ofs.write(reinterpret_cast<const char *>(&probes_), sizeof(probes_));
@@ -1100,7 +1367,9 @@ RC IvfflatIndex::load_from_file()
       vector<float> vec(dimension_);
       ifs.read(reinterpret_cast<char *>(vec.data()), dimension_ * sizeof(float));
 
-      inverted_lists_[i].emplace_back(rid, vec);
+      auto &entry = inverted_lists_[i].emplace_back(rid, vec);
+      entry.norm_sq = entry.vector_data.empty() ? 0.0f
+                      : l2_squared_unrolled(entry.vector_data.data(), entry.vector_data.data(), entry.vector_data.size());
     }
   }
 
@@ -1118,6 +1387,12 @@ RC IvfflatIndex::load_from_file()
 
 RC IvfflatIndex::sync()
 {
+  RC flush_rc = flush_pending_entries();
+  if (flush_rc != RC::SUCCESS) {
+    LOG_WARN("Failed to flush pending entries before sync. rc=%s", strrc(flush_rc));
+    return flush_rc;
+  }
+
   if (!inited_) {
     return RC::SUCCESS;
   }

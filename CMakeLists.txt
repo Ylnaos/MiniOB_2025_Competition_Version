@@ -28,9 +28,9 @@ SET(UNITTEST_OUTPUT_PATH ${PROJECT_BINARY_DIR}/unittest)
 SET(CMAKE_PREFIX_PATH "${PROJECT_SOURCE_DIR}/deps/3rd/usr/local;/usr/local;${CMAKE_PREFIX_PATH}")
 SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/cmake)
 
-# 设置默认构建类型为 Debug
+# 设置默认构建类型为 Release（性能优化）
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type:Default is debug" FORCE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type:Default is Release for performance" FORCE)
 endif()
 string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LOWER)
 

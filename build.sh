@@ -175,9 +175,9 @@ function do_clean
 }
 
 function build {
-  # 默认参数是 debug
+  # 默认参数是 release（性能优化）
   if [ -z "${BUILD_ARGS[0]}" ]; then
-    set -- "debug"  # 如果没有参数，则设置默认值
+    set -- "release"  # 如果没有参数，则设置默认值为release
   else
     set -- "${BUILD_ARGS[@]}"  # 否则使用 BUILD_ARGS 的第一个参数
   fi

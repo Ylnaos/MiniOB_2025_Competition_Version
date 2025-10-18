@@ -11,9 +11,10 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include "storage/index/index.h"
-#include <vector>
-#include <string>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
 
 /**
  * @brief 倒排列表项：存储RID和对应的向量
@@ -22,6 +23,7 @@ struct IvfEntry
 {
   RID           rid;
   vector<float> vector_data;
+  float         norm_sq = 0.0f;
 
   IvfEntry()                                   = default;
   IvfEntry(const RID &r, const vector<float> &v) : rid(r), vector_data(v) {}
@@ -139,6 +141,10 @@ private:
   RC load_from_file();
 
   void apply_meta_config(const IndexMeta &index_meta);
+  RC   enqueue_pending_entry(IvfEntry &&entry, bool force_flush = false);
+  RC   process_batch(std::vector<IvfEntry> &batch);
+  RC   flush_pending_entries();
+  void refresh_centroid_norms();
 
 private:
   bool   inited_ = false;
@@ -163,4 +169,9 @@ private:
   // 核心数据结构
   vector<vector<float>>        centroids_;       // 聚类中心 [lists][dimension]
   vector<vector<IvfEntry>>     inverted_lists_;  // 倒排列表 [lists][entries]
+  mutable std::mutex           mutex_;
+  std::vector<IvfEntry>        pending_entries_;
+  size_t                       pending_batch_limit_ = 8192;
+  std::vector<float>           centroid_norms_;
+  bool                         centroids_ready_ = false;  // 质心是否已就绪，避免重复检测
 };
