@@ -139,8 +139,16 @@ static RC bind_expression_fields(unique_ptr<Expression> &expr, Db *db, Table *de
       return RC::SCHEMA_FIELD_MISSING;
     }
 
+    // 使用条件中出现的表名/别名作为查找限定，避免自连接时引用到错误的表实例
+    string relation_name;
+    if (table_name != nullptr && table_name[0] != '\0') {
+      relation_name = table_name;
+    } else if (table != nullptr) {
+      relation_name = table->name();
+    }
+
     Field field(table, field_meta);
-    auto field_expr = make_unique<FieldExpr>(field);
+    auto  field_expr = make_unique<FieldExpr>(field, relation_name);
     field_expr->set_name(expr->name());
     expr = std::move(field_expr);
   }
