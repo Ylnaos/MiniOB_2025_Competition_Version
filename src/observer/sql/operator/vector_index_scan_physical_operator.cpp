@@ -20,9 +20,7 @@ VectorIndexScanPhysicalOperator::VectorIndexScanPhysicalOperator(
     size_t limit)
     : table_(table), index_(index), query_vector_(query_vector), limit_(limit)
 {
-  if (table_) {
-    tuple_.set_schema(table_, table_->table_meta().field_metas());
-  } else {
+  if (!table_) {
     LOG_WARN("VectorIndexScanPhysicalOperator created with null table");
   }
   if (!index_) {
@@ -49,6 +47,8 @@ RC VectorIndexScanPhysicalOperator::open(Trx *trx)
     LOG_WARN("VectorIndexScanPhysicalOperator::open - index is null");
     return RC::INTERNAL;
   }
+
+  tuple_.set_schema(table_, table_->table_meta().field_metas(), alias_);
 
   // 调用IvfflatIndex的ann_search方法
   IvfflatIndex *ivfflat_index = dynamic_cast<IvfflatIndex *>(index_);

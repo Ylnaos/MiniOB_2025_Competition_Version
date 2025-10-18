@@ -19,6 +19,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/record_manager.h"
 #include "storage/record/record_scanner.h"
 #include "common/types.h"
+#include <string>
 
 class Table;
 
@@ -68,6 +69,7 @@ public:
   int table_id() const { return table_->table_id(); }
 
   void set_predicates(vector<unique_ptr<Expression>> &&exprs);
+  void set_alias(const std::string &alias) { alias_ = alias; }
 
 private:
   RC filter(RowTuple &tuple, bool &result);
@@ -80,4 +82,5 @@ private:
   Record                         current_record_;
   RowTuple                       tuple_;
   vector<unique_ptr<Expression>> predicates_;  // TODO chang predicate to table tuple filter
+  std::string                    alias_;
 };

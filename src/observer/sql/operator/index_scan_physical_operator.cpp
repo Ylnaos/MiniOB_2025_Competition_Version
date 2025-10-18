@@ -227,7 +227,7 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
   }
   index_scanner_ = index_scanner;
 
-  tuple_.set_schema(table_, table_->table_meta().field_metas());
+  tuple_.set_schema(table_, table_->table_meta().field_metas(), alias_);
 
   trx_ = trx;
   return RC::SUCCESS;

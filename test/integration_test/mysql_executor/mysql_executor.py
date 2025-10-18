@@ -72,7 +72,11 @@ class MysqlClient:
 
     def connect(self, config:MysqlConnectConfig, *, autocommit=True) -> None:
         self.config = config
-        self.connection = pymysql.connect(host=config.host, port=config.port, user=config.user, password=config.password, autocommit=autocommit)
+        # 优先使用unix_socket连接（ann-benchmarks需要）
+        if config.unix_socket:
+            self.connection = pymysql.connect(unix_socket=config.unix_socket, user=config.user, password=config.password, autocommit=autocommit)
+        else:
+            self.connection = pymysql.connect(host=config.host, port=config.port, user=config.user, password=config.password, autocommit=autocommit)
         _logger.info('connect to mysql server success: %s', str(config))
 
     def execute(self, sql:str) -> MysqlResult:

@@ -16,6 +16,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/logical_operator.h"
 #include "storage/field/field.h"
 #include "common/types.h"
+#include <string>
 
 /**
  * @brief 表示从表中获取数据的算子
@@ -57,6 +58,9 @@ public:
   void set_predicates(vector<unique_ptr<Expression>> &&exprs);
   auto predicates() -> vector<unique_ptr<Expression>> & { return predicates_; }
 
+  void set_alias(const std::string &alias) { alias_ = alias; }
+  const std::string &alias() const { return alias_; }
+
 private:
   Table        *table_ = nullptr;
   ReadWriteMode mode_  = ReadWriteMode::READ_WRITE;
@@ -66,4 +70,5 @@ private:
   // 不包含复杂的表达式运算，比如加减乘除、或者conjunction expression
   // 如果有多个表达式，他们的关系都是 AND
   vector<unique_ptr<Expression>> predicates_;
+  std::string alias_;
 };

@@ -349,6 +349,7 @@ struct HandshakeV10 : public BasePacket
   int8_t  auth_plugin_data_len        = 0;
   char    reserved[10]                = {0};
   char    auth_plugin_data_part_2[13] = "bbbbbbbbbbbb";
+  char    auth_plugin_name[22]        = "mysql_native_password";  // 认证插件名称，pymysql需要此字段
 
   HandshakeV10(int8_t sequence = 0) : BasePacket(sequence) {}
   virtual ~HandshakeV10() = default;
@@ -377,6 +378,7 @@ struct HandshakeV10 : public BasePacket
     pos += store_int1(buf + pos, auth_plugin_data_len);
     pos += store_fix_length_string(buf + pos, reserved, 10);
     pos += store_null_terminated_string(buf + pos, auth_plugin_data_part_2);
+    pos += store_null_terminated_string(buf + pos, auth_plugin_name);  // 写入认证插件名称
 
     int payload_length = pos - 4;
     store_int3(buf, payload_length);

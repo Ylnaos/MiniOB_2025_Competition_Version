@@ -10,7 +10,9 @@
       "Read(//d/迅雷下载/miniob-2024-main/miniob-2024-main/**)",
       "Bash(python miniob_test.py:*)",
       "Bash(git log:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "Read(//d/迅雷下载/**)"
     ],
     "deny": [],
     "ask": []

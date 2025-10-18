@@ -15,12 +15,14 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include "common/log/log.h"
+#include "common/lang/string.h"
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple_cell.h"
 #include "sql/parser/parse.h"
 #include "common/value.h"
 #include <cstring>
 #include <cstdint>
+#include <string>
 #include "storage/record/record.h"
 #include "storage/record/lob_ref.h"
 #include "storage/table/table.h"
@@ -173,9 +175,13 @@ public:
 
   void set_record(Record *record) { this->record_ = record; }
 
-  void set_schema(const Table *table, const vector<FieldMeta> *fields)
+  void set_schema(const Table *table, const vector<FieldMeta> *fields, const std::string &alias = std::string())
   {
     table_ = table;
+    alias_ = alias;
+    if (!alias_.empty()) {
+      common::str_to_upper(alias_);
+    }
     // fix:join当中会多次调用右表的open,open当中会调用set_scheme，从而导致tuple当中会存储
     // 很多无意义的field和value，因此需要先clear掉
     for (FieldExpr *spec : speces_) {
@@ -301,7 +307,8 @@ public:
   RC spec_at(int index, TupleCellSpec &spec) const override
   {
     const Field &field = speces_[index]->field();
-    spec               = TupleCellSpec(table_->name(), field.field_name());
+    const char *qualifier = alias_.empty() ? table_->name() : alias_.c_str();
+    spec                  = TupleCellSpec(qualifier, field.field_name());
     return RC::SUCCESS;
   }
 
@@ -309,22 +316,46 @@ public:
   {
     const char *table_name = spec.table_name();
     const char *field_name = spec.field_name();
-    // 首先按表名严格匹配
-    if (0 == strcmp(table_name, table_->name())) {
+    auto matches_physical = [&]() {
+      return table_name != nullptr && 0 == strcasecmp(table_name, table_->name());
+    };
+    auto matches_alias = [&]() {
+      return !alias_.empty() && table_name != nullptr && 0 == strcasecmp(table_name, alias_.c_str());
+    };
+
+    // 首先按表名或别名匹配
+    if (matches_physical() || matches_alias()) {
+      std::string target_name;
+      if (field_name != nullptr && field_name[0] != '\0') {
+        target_name = field_name;
+      } else {
+        const char *alias = spec.alias();
+        if (alias != nullptr && alias[0] != '\0') {
+          const char *dot = strrchr(alias, '.');
+          if (dot != nullptr && *(dot + 1) != '\0') {
+            target_name.assign(dot + 1);
+          } else {
+            target_name.assign(alias);
+          }
+        }
+      }
+
+      if (target_name.empty()) {
+        return RC::NOTFOUND;
+      }
+
       for (size_t i = 0; i < speces_.size(); ++i) {
         const FieldExpr *field_expr = speces_[i];
         const Field     &field      = field_expr->field();
-        if (0 == strcmp(field_name, field.field_name())) {
+        if (0 == strcasecmp(target_name.c_str(), field.field_name())) {
           return cell_at(i, cell);
         }
       }
       return RC::NOTFOUND;
     }
 
-    // 表名不匹配（可能为别名），或表名为空：
-    // 做一次“仅按列名”的兜底查找，并兼容通过 alias 传入的“t.f”或“f”形式。
+    // 无限定表名时的兜底逻辑，允许通过列名匹配
     if (table_name == nullptr || table_name[0] == '\0') {
-      // 优先使用 spec.field_name()；若为空，则尝试从 alias 解析
       std::string fld;
       if (field_name != nullptr && field_name[0] != '\0') {
         fld = field_name;
@@ -359,6 +390,7 @@ public:
         }
       }
     }
+
     return RC::NOTFOUND;
   }
 
@@ -382,6 +414,7 @@ private:
   Record             *record_ = nullptr;
   const Table        *table_  = nullptr;
   vector<FieldExpr *> speces_;
+  std::string         alias_;
 };
 
 /**

@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple.h"
 #include "sql/operator/physical_operator.h"
 #include "storage/record/record_manager.h"
+#include <string>
 
 /**
  * @brief 索引扫描物理算子
@@ -41,6 +42,7 @@ public:
   Tuple *current_tuple() override;
 
   void set_predicates(vector<unique_ptr<Expression>> &&exprs);
+  void set_alias(const std::string &alias) { alias_ = alias; }
 
 private:
   // 与TableScanPhysicalOperator代码相同，可以优化
@@ -62,4 +64,5 @@ private:
   bool  right_inclusive_ = false;
 
   vector<unique_ptr<Expression>> predicates_;
+  std::string alias_;
 };

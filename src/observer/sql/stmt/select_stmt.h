@@ -40,6 +40,7 @@ public:
 
 public:
   const vector<Table *> &tables() const { return tables_; }
+  const vector<string> &table_aliases() const { return table_aliases_; }
   FilterStmt            *filter_stmt() const { return filter_stmt_; }
   unique_ptr<Expression> &where_expr() { return where_expr_; }
   // HAVING 表达式（AND 链接后的整体表达式）；为空表示无 HAVING
@@ -57,6 +58,7 @@ public:
 private:
   vector<unique_ptr<Expression>> query_expressions_;
   vector<Table *>                tables_;
+  vector<string>                 table_aliases_;
   FilterStmt                    *filter_stmt_ = nullptr;
   vector<unique_ptr<Expression>> group_by_;
   vector<pair<unique_ptr<Expression>, bool>> order_by_;

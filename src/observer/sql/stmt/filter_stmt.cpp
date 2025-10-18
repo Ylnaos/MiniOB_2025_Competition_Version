@@ -237,8 +237,13 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
       LOG_WARN("cannot find attr");
       return rc;
     }
+    // 关键修复：创建FieldExpr时传入别名，以支持自连接
+    // 对于 t1.id = t2.id，t1和t2都指向同一物理表，但需要用别名区分
     FilterObj filter_obj;
-    filter_obj.init_attr(Field(table, field));
+    Field f(table, field);
+    string relation_name = condition.left_attr.relation_name;
+    auto field_expr = make_unique<FieldExpr>(f, relation_name);
+    filter_obj.init_expr(std::move(field_expr));
     filter_unit->set_left(std::move(filter_obj));
   } else {
     FilterObj filter_obj;
@@ -266,8 +271,13 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
       LOG_WARN("cannot find attr");
       return rc;
     }
+    // 关键修复：创建FieldExpr时传入别名，以支持自连接
+    // 对于 t1.id = t2.id，t1和t2都指向同一物理表，但需要用别名区分
     FilterObj filter_obj;
-    filter_obj.init_attr(Field(table, field));
+    Field f(table, field);
+    string relation_name = condition.right_attr.relation_name;
+    auto field_expr = make_unique<FieldExpr>(f, relation_name);
+    filter_obj.init_expr(std::move(field_expr));
     filter_unit->set_right(std::move(filter_obj));
   } else {
     FilterObj filter_obj;

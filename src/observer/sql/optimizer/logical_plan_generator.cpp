@@ -184,10 +184,28 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
   unique_ptr<LogicalOperator> predicate_oper;
   unique_ptr<LogicalOperator> having_pred;
 
+  LOG_ERROR("[TRACE] Creating logical plan for SelectStmt: filter_stmt=%s, where_expr=%s, tables=%zu",
+      select_stmt->filter_stmt() ? "EXISTS" : "NULL",
+      select_stmt->where_expr() ? "EXISTS" : "NULL",
+      select_stmt->tables().size());
+
   RC rc = create_plan(select_stmt->filter_stmt(), predicate_oper);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to create predicate logical plan. rc=%s", strrc(rc));
     return rc;
+  }
+
+  LOG_ERROR("[TRACE] After create_plan(filter_stmt): predicate_oper=%s",
+      predicate_oper ? "EXISTS" : "NULL");
+
+  // [TRACE] 检查filter_stmt的具体内容
+  if (select_stmt->filter_stmt()) {
+    LOG_ERROR("[TRACE] filter_stmt details: filter_units=%zu",
+        select_stmt->filter_stmt()->filter_units().size());
+    for (size_t i = 0; i < select_stmt->filter_stmt()->filter_units().size(); i++) {
+      const auto *unit = select_stmt->filter_stmt()->filter_units()[i];
+      LOG_ERROR("[TRACE]   filter_unit[%zu]: comp=%d", i, static_cast<int>(unit->comp()));
+    }
   }
 
   // 同时支持两类 WHERE：
@@ -205,9 +223,15 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
   }
 
   const vector<Table *> &tables = select_stmt->tables();
-  for (Table *table : tables) {
+  const vector<string> &aliases = select_stmt->table_aliases();
+  for (size_t idx = 0; idx < tables.size(); idx++) {
+    Table *table = tables[idx];
 
-    unique_ptr<LogicalOperator> table_get_oper(new TableGetLogicalOperator(table, ReadWriteMode::READ_ONLY));
+    auto table_get_ptr = new TableGetLogicalOperator(table, ReadWriteMode::READ_ONLY);
+    if (idx < aliases.size()) {
+      table_get_ptr->set_alias(aliases[idx]);
+    }
+    unique_ptr<LogicalOperator> table_get_oper(table_get_ptr);
     if (table_oper == nullptr) {
       table_oper = std::move(table_get_oper);
     } else {
@@ -219,9 +243,14 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
   }
 
 
+  LOG_ERROR("[TRACE] Before connecting predicate: predicate_oper=%s, table_oper=%s",
+      predicate_oper ? "EXISTS" : "NULL",
+      table_oper ? "EXISTS" : "NULL");
+
   if (predicate_oper) {
     if (*last_oper) {
       predicate_oper->add_child(std::move(*last_oper));
+      LOG_ERROR("[TRACE] Connected predicate_oper with table_oper as child");
     }
 
     last_oper = &predicate_oper;
@@ -240,9 +269,14 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     return rc;
   }
 
+  LOG_ERROR("[TRACE] After create_group_by_plan: group_by_oper=%s, current_last_oper=%s",
+      group_by_oper ? "EXISTS" : "NULL",
+      *last_oper ? "EXISTS" : "NULL");
+
   if (group_by_oper) {
     if (*last_oper) {
       group_by_oper->add_child(std::move(*last_oper));
+      LOG_ERROR("[TRACE] Connected group_by_oper with last_oper as child");
     }
 
     last_oper = &group_by_oper;
@@ -499,6 +533,23 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   vector<unique_ptr<Expression>> &query_expressions = select_stmt->query_expressions();
   LOG_DEBUG("create_group_by_plan: processing %d query expressions",
       static_cast<int>(query_expressions.size()));
+  // [DEBUG] 记录每个query expression的详细信息
+  for (size_t i = 0; i < query_expressions.size(); i++) {
+    const auto &expr = query_expressions[i];
+    if (expr) {
+      LOG_DEBUG("  [DEBUG] query_expr[%zu]: type=%d (%s) name='%s'",
+          i,
+          static_cast<int>(expr->type()),
+          expr->type() == ExprType::AGGREGATION ? "AGGREGATION" :
+          expr->type() == ExprType::UNBOUND_AGGREGATION ? "UNBOUND_AGGREGATION" :
+          expr->type() == ExprType::FIELD ? "FIELD" :
+          expr->type() == ExprType::VALUE ? "VALUE" :
+          expr->type() == ExprType::ARITHMETIC ? "ARITHMETIC" : "OTHER",
+          expr->name() ? expr->name() : "(null)");
+    } else {
+      LOG_DEBUG("  [DEBUG] query_expr[%zu]: nullptr", i);
+    }
+  }
   function<RC(unique_ptr<Expression>&)> collector = [&](unique_ptr<Expression> &expr) -> RC {
     RC rc = RC::SUCCESS;
       if (expr->type() == ExprType::AGGREGATION) {
@@ -599,7 +650,8 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
 
   if (group_by_expressions.empty() && aggregate_expressions.empty()) {
     // 既没有group by也没有聚合函数，不需要group by
-    LOG_DEBUG("create_group_by_plan: no grouping or aggregation, returning empty plan");
+    LOG_DEBUG("[DEBUG] create_group_by_plan: NO GROUPING OR AGGREGATION, returning empty plan - THIS IS THE PROBLEM!");
+    LOG_DEBUG("[DEBUG] This means GroupBy operator will NOT be created!");
     return RC::SUCCESS;
   }
 

@@ -66,7 +66,10 @@ RC FieldExpr::get_value(const Tuple &tuple, Value &value) const
     }
     return tuple.cell_at(pos_, value);
   }
-  return tuple.find_cell(TupleCellSpec(table_name(), field_name()), value);
+  // 关键修复：使用relation_name_（别名）而不是table_name()（物理表名）来查找tuple cell
+  // 这样自连接时可以通过别名区分同一物理表的不同实例（如 t1.id vs t2.id）
+  const char *table_for_lookup = relation_name_.empty() ? table_name() : relation_name_.c_str();
+  return tuple.find_cell(TupleCellSpec(table_for_lookup, field_name()), value);
 }
 
 bool FieldExpr::equal(const Expression &other) const

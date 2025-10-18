@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple.h"
 #include "sql/operator/physical_operator.h"
 #include "storage/record/record_manager.h"
+#include <string>
 #include <vector>
 
 class IvfflatIndex;
@@ -42,6 +43,7 @@ public:
   RC close() override;
 
   Tuple *current_tuple() override;
+  void set_alias(const std::string &alias) { alias_ = alias; }
 
 private:
   Trx   *trx_   = nullptr;
@@ -56,4 +58,5 @@ private:
 
   Record   current_record_;
   RowTuple tuple_;
+  std::string alias_;
 };

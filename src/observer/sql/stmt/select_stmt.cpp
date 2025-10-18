@@ -338,6 +338,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           return RC::SQL_SYNTAX;
         }
 
+        // [DEBUG] 检查解析后的WHERE条件 - 使用ERROR级别确保输出
+        LOG_ERROR("[TRACE] Parsed node: conditions.size()=%zu, where_expr=%s, relations.size()=%zu",
+            node->selection.conditions.size(),
+            node->selection.where_expr ? "EXISTS" : "NULL",
+            node->selection.relations.size());
+
         // 检查视图定义中是否包含聚合函数或GROUP BY
         bool view_has_aggregation = false;
         for (const auto &expr : node->selection.expressions) {
@@ -355,6 +361,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         // 使用通用的子查询机制处理
         if (view_has_aggregation) {
           LOG_DEBUG("View '%s' contains aggregation, using subquery mechanism", view->name());
+          LOG_DEBUG("[DEBUG] View SQL: %s", view->select_sql());
           LOG_DEBUG("Outer SELECT expression count: %d", static_cast<int>(select_sql.expressions.size()));
           for (size_t idx = 0; idx < select_sql.expressions.size(); idx++) {
             Expression *expr_ptr = select_sql.expressions[idx].get();
@@ -371,6 +378,29 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             return rc;
           }
           SelectStmt *inner_select = static_cast<SelectStmt *>(inner_stmt);
+
+          // [TRACE] 检查内层SelectStmt的query_expressions和WHERE条件 - 使用ERROR确保输出
+          LOG_ERROR("[TRACE] Inner SelectStmt created, query_expressions=%zu, filter_stmt=%s, where_expr=%s, tables=%zu",
+              inner_select->query_expressions().size(),
+              inner_select->filter_stmt() ? "EXISTS" : "NULL",
+              inner_select->where_expr() ? "EXISTS" : "NULL",
+              inner_select->tables().size());
+          if (inner_select->filter_stmt()) {
+            LOG_ERROR("[TRACE]   filter_stmt has %zu filter units",
+                inner_select->filter_stmt()->filter_units().size());
+          }
+
+          // [CRITICAL FIX] 检查内层查询的WHERE条件是否丢失
+          if (!inner_select->filter_stmt() && !inner_select->where_expr()) {
+            LOG_ERROR("[CRITICAL] Inner SelectStmt has NO WHERE conditions!");
+            LOG_ERROR("[CRITICAL] This will cause Cartesian product in aggregation!");
+            LOG_ERROR("[CRITICAL] View SQL was: %s", view->select_sql());
+            LOG_ERROR("[CRITICAL] View has %zu tables", inner_select->tables().size());
+            // 这是一个严重错误，说明WHERE条件在解析时丢失了
+            // 暂时返回错误，避免返回错误结果
+            delete inner_select;
+            return RC::INTERNAL;
+          }
 
           // 2. 创建外层SelectStmt,将内层查询设置为子查询数据源
           SelectStmt *outer_select = new SelectStmt();
@@ -556,6 +586,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
   // 收集 FROM 表
   vector<Table *>                tables;
+  vector<string>                 table_aliases;
+  table_aliases.reserve(select_sql.relations.size());
   unordered_map<string, Table *> table_map;
   for (size_t i = 0; i < select_sql.relations.size(); i++) {
     const RelationSqlNode &r = select_sql.relations[i];
@@ -572,6 +604,14 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     binder_context.add_table(table);
     tables.push_back(table);
     table_map.insert({table_name, table});
+    string alias_token;
+    if (!r.alias.empty()) {
+      alias_token = r.alias;
+    } else {
+      alias_token = r.relation_name;
+    }
+    common::str_to_upper(alias_token);
+    table_aliases.push_back(alias_token);
     // 别名检查：同层不重复
     if (!r.alias.empty()) {
       if (table_map.find(r.alias) != table_map.end()) {
@@ -656,6 +696,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   // 组装 SelectStmt
   SelectStmt *select_stmt = new SelectStmt();
   select_stmt->tables_.swap(tables);
+  select_stmt->table_aliases_.swap(table_aliases);
   select_stmt->query_expressions_.swap(bound_expressions);
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);
