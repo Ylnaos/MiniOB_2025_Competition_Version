@@ -171,7 +171,7 @@ private:
   vector<vector<IvfEntry>>     inverted_lists_;  // 倒排列表 [lists][entries]
   mutable std::mutex           mutex_;
   std::vector<IvfEntry>        pending_entries_;
-  size_t                       pending_batch_limit_ = 8192;
+  size_t                       pending_batch_limit_ = 16384;  // 增大批量：8192→16384
   std::vector<float>           centroid_norms_;
   bool                         centroids_ready_ = false;  // 质心是否已就绪，避免重复检测
 };

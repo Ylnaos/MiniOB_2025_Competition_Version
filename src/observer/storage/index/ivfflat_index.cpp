@@ -275,23 +275,23 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
   size_t batch_size = n;
   if (use_mini_batch) {
     size_t desired_lists = static_cast<size_t>(std::max(1, lists_));
-    size_t desired = std::max<size_t>(static_cast<size_t>(k) * 8, desired_lists * 8);
-    desired        = std::max<size_t>(desired, 1024);
+    size_t desired = std::max<size_t>(static_cast<size_t>(k) * 6, desired_lists * 6);  // 平衡采样：6倍
+    desired        = std::max<size_t>(desired, 1000);  // 适中的最小值
     batch_size     = std::min(desired, n);
     LOG_INFO("Using Mini-Batch K-Means with batch_size=%zu for n=%zu vectors", batch_size, n);
   }
 
   vector<int> assignments(n, -1);
   const size_t worker_count = std::max<size_t>(1, std::min(max_threads, n));
-  const float  convergence_threshold = 1e-4f * static_cast<float>(dim);
+  const float  convergence_threshold = 5e-4f * static_cast<float>(dim);  // 平衡收敛条件
   int          completed_iterations  = 0;
 
   std::vector<float> recent_shifts;
-  recent_shifts.reserve(3);
+  recent_shifts.reserve(3);  // 恢复3次连续检查
 
   int effective_max_iter = std::max(1, max_iter);
   if (use_mini_batch) {
-    effective_max_iter = std::min(effective_max_iter, 15);
+    effective_max_iter = std::min(effective_max_iter, 10);  // 平衡性能和召回率：10次迭代
   }
 
   for (int iter = 0; iter < effective_max_iter; ++iter) {
@@ -545,7 +545,7 @@ void IvfflatIndex::apply_meta_config(const IndexMeta &index_meta)
 
   int configured_probes = index_meta.probes();
   if (configured_probes <= 0) {
-    configured_probes = 5;
+    configured_probes = 10;  // 提高默认probes：5→10，提升召回率
   }
   if (configured_probes > lists_) {
     LOG_INFO("Adjust probes from %d to %d to match lists", configured_probes, lists_);
@@ -767,7 +767,7 @@ RC IvfflatIndex::process_batch(std::vector<IvfEntry> &batch)
 
       int actual_lists = std::min(static_cast<int>(lists), static_cast<int>(all_vectors.size()));
       if (actual_lists > 0) {
-        kmeans_clustering(all_vectors, actual_lists, 50);
+        kmeans_clustering(all_vectors, actual_lists, 20);  // 零质心重建：20次迭代
 
         vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
         for (const auto &list : inverted_lists_) {
@@ -922,7 +922,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   lists_  = actual_lists;
   LOG_INFO("Finalize IVF-Flat index config: requested_lists=%d actual_lists=%d probes=%d",
            requested_lists, lists_, probes_);
-  kmeans_clustering(all_vectors, actual_lists, 30);
+  kmeans_clustering(all_vectors, actual_lists, 20);  // 平衡优化：20次迭代保证质量
 
   // 鍒濆鍖栧€掓帓鍒楄〃
   inverted_lists_.resize(actual_lists);
@@ -1144,7 +1144,7 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
     pending_size = pending_entries_.size();
   }
 
-  if (pending_size > 4096) {
+  if (pending_size > 8192) {  // 提高阈值：4096→8192，减少flush频率
     RC flush_rc = flush_pending_entries();
     if (flush_rc != RC::SUCCESS) {
       LOG_WARN("Failed to flush pending entries before ANN search. rc=%s", strrc(flush_rc));
