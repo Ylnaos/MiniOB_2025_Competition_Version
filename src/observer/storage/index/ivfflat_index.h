@@ -109,6 +109,11 @@ private:
   float compute_l2_distance(const vector<float> &a, const vector<float> &b) const;
 
   /**
+   * @brief 计算L2平方距离（用于K-Means内部比较，避免sqrt开销）
+   */
+  float compute_l2_squared(const vector<float> &a, const vector<float> &b) const;
+
+  /**
    * @brief 找到距离查询向量最近的n个聚类中心
    */
   vector<int> find_nearest_clusters(const vector<float> &query_vector, int n) const;

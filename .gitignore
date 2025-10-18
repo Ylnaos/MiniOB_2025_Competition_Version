@@ -34,3 +34,6 @@ src/observer/sql/parser/yacc_sql.hpp
 # Ignore unpacked CMake source tree
 cmake-*/
 cmake-*/**
+
+# Ignore runtime database files (生成的数据库文件不应提交)
+miniob/db/

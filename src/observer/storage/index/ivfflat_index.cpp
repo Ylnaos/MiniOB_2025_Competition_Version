@@ -1,4 +1,4 @@
-/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
+﻿/* Copyright (c) 2021 OceanBase and/or its affiliates. All rights reserved.
 miniob is licensed under Mulan PSL v2.
 You can use this software according to the terms and conditions of the Mulan PSL v2.
 You may obtain a copy of Mulan PSL v2 at:
@@ -21,6 +21,10 @@ See the Mulan PSL v2 for more details. */
 #include <queue>
 #include <cmath>
 #include <limits>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <numeric>
 
 IvfflatIndex::~IvfflatIndex() noexcept
 {
@@ -41,6 +45,20 @@ float IvfflatIndex::compute_l2_distance(const vector<float> &a, const vector<flo
   return std::sqrt(sum);
 }
 
+float IvfflatIndex::compute_l2_squared(const vector<float> &a, const vector<float> &b) const
+{
+  if (a.size() != b.size()) {
+    return std::numeric_limits<float>::max();
+  }
+
+  float sum = 0.0f;
+  for (size_t i = 0; i < a.size(); ++i) {
+    float diff = a[i] - b[i];
+    sum += diff * diff;
+  }
+  return sum;  // 不调用sqrt，直接返回平方距离
+}
+
 void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k, int max_iter)
 {
   if (vectors.empty() || k <= 0) {
@@ -50,6 +68,15 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
 
   const size_t n = vectors.size();
   const size_t dim = vectors[0].size();
+
+  // Mini-Batch K-Means配置
+  const size_t MINI_BATCH_THRESHOLD = 10000;
+  const size_t BATCH_SIZE = std::min(static_cast<size_t>(5000), n / 2);
+  const bool use_mini_batch = (n > MINI_BATCH_THRESHOLD);
+
+  if (use_mini_batch) {
+    LOG_INFO("Using Mini-Batch K-Means with batch_size=%zu for n=%zu vectors", BATCH_SIZE, n);
+  }
 
   // 如果向量数量少于聚类数，调整k
   if (n < static_cast<size_t>(k)) {
@@ -71,22 +98,52 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
   size_t first_idx = dis(gen);
   centroids_[0] = vectors[first_idx];
 
-  // K-Means++: 选择剩余中心
+  // K-Means++: 选择剩余中心（使用平方距离并并行化）
   vector<float> min_distances(n, std::numeric_limits<float>::max());
+  min_distances.reserve(n);
+
+  const size_t max_threads = static_cast<size_t>(std::max(1u, std::thread::hardware_concurrency()));
+  const size_t init_worker_count = std::max<size_t>(1, std::min(max_threads, n));
+  const size_t init_block_size = (n + init_worker_count - 1) / init_worker_count;
 
   for (int i = 1; i < k; ++i) {
-    // 更新每个点到最近中心的距离
-    for (size_t j = 0; j < n; ++j) {
-      float dist = compute_l2_distance(vectors[j], centroids_[i-1]);
-      if (dist < min_distances[j]) {
-        min_distances[j] = dist;
+    // 并行更新每个点到最近中心的平方距离
+    auto update_distances = [this, &vectors, &min_distances, i](size_t start, size_t end) {
+      for (size_t j = start; j < end; ++j) {
+        float dist_sq = this->compute_l2_squared(vectors[j], this->centroids_[i-1]);
+        if (dist_sq < min_distances[j]) {
+          min_distances[j] = dist_sq;
+        }
+      }
+    };
+
+    if (init_worker_count == 1) {
+      update_distances(0, n);
+    } else {
+      std::vector<std::thread> workers;
+      workers.reserve(init_worker_count);
+      for (size_t t = 0; t < init_worker_count; ++t) {
+        size_t start_idx = t * init_block_size;
+        if (start_idx >= n) break;
+        size_t end_idx = std::min(start_idx + init_block_size, n);
+        workers.emplace_back(update_distances, start_idx, end_idx);
+      }
+      for (auto &worker : workers) {
+        if (worker.joinable()) worker.join();
       }
     }
 
-    // 按距离平方加权随机选择下一个中心
+    // 按距离平方加权随机选择下一个中心（min_distances已经是平方距离）
     float sum = 0.0f;
-    for (float d : min_distances) {
-      sum += d * d;
+    for (float d_sq : min_distances) {
+      sum += d_sq;
+    }
+
+    if (sum < 1e-9f) {
+      // 所有剩余点距离为0，随机选择
+      std::uniform_int_distribution<size_t> fallback_dis(0, n - 1);
+      centroids_[i] = vectors[fallback_dis(gen)];
+      continue;
     }
 
     std::uniform_real_distribution<float> prob_dis(0.0f, sum);
@@ -95,7 +152,7 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     float cumsum = 0.0f;
     size_t next_idx = 0;
     for (size_t j = 0; j < n; ++j) {
-      cumsum += min_distances[j] * min_distances[j];
+      cumsum += min_distances[j];
       if (cumsum >= target) {
         next_idx = j;
         break;
@@ -106,32 +163,79 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
   }
 
   // K-Means迭代
-  vector<int> assignments(n);
+  vector<int> assignments(n, -1);
+  const size_t worker_count = std::max<size_t>(1, std::min(max_threads, n));
+  const float convergence_threshold = 1e-4f * static_cast<float>(dim);
+  int completed_iterations = 0;
+
+  // 早停优化：跟踪最近的shift值
+  std::vector<float> recent_shifts;
+  recent_shifts.reserve(3);
 
   for (int iter = 0; iter < max_iter; ++iter) {
-    bool changed = false;
+    completed_iterations = iter + 1;
+    std::atomic<bool> changed_flag(false);
 
-    // 分配步骤：将每个向量分配到最近的中心
-    for (size_t i = 0; i < n; ++i) {
-      float min_dist = std::numeric_limits<float>::max();
-      int best_cluster = 0;
+    // Mini-Batch采样
+    std::vector<size_t> sample_indices;
+    if (use_mini_batch) {
+      sample_indices.reserve(BATCH_SIZE);
+      std::uniform_int_distribution<size_t> sample_dis(0, n - 1);
+      for (size_t i = 0; i < BATCH_SIZE; ++i) {
+        sample_indices.push_back(sample_dis(gen));
+      }
+    } else {
+      sample_indices.resize(n);
+      std::iota(sample_indices.begin(), sample_indices.end(), 0);
+    }
 
-      for (int j = 0; j < k; ++j) {
-        float dist = compute_l2_distance(vectors[i], centroids_[j]);
-        if (dist < min_dist) {
-          min_dist = dist;
-          best_cluster = j;
+    const size_t sample_size = sample_indices.size();
+    const size_t sample_block_size = (sample_size + worker_count - 1) / worker_count;
+
+    // 并行分配步骤：将采样的向量分配到最近的中心（使用平方距离）
+    auto assign_worker = [this, &vectors, &assignments, &changed_flag, &sample_indices, k](size_t start, size_t end) {
+      for (size_t idx = start; idx < end; ++idx) {
+        size_t i = sample_indices[idx];
+        float min_dist_sq = std::numeric_limits<float>::max();
+        int best_cluster = 0;
+
+        for (int j = 0; j < k; ++j) {
+          float dist_sq = this->compute_l2_squared(vectors[i], this->centroids_[j]);
+          if (dist_sq < min_dist_sq) {
+            min_dist_sq = dist_sq;
+            best_cluster = j;
+          }
+        }
+
+        if (assignments[i] != best_cluster) {
+          assignments[i] = best_cluster;
+          changed_flag.store(true, std::memory_order_relaxed);
         }
       }
+    };
 
-      if (assignments[i] != best_cluster) {
-        assignments[i] = best_cluster;
-        changed = true;
+    if (worker_count == 1) {
+      assign_worker(0, sample_size);
+    } else {
+      std::vector<std::thread> workers;
+      workers.reserve(worker_count);
+      for (size_t t = 0; t < worker_count; ++t) {
+        size_t start_idx = t * sample_block_size;
+        if (start_idx >= sample_size) {
+          break;
+        }
+        size_t end_idx = std::min(start_idx + sample_block_size, sample_size);
+        workers.emplace_back(assign_worker, start_idx, end_idx);
+      }
+      for (auto &worker : workers) {
+        if (worker.joinable()) {
+          worker.join();
+        }
       }
     }
 
-    if (!changed) {
-      LOG_INFO("K-Means converged at iteration %d", iter);
+    if (!changed_flag.load(std::memory_order_relaxed)) {
+      LOG_INFO("K-Means converged (assignments stable) at iteration %d", iter);
       break;
     }
 
@@ -141,26 +245,61 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
 
     for (size_t i = 0; i < n; ++i) {
       int cluster = assignments[i];
-      counts[cluster]++;
-      for (size_t d = 0; d < dim; ++d) {
-        new_centroids[cluster][d] += vectors[i][d];
+      if (cluster >= 0 && cluster < k) {
+        counts[cluster]++;
+        for (size_t d = 0; d < dim; ++d) {
+          new_centroids[cluster][d] += vectors[i][d];
+        }
       }
     }
 
+    float max_shift = 0.0f;
     for (int j = 0; j < k; ++j) {
       if (counts[j] > 0) {
+        float inv_count = 1.0f / static_cast<float>(counts[j]);
         for (size_t d = 0; d < dim; ++d) {
-          new_centroids[j][d] /= counts[j];
+          new_centroids[j][d] *= inv_count;
+        }
+        // 使用平方距离计算shift（开根号得到真实shift）
+        float shift_sq = compute_l2_squared(centroids_[j], new_centroids[j]);
+        float shift = std::sqrt(shift_sq);
+        if (shift > max_shift) {
+          max_shift = shift;
         }
         centroids_[j] = new_centroids[j];
       }
     }
+
+    // 优化的早停策略：跟踪最近3次的shift
+    recent_shifts.push_back(max_shift);
+    if (recent_shifts.size() > 3) {
+      recent_shifts.erase(recent_shifts.begin());
+    }
+
+    // 如果连续3次shift都很小，提前退出
+    if (recent_shifts.size() == 3) {
+      bool all_small = true;
+      for (float shift : recent_shifts) {
+        if (shift >= convergence_threshold) {
+          all_small = false;
+          break;
+        }
+      }
+      if (all_small) {
+        LOG_INFO("K-Means converged with 3 consecutive small shifts at iteration %d", iter);
+        break;
+      }
+    }
+
+    // 更激进的单次早停
+    if (max_shift < convergence_threshold * 0.5f) {
+      LOG_INFO("K-Means converged with max_shift=%.6f at iteration %d", max_shift, iter);
+      break;
+    }
   }
 
-  LOG_INFO("K-Means clustering completed with k=%d, iterations=%d", k, max_iter);
-}
-
-const FieldMeta *IvfflatIndex::get_vector_field_meta() const
+  LOG_INFO("K-Means clustering completed with k=%d, iterations=%d", k, completed_iterations);
+}const FieldMeta *IvfflatIndex::get_vector_field_meta() const
 {
   if (!table_) {
     return nullptr;
@@ -301,7 +440,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   apply_meta_config(index_meta);
   int requested_lists = lists_;
 
-  // 计算向量维度
+  // 璁＄畻鍚戦噺缁村害
   const FieldMeta *vector_field_meta = &field_metas[0];
   dimension_ = vector_field_meta->vector_length();
   if (dimension_ <= 0) {
@@ -317,9 +456,11 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
     LOG_INFO("Creating IVF-Flat index with unknown dimension, will infer from data");
   }
 
-  // 扫描表，收集所有向量数据
+  // 鎵弿琛紝鏀堕泦鎵€鏈夊悜閲忔暟鎹?
   vector<vector<float>> all_vectors;
   vector<RID> all_rids;
+  all_vectors.reserve(1000);  // 鍐呭瓨浼樺寲锛氶鍒嗛厤绌洪棿
+  all_rids.reserve(1000);
 
   RecordScanner *scanner = nullptr;
   RC rc = table_->get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
@@ -383,7 +524,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
     }
   }
 
-  // 执行K-Means聚类
+  // 鎵цK-Means鑱氱被
   int actual_lists = std::min(lists_, static_cast<int>(all_vectors.size()));
   if (actual_lists <= 0) {
     actual_lists = std::min(static_cast<int>(all_vectors.size()), 1);
@@ -394,26 +535,52 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
            requested_lists, lists_, probes_);
   kmeans_clustering(all_vectors, actual_lists, 100);
 
-  // 初始化倒排列表
+  // 鍒濆鍖栧€掓帓鍒楄〃
   inverted_lists_.resize(actual_lists);
 
-  // 将向量分配到对应的倒排列表
-  for (size_t i = 0; i < all_vectors.size(); ++i) {
-    float min_dist = std::numeric_limits<float>::max();
-    int best_cluster = 0;
+  // 灏嗗悜閲忓垎閰嶅埌瀵瑰簲鐨勫€掓帓鍒楄〃锛堝苟琛屽寲浼樺寲锛?
+  const size_t total_vectors = all_vectors.size();
+  const size_t max_threads = static_cast<size_t>(std::max(1u, std::thread::hardware_concurrency()));
+  const size_t assign_worker_count = std::max<size_t>(1, std::min(max_threads, total_vectors));
+  const size_t assign_block_size = (total_vectors + assign_worker_count - 1) / assign_worker_count;
 
-    for (int j = 0; j < actual_lists; ++j) {
-      float dist = compute_l2_distance(all_vectors[i], centroids_[j]);
-      if (dist < min_dist) {
-        min_dist = dist;
-        best_cluster = j;
+  std::vector<std::mutex> list_mutexes(actual_lists);
+
+  auto assign_to_list = [this, &all_vectors, &all_rids, &list_mutexes, actual_lists](size_t start, size_t end) {
+    for (size_t i = start; i < end; ++i) {
+      float min_dist_sq = std::numeric_limits<float>::max();
+      int best_cluster = 0;
+
+      for (int j = 0; j < actual_lists; ++j) {
+        float dist_sq = this->compute_l2_squared(all_vectors[i], this->centroids_[j]);
+        if (dist_sq < min_dist_sq) {
+          min_dist_sq = dist_sq;
+          best_cluster = j;
+        }
       }
-    }
 
-    inverted_lists_[best_cluster].emplace_back(all_rids[i], all_vectors[i]);
+      std::lock_guard<std::mutex> lock(list_mutexes[best_cluster]);
+      this->inverted_lists_[best_cluster].emplace_back(all_rids[i], all_vectors[i]);
+    }
+  };
+
+  if (assign_worker_count == 1) {
+    assign_to_list(0, total_vectors);
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(assign_worker_count);
+    for (size_t t = 0; t < assign_worker_count; ++t) {
+      size_t start_idx = t * assign_block_size;
+      if (start_idx >= total_vectors) break;
+      size_t end_idx = std::min(start_idx + assign_block_size, total_vectors);
+      workers.emplace_back(assign_to_list, start_idx, end_idx);
+    }
+    for (auto &worker : workers) {
+      if (worker.joinable()) worker.join();
+    }
   }
 
-  // 保存索引到文件
+  // 淇濆瓨绱㈠紩鍒版枃浠?
   RC save_rc = save_to_file();
   if (save_rc != RC::SUCCESS) {
     LOG_WARN("Failed to save index to file");
@@ -444,7 +611,7 @@ RC IvfflatIndex::open(Table *table, const char *file_name, const IndexMeta &inde
   vector_field_name_ = field_metas[0].name();
   apply_meta_config(index_meta);
 
-  // 从文件加载索引
+  // 浠庢枃浠跺姞杞界储寮?
   RC rc = load_from_file();
   if (rc != RC::SUCCESS) {
     LOG_WARN("Failed to load index from file: %s", file_name_.c_str());
@@ -476,14 +643,14 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
     return RC::INTERNAL;
   }
 
-  // 提取向量
+  // 鎻愬彇鍚戦噺
   vector<float> vec;
   RC rc = extract_vector_from_record(record, vec);
   if (rc != RC::SUCCESS) {
     return rc;
   }
 
-  // 找到最近的聚类中心
+  // 鎵惧埌鏈€杩戠殑鑱氱被涓績
   if (centroids_.empty()) {
     LOG_WARN("Centroids missing before insert, rebuild default clusters");
 
@@ -499,21 +666,21 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
     inverted_lists_.assign(lists_, std::vector<IvfEntry>());
   }
 
-  float min_dist = std::numeric_limits<float>::max();
+  float min_dist_sq = std::numeric_limits<float>::max();
   int best_cluster = 0;
 
   for (size_t i = 0; i < centroids_.size(); ++i) {
-    float dist = compute_l2_distance(vec, centroids_[i]);
-    if (dist < min_dist) {
-      min_dist = dist;
+    float dist_sq = compute_l2_squared(vec, centroids_[i]);
+    if (dist_sq < min_dist_sq) {
+      min_dist_sq = dist_sq;
       best_cluster = static_cast<int>(i);
     }
   }
 
-  // 插入到倒排列表
+  // 鎻掑叆鍒板€掓帓鍒楄〃
   inverted_lists_[best_cluster].emplace_back(*rid, vec);
 
-  // 检查是否需要重建索引（如果centroids_是全零且已累积足够数据）
+  // 妫€鏌ユ槸鍚﹂渶瑕侀噸寤虹储寮曪紙濡傛灉centroids_鏄叏闆朵笖宸茬疮绉冻澶熸暟鎹級
   bool has_zero_centroids = true;
   for (const auto &centroid : centroids_) {
     for (float val : centroid) {
@@ -528,17 +695,17 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
   }
 
   if (has_zero_centroids) {
-    // 统计当前已插入的向量总数
+    // 缁熻褰撳墠宸叉彃鍏ョ殑鍚戦噺鎬绘暟
     size_t total_vectors = 0;
     for (const auto &list : inverted_lists_) {
       total_vectors += list.size();
     }
 
-    // 如果已有足够的向量（至少是lists_的2倍），触发重建
+    // 濡傛灉宸叉湁瓒冲鐨勫悜閲忥紙鑷冲皯鏄痩ists_鐨?鍊嶏級锛岃Е鍙戦噸寤?
     if (total_vectors >= static_cast<size_t>(lists_ * 2)) {
       LOG_INFO("Rebuilding index with %zu vectors after zero-centroid detection", total_vectors);
 
-      // 收集所有向量
+      // 鏀堕泦鎵€鏈夊悜閲?
       vector<vector<float>> all_vectors;
       all_vectors.reserve(total_vectors);
       for (const auto &list : inverted_lists_) {
@@ -547,21 +714,20 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
         }
       }
 
-      // 重新聚类
+      // 閲嶆柊鑱氱被
       int actual_lists = std::min(lists_, static_cast<int>(all_vectors.size()));
       if (actual_lists > 0) {
         kmeans_clustering(all_vectors, actual_lists, 50);
-
-        // 重新分配向量到新的聚类中心
+        // 閲嶆柊鍒嗛厤鍚戦噺鍒版柊鐨勮仛绫讳腑蹇?
         vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
         for (const auto &list : inverted_lists_) {
           for (const auto &entry : list) {
-            float min_d = std::numeric_limits<float>::max();
+            float min_d_sq = std::numeric_limits<float>::max();
             int best_c = 0;
             for (int j = 0; j < actual_lists; ++j) {
-              float d = compute_l2_distance(entry.vector_data, centroids_[j]);
-              if (d < min_d) {
-                min_d = d;
+              float d_sq = compute_l2_squared(entry.vector_data, centroids_[j]);
+              if (d_sq < min_d_sq) {
+                min_d_sq = d_sq;
                 best_c = j;
               }
             }
@@ -580,7 +746,7 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
 
 RC IvfflatIndex::delete_entry(const char *record, const RID *rid)
 {
-  // 暂不实现删除功能
+  // 鏆備笉瀹炵幇鍒犻櫎鍔熻兘
   return RC::UNIMPLEMENTED;
 }
 
@@ -590,7 +756,7 @@ vector<int> IvfflatIndex::find_nearest_clusters(const vector<float> &query_vecto
     return {};
   }
 
-  // 计算到所有聚类中心的距离
+  // 璁＄畻鍒版墍鏈夎仛绫讳腑蹇冪殑璺濈
   vector<pair<float, int>> distances;
   distances.reserve(centroids_.size());
 
@@ -599,7 +765,7 @@ vector<int> IvfflatIndex::find_nearest_clusters(const vector<float> &query_vecto
     distances.emplace_back(dist, static_cast<int>(i));
   }
 
-  // 排序并返回最近的n个
+  // 鎺掑簭骞惰繑鍥炴渶杩戠殑n涓?
   std::sort(distances.begin(), distances.end());
 
   int actual_n = std::min(n, static_cast<int>(distances.size()));
@@ -625,16 +791,15 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
     return {};
   }
 
-  // 找到最近的probes_个聚类中心
+  // 鎵惧埌鏈€杩戠殑probes_涓仛绫讳腑蹇?
   vector<int> nearest_clusters = find_nearest_clusters(query_vector, probes_);
 
-  // 使用优先队列维护Top-K结果 (最大堆)
+  // 浣跨敤浼樺厛闃熷垪缁存姢Top-K缁撴灉 (鏈€澶у爢)
   auto cmp = [](const pair<float, RID> &a, const pair<float, RID> &b) {
-    return a.first < b.first;  // 最大堆：距离大的在堆顶
+    return a.first < b.first;  // 鏈€澶у爢锛氳窛绂诲ぇ鐨勫湪鍫嗛《
   };
   std::priority_queue<pair<float, RID>, vector<pair<float, RID>>, decltype(cmp)> top_k(cmp);
-
-  // 在选中的簇中进行精确搜索
+  // 鍦ㄩ€変腑鐨勭皣涓繘琛岀簿纭悳绱?
   for (int cluster_id : nearest_clusters) {
     if (cluster_id < 0 || cluster_id >= static_cast<int>(inverted_lists_.size())) {
       continue;
@@ -653,8 +818,9 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
     }
   }
 
-  // 提取结果（需要反转顺序，因为是最大堆）
+  // 鎻愬彇缁撴灉锛堥渶瑕佸弽杞『搴忥紝鍥犱负鏄渶澶у爢锛?
   vector<RID> results;
+
   results.reserve(top_k.size());
 
   while (!top_k.empty()) {
@@ -662,7 +828,7 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
     top_k.pop();
   }
 
-  // 反转以得到距离从小到大的顺序
+  // 鍙嶈浆浠ュ緱鍒拌窛绂讳粠灏忓埌澶х殑椤哄簭
   std::reverse(results.begin(), results.end());
 
   return results;
@@ -674,7 +840,7 @@ bool IvfflatIndex::ready() const
     return false;
   }
 
-  // 检查是否有至少一个非零的聚类中心（避免全零初始化的情况）
+  // 妫€鏌ユ槸鍚︽湁鑷冲皯涓€涓潪闆剁殑鑱氱被涓績锛堥伩鍏嶅叏闆跺垵濮嬪寲鐨勬儏鍐碉級
   bool has_nonzero_centroid = false;
   for (const auto &centroid : centroids_) {
     for (float val : centroid) {
@@ -699,29 +865,28 @@ RC IvfflatIndex::save_to_file()
     return RC::IOERR_OPEN;
   }
 
-  // 写入索引元数据
-  ofs.write(reinterpret_cast<const char *>(&lists_), sizeof(lists_));
+  // 鍐欏叆绱㈠紩鍏冩暟鎹?  ofs.write(reinterpret_cast<const char *>(&lists_), sizeof(lists_));
   ofs.write(reinterpret_cast<const char *>(&probes_), sizeof(probes_));
   ofs.write(reinterpret_cast<const char *>(&dimension_), sizeof(dimension_));
 
-  // 写入聚类中心数量
+  // 鍐欏叆鑱氱被涓績鏁伴噺
   int num_centroids = static_cast<int>(centroids_.size());
   ofs.write(reinterpret_cast<const char *>(&num_centroids), sizeof(num_centroids));
 
-  // 写入每个聚类中心
+  // 鍐欏叆姣忎釜鑱氱被涓績
   for (const auto &centroid : centroids_) {
     ofs.write(reinterpret_cast<const char *>(centroid.data()), centroid.size() * sizeof(float));
   }
 
-  // 写入倒排列表
+  // 鍐欏叆鍊掓帓鍒楄〃
   for (const auto &list : inverted_lists_) {
     int list_size = static_cast<int>(list.size());
     ofs.write(reinterpret_cast<const char *>(&list_size), sizeof(list_size));
 
     for (const auto &entry : list) {
-      // 写入RID
+      // 鍐欏叆RID
       ofs.write(reinterpret_cast<const char *>(&entry.rid), sizeof(RID));
-      // 写入向量数据
+      // 鍐欏叆鍚戦噺鏁版嵁
       ofs.write(reinterpret_cast<const char *>(entry.vector_data.data()),
                 entry.vector_data.size() * sizeof(float));
     }
@@ -746,23 +911,22 @@ RC IvfflatIndex::load_from_file()
     return RC::IOERR_OPEN;
   }
 
-  // 读取索引元数据
-  ifs.read(reinterpret_cast<char *>(&lists_), sizeof(lists_));
+  // 璇诲彇绱㈠紩鍏冩暟鎹?  ifs.read(reinterpret_cast<char *>(&lists_), sizeof(lists_));
   ifs.read(reinterpret_cast<char *>(&probes_), sizeof(probes_));
   ifs.read(reinterpret_cast<char *>(&dimension_), sizeof(dimension_));
 
-  // 读取聚类中心数量
+  // 璇诲彇鑱氱被涓績鏁伴噺
   int num_centroids = 0;
   ifs.read(reinterpret_cast<char *>(&num_centroids), sizeof(num_centroids));
 
-  // 读取每个聚类中心
+  // 璇诲彇姣忎釜鑱氱被涓績
   centroids_.resize(num_centroids);
   for (int i = 0; i < num_centroids; ++i) {
     centroids_[i].resize(dimension_);
     ifs.read(reinterpret_cast<char *>(centroids_[i].data()), dimension_ * sizeof(float));
   }
 
-  // 读取倒排列表
+  // 璇诲彇鍊掓帓鍒楄〃
   inverted_lists_.resize(num_centroids);
   for (int i = 0; i < num_centroids; ++i) {
     int list_size = 0;
@@ -804,7 +968,6 @@ RC IvfflatIndex::sync()
 IndexScanner *IvfflatIndex::create_scanner(const char *left_key, int left_len, bool left_inclusive,
                                             const char *right_key, int right_len, bool right_inclusive)
 {
-  // 向量索引不支持范围扫描
-  LOG_WARN("IvfflatIndex does not support range scanning");
+  // 鍚戦噺绱㈠紩涓嶆敮鎸佽寖鍥存壂鎻?  LOG_WARN("IvfflatIndex does not support range scanning");
   return nullptr;
 }
