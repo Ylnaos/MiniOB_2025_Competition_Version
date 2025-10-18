@@ -23,8 +23,91 @@ See the Mulan PSL v2 for more details. */
 #include <limits>
 #include <atomic>
 #include <thread>
-#include <mutex>
 #include <numeric>
+
+namespace {
+
+inline float l2_squared_unrolled(const float *a, const float *b, size_t dim)
+{
+  size_t i     = 0;
+  size_t bound = dim & ~static_cast<size_t>(3);
+
+  float sum0 = 0.0f;
+  float sum1 = 0.0f;
+  float sum2 = 0.0f;
+  float sum3 = 0.0f;
+
+  for (; i < bound; i += 4) {
+    float diff0 = a[i] - b[i];
+    float diff1 = a[i + 1] - b[i + 1];
+    float diff2 = a[i + 2] - b[i + 2];
+    float diff3 = a[i + 3] - b[i + 3];
+
+    sum0 += diff0 * diff0;
+    sum1 += diff1 * diff1;
+    sum2 += diff2 * diff2;
+    sum3 += diff3 * diff3;
+  }
+
+  float total = (sum0 + sum1) + (sum2 + sum3);
+
+  for (; i < dim; ++i) {
+    float diff = a[i] - b[i];
+    total += diff * diff;
+  }
+
+  return total;
+}
+
+inline float l2_squared_with_cap(const float *a, const float *b, size_t dim, float cap)
+{
+  if (cap <= 0.0f) {
+    return 0.0f;
+  }
+
+  const bool check_cap = cap < std::numeric_limits<float>::max();
+  float       total     = 0.0f;
+  size_t      i         = 0;
+  size_t      bound     = dim & ~static_cast<size_t>(3);
+
+  for (; i < bound; i += 4) {
+    float diff0 = a[i] - b[i];
+    total += diff0 * diff0;
+    if (check_cap && total >= cap) {
+      return total;
+    }
+
+    float diff1 = a[i + 1] - b[i + 1];
+    total += diff1 * diff1;
+    if (check_cap && total >= cap) {
+      return total;
+    }
+
+    float diff2 = a[i + 2] - b[i + 2];
+    total += diff2 * diff2;
+    if (check_cap && total >= cap) {
+      return total;
+    }
+
+    float diff3 = a[i + 3] - b[i + 3];
+    total += diff3 * diff3;
+    if (check_cap && total >= cap) {
+      return total;
+    }
+  }
+
+  for (; i < dim; ++i) {
+    float diff = a[i] - b[i];
+    total += diff * diff;
+    if (check_cap && total >= cap) {
+      return total;
+    }
+  }
+
+  return total;
+}
+
+}  // namespace
 
 IvfflatIndex::~IvfflatIndex() noexcept
 {
@@ -33,30 +116,23 @@ IvfflatIndex::~IvfflatIndex() noexcept
 
 float IvfflatIndex::compute_l2_distance(const vector<float> &a, const vector<float> &b) const
 {
-  if (a.size() != b.size()) {
+  const size_t dim = a.size();
+  if (dim != b.size()) {
     return std::numeric_limits<float>::max();
   }
 
-  float sum = 0.0f;
-  for (size_t i = 0; i < a.size(); ++i) {
-    float diff = a[i] - b[i];
-    sum += diff * diff;
-  }
-  return std::sqrt(sum);
+  float dist_sq = l2_squared_unrolled(a.data(), b.data(), dim);
+  return std::sqrt(dist_sq);
 }
 
 float IvfflatIndex::compute_l2_squared(const vector<float> &a, const vector<float> &b) const
 {
-  if (a.size() != b.size()) {
+  const size_t dim = a.size();
+  if (dim != b.size()) {
     return std::numeric_limits<float>::max();
   }
 
-  float sum = 0.0f;
-  for (size_t i = 0; i < a.size(); ++i) {
-    float diff = a[i] - b[i];
-    sum += diff * diff;
-  }
-  return sum;  // 不调用sqrt，直接返回平方距离
+  return l2_squared_unrolled(a.data(), b.data(), dim);
 }
 
 void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k, int max_iter)
@@ -66,51 +142,41 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     return;
   }
 
-  const size_t n = vectors.size();
+  const size_t n   = vectors.size();
   const size_t dim = vectors[0].size();
-
-  // Mini-Batch K-Means配置
-  const size_t MINI_BATCH_THRESHOLD = 10000;
-  const size_t BATCH_SIZE = std::min(static_cast<size_t>(5000), n / 2);
-  const bool use_mini_batch = (n > MINI_BATCH_THRESHOLD);
-
-  if (use_mini_batch) {
-    LOG_INFO("Using Mini-Batch K-Means with batch_size=%zu for n=%zu vectors", BATCH_SIZE, n);
+  if (dim == 0) {
+    LOG_WARN("Vector dimension is zero when running kmeans");
+    return;
   }
 
-  // 如果向量数量少于聚类数，调整k
+  const size_t MINI_BATCH_THRESHOLD = 15000;
+  bool         use_mini_batch       = (n > MINI_BATCH_THRESHOLD);
+
   if (n < static_cast<size_t>(k)) {
     k = static_cast<int>(n);
     LOG_INFO("Adjusted k to %d due to insufficient vectors", k);
   }
 
-  // 初始化聚类中心：使用K-Means++算法
-  centroids_.resize(k);
-  for (int i = 0; i < k; ++i) {
-    centroids_[i].resize(dim);
-  }
+  centroids_.assign(k, vector<float>(dim, 0.0f));
 
-  // 随机选择第一个中心
   std::random_device rd;
-  std::mt19937 gen(rd());
+  std::mt19937        gen(rd());
   std::uniform_int_distribution<size_t> dis(0, n - 1);
 
   size_t first_idx = dis(gen);
-  centroids_[0] = vectors[first_idx];
+  centroids_[0]     = vectors[first_idx];
 
-  // K-Means++: 选择剩余中心（使用平方距离并并行化）
   vector<float> min_distances(n, std::numeric_limits<float>::max());
-  min_distances.reserve(n);
 
-  const size_t max_threads = static_cast<size_t>(std::max(1u, std::thread::hardware_concurrency()));
+  const size_t max_threads       = static_cast<size_t>(std::max(1u, std::thread::hardware_concurrency()));
   const size_t init_worker_count = std::max<size_t>(1, std::min(max_threads, n));
-  const size_t init_block_size = (n + init_worker_count - 1) / init_worker_count;
+  const size_t init_block_size   = (n + init_worker_count - 1) / init_worker_count;
 
   for (int i = 1; i < k; ++i) {
-    // 并行更新每个点到最近中心的平方距离
-    auto update_distances = [this, &vectors, &min_distances, i](size_t start, size_t end) {
-      for (size_t j = start; j < end; ++j) {
-        float dist_sq = this->compute_l2_squared(vectors[j], this->centroids_[i-1]);
+    const float *prev_centroid = centroids_[i - 1].data();
+    auto         update_distances = [&](size_t start_idx, size_t end_idx) {
+      for (size_t j = start_idx; j < end_idx; ++j) {
+        float dist_sq = l2_squared_unrolled(vectors[j].data(), prev_centroid, dim);
         if (dist_sq < min_distances[j]) {
           min_distances[j] = dist_sq;
         }
@@ -124,23 +190,25 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
       workers.reserve(init_worker_count);
       for (size_t t = 0; t < init_worker_count; ++t) {
         size_t start_idx = t * init_block_size;
-        if (start_idx >= n) break;
+        if (start_idx >= n) {
+          break;
+        }
         size_t end_idx = std::min(start_idx + init_block_size, n);
         workers.emplace_back(update_distances, start_idx, end_idx);
       }
       for (auto &worker : workers) {
-        if (worker.joinable()) worker.join();
+        if (worker.joinable()) {
+          worker.join();
+        }
       }
     }
 
-    // 按距离平方加权随机选择下一个中心（min_distances已经是平方距离）
     float sum = 0.0f;
     for (float d_sq : min_distances) {
       sum += d_sq;
     }
 
     if (sum < 1e-9f) {
-      // 所有剩余点距离为0，随机选择
       std::uniform_int_distribution<size_t> fallback_dis(0, n - 1);
       centroids_[i] = vectors[fallback_dis(gen)];
       continue;
@@ -149,7 +217,7 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     std::uniform_real_distribution<float> prob_dis(0.0f, sum);
     float target = prob_dis(gen);
 
-    float cumsum = 0.0f;
+    float  cumsum   = 0.0f;
     size_t next_idx = 0;
     for (size_t j = 0; j < n; ++j) {
       cumsum += min_distances[j];
@@ -162,26 +230,37 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     centroids_[i] = vectors[next_idx];
   }
 
-  // K-Means迭代
+  size_t batch_size = n;
+  if (use_mini_batch) {
+    size_t desired_lists = static_cast<size_t>(std::max(1, lists_));
+    size_t desired = std::max<size_t>(static_cast<size_t>(k) * 8, desired_lists * 8);
+    desired        = std::max<size_t>(desired, 1024);
+    batch_size     = std::min(desired, n);
+    LOG_INFO("Using Mini-Batch K-Means with batch_size=%zu for n=%zu vectors", batch_size, n);
+  }
+
   vector<int> assignments(n, -1);
   const size_t worker_count = std::max<size_t>(1, std::min(max_threads, n));
-  const float convergence_threshold = 1e-4f * static_cast<float>(dim);
-  int completed_iterations = 0;
+  const float  convergence_threshold = 1e-4f * static_cast<float>(dim);
+  int          completed_iterations  = 0;
 
-  // 早停优化：跟踪最近的shift值
   std::vector<float> recent_shifts;
   recent_shifts.reserve(3);
 
-  for (int iter = 0; iter < max_iter; ++iter) {
+  int effective_max_iter = std::max(1, max_iter);
+  if (use_mini_batch) {
+    effective_max_iter = std::min(effective_max_iter, 40);
+  }
+
+  for (int iter = 0; iter < effective_max_iter; ++iter) {
     completed_iterations = iter + 1;
     std::atomic<bool> changed_flag(false);
 
-    // Mini-Batch采样
     std::vector<size_t> sample_indices;
     if (use_mini_batch) {
-      sample_indices.reserve(BATCH_SIZE);
+      sample_indices.reserve(batch_size);
       std::uniform_int_distribution<size_t> sample_dis(0, n - 1);
-      for (size_t i = 0; i < BATCH_SIZE; ++i) {
+      for (size_t idx = 0; idx < batch_size; ++idx) {
         sample_indices.push_back(sample_dis(gen));
       }
     } else {
@@ -189,26 +268,27 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
       std::iota(sample_indices.begin(), sample_indices.end(), 0);
     }
 
-    const size_t sample_size = sample_indices.size();
+    const size_t sample_size       = sample_indices.size();
     const size_t sample_block_size = (sample_size + worker_count - 1) / worker_count;
 
-    // 并行分配步骤：将采样的向量分配到最近的中心（使用平方距离）
-    auto assign_worker = [this, &vectors, &assignments, &changed_flag, &sample_indices, k](size_t start, size_t end) {
-      for (size_t idx = start; idx < end; ++idx) {
-        size_t i = sample_indices[idx];
+    auto assign_worker = [this, &vectors, &assignments, &changed_flag, &sample_indices, k, dim](size_t start_idx, size_t end_idx) {
+      for (size_t idx = start_idx; idx < end_idx; ++idx) {
+        size_t       data_index = sample_indices[idx];
+        const float *vec_ptr    = vectors[data_index].data();
+
         float min_dist_sq = std::numeric_limits<float>::max();
-        int best_cluster = 0;
+        int   best_cluster = 0;
 
         for (int j = 0; j < k; ++j) {
-          float dist_sq = this->compute_l2_squared(vectors[i], this->centroids_[j]);
+          float dist_sq = l2_squared_unrolled(vec_ptr, this->centroids_[j].data(), dim);
           if (dist_sq < min_dist_sq) {
             min_dist_sq = dist_sq;
             best_cluster = j;
           }
         }
 
-        if (assignments[i] != best_cluster) {
-          assignments[i] = best_cluster;
+        if (assignments[data_index] != best_cluster) {
+          assignments[data_index] = best_cluster;
           changed_flag.store(true, std::memory_order_relaxed);
         }
       }
@@ -239,9 +319,8 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
       break;
     }
 
-    // 更新步骤：重新计算每个簇的中心
     vector<vector<float>> new_centroids(k, vector<float>(dim, 0.0f));
-    vector<int> counts(k, 0);
+    vector<int>           counts(k, 0);
 
     auto accumulate_point = [&](size_t data_index) {
       if (data_index >= n) {
@@ -252,9 +331,10 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
         return;
       }
       counts[cluster]++;
-      const vector<float> &vec = vectors[data_index];
+      const float *vec_ptr  = vectors[data_index].data();
+      float       *dest_ptr = new_centroids[cluster].data();
       for (size_t d = 0; d < dim; ++d) {
-        new_centroids[cluster][d] += vec[d];
+        dest_ptr[d] += vec_ptr[d];
       }
     };
 
@@ -271,27 +351,25 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     float max_shift_sq = 0.0f;
     for (int j = 0; j < k; ++j) {
       if (counts[j] > 0) {
-        float inv_count = 1.0f / static_cast<float>(counts[j]);
+        float inv_count   = 1.0f / static_cast<float>(counts[j]);
+        float *centroid_p = new_centroids[j].data();
         for (size_t d = 0; d < dim; ++d) {
-          new_centroids[j][d] *= inv_count;
+          centroid_p[d] *= inv_count;
         }
-        // 使用平方距离计算shift（开根号得到真实shift）
-        float shift_sq = compute_l2_squared(centroids_[j], new_centroids[j]);
+        float shift_sq = l2_squared_unrolled(centroids_[j].data(), centroid_p, dim);
         if (shift_sq > max_shift_sq) {
           max_shift_sq = shift_sq;
         }
-        centroids_[j] = new_centroids[j];
+        centroids_[j] = std::move(new_centroids[j]);
       }
     }
 
     float max_shift = std::sqrt(max_shift_sq);
-    // 优化的早停策略：跟踪最近3次的shift
     recent_shifts.push_back(max_shift);
     if (recent_shifts.size() > 3) {
       recent_shifts.erase(recent_shifts.begin());
     }
 
-    // 如果连续3次shift都很小，提前退出
     if (recent_shifts.size() == 3) {
       bool all_small = true;
       for (float shift : recent_shifts) {
@@ -306,7 +384,6 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
       }
     }
 
-    // 更激进的单次早停
     if (max_shift < convergence_threshold * 0.5f) {
       LOG_INFO("K-Means converged with max_shift=%.6f at iteration %d", max_shift, iter);
       break;
@@ -314,7 +391,9 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
   }
 
   LOG_INFO("K-Means clustering completed with k=%d, iterations=%d", k, completed_iterations);
-}const FieldMeta *IvfflatIndex::get_vector_field_meta() const
+}
+
+const FieldMeta *IvfflatIndex::get_vector_field_meta() const
 {
   if (!table_) {
     return nullptr;
@@ -559,46 +638,72 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   const size_t assign_worker_count = std::max<size_t>(1, std::min(max_threads, total_vectors));
   const size_t assign_block_size = (total_vectors + assign_worker_count - 1) / assign_worker_count;
 
-  std::vector<std::mutex> list_mutexes(actual_lists);
+  const size_t dim_assign = static_cast<size_t>(dimension_ > 0 ? dimension_ : (all_vectors.empty() ? 0 : all_vectors.front().size()));
+  std::vector<std::vector<std::vector<IvfEntry>>> thread_local_lists(
+      assign_worker_count, std::vector<std::vector<IvfEntry>>(actual_lists));
 
-  size_t avg_list_size = actual_lists > 0 ? (total_vectors + actual_lists - 1) / actual_lists : 0;
-  for (auto &list : inverted_lists_) {
-    if (avg_list_size > 0) {
-      list.reserve(avg_list_size);
-    }
-  }
-
-  auto assign_to_list = [this, &all_vectors, &all_rids, &list_mutexes, actual_lists](size_t start, size_t end) {
+  auto assign_to_list = [this, &all_vectors, &all_rids, actual_lists, &thread_local_lists, dim_assign](size_t worker_id,
+                                                                                                       size_t start,
+                                                                                                       size_t end) {
+    auto &local_lists = thread_local_lists[worker_id];
     for (size_t i = start; i < end; ++i) {
-      float min_dist_sq = std::numeric_limits<float>::max();
-      int best_cluster = 0;
+      const float *vec_ptr = all_vectors[i].data();
+      float        min_dist_sq = std::numeric_limits<float>::max();
+      int          best_cluster = 0;
 
       for (int j = 0; j < actual_lists; ++j) {
-        float dist_sq = this->compute_l2_squared(all_vectors[i], this->centroids_[j]);
+        float dist_sq = l2_squared_unrolled(vec_ptr, this->centroids_[j].data(), dim_assign);
         if (dist_sq < min_dist_sq) {
           min_dist_sq = dist_sq;
           best_cluster = j;
         }
       }
 
-      std::lock_guard<std::mutex> lock(list_mutexes[best_cluster]);
-      this->inverted_lists_[best_cluster].emplace_back(all_rids[i], std::move(all_vectors[i]));
+      local_lists[best_cluster].emplace_back(all_rids[i], std::move(all_vectors[i]));
     }
   };
 
-  if (assign_worker_count == 1) {
-    assign_to_list(0, total_vectors);
+  size_t used_worker_count = 0;
+
+  if (assign_worker_count == 1 || total_vectors <= assign_block_size) {
+    assign_to_list(0, 0, total_vectors);
+    used_worker_count = 1;
   } else {
     std::vector<std::thread> workers;
     workers.reserve(assign_worker_count);
     for (size_t t = 0; t < assign_worker_count; ++t) {
       size_t start_idx = t * assign_block_size;
-      if (start_idx >= total_vectors) break;
+      if (start_idx >= total_vectors) {
+        break;
+      }
       size_t end_idx = std::min(start_idx + assign_block_size, total_vectors);
-      workers.emplace_back(assign_to_list, start_idx, end_idx);
+      workers.emplace_back(assign_to_list, t, start_idx, end_idx);
+      used_worker_count = t + 1;
     }
     for (auto &worker : workers) {
-      if (worker.joinable()) worker.join();
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+  }
+
+  if (used_worker_count == 0) {
+    used_worker_count = 1;
+  }
+
+  for (int cluster = 0; cluster < actual_lists; ++cluster) {
+    size_t expected_size = inverted_lists_[cluster].size();
+    for (size_t wid = 0; wid < used_worker_count; ++wid) {
+      expected_size += thread_local_lists[wid][cluster].size();
+    }
+    if (expected_size > inverted_lists_[cluster].capacity()) {
+      inverted_lists_[cluster].reserve(expected_size);
+    }
+    for (size_t wid = 0; wid < used_worker_count; ++wid) {
+      auto &local_list = thread_local_lists[wid][cluster];
+      for (auto &entry : local_list) {
+        inverted_lists_[cluster].emplace_back(std::move(entry));
+      }
     }
   }
 
@@ -688,11 +793,13 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
     inverted_lists_.assign(lists_, std::vector<IvfEntry>());
   }
 
-  float min_dist_sq = std::numeric_limits<float>::max();
-  int best_cluster = 0;
+  float        min_dist_sq = std::numeric_limits<float>::max();
+  int          best_cluster = 0;
+  const float *vec_ptr      = vec.data();
+  const size_t dim          = vec.size();
 
   for (size_t i = 0; i < centroids_.size(); ++i) {
-    float dist_sq = compute_l2_squared(vec, centroids_[i]);
+    float dist_sq = l2_squared_unrolled(vec_ptr, centroids_[i].data(), dim);
     if (dist_sq < min_dist_sq) {
       min_dist_sq = dist_sq;
       best_cluster = static_cast<int>(i);
@@ -744,10 +851,12 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
         vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
         for (const auto &list : inverted_lists_) {
           for (const auto &entry : list) {
-            float min_d_sq = std::numeric_limits<float>::max();
-            int best_c = 0;
+            float        min_d_sq = std::numeric_limits<float>::max();
+            int          best_c   = 0;
+            const float *vec_ptr  = entry.vector_data.data();
+            const size_t dim_ptr  = entry.vector_data.size();
             for (int j = 0; j < actual_lists; ++j) {
-              float d_sq = compute_l2_squared(entry.vector_data, centroids_[j]);
+              float d_sq = l2_squared_unrolled(vec_ptr, centroids_[j].data(), dim_ptr);
               if (d_sq < min_d_sq) {
                 min_d_sq = d_sq;
                 best_c = j;
@@ -782,15 +891,27 @@ vector<int> IvfflatIndex::find_nearest_clusters(const vector<float> &query_vecto
   vector<pair<float, int>> distances;
   distances.reserve(centroids_.size());
 
+  const float *query_ptr = query_vector.data();
+  const size_t dim = static_cast<size_t>(dimension_ > 0 ? dimension_ : query_vector.size());
+
   for (size_t i = 0; i < centroids_.size(); ++i) {
-    float dist_sq = compute_l2_squared(query_vector, centroids_[i]);
+    float dist_sq = l2_squared_unrolled(query_ptr, centroids_[i].data(), dim);
     distances.emplace_back(dist_sq, static_cast<int>(i));
   }
 
   // 鎺掑簭骞惰繑鍥炴渶杩戠殑n涓?
-  std::sort(distances.begin(), distances.end());
-
   int actual_n = std::min(n, static_cast<int>(distances.size()));
+  if (actual_n <= 0) {
+    return {};
+  }
+
+  if (actual_n < static_cast<int>(distances.size())) {
+    std::partial_sort(distances.begin(), distances.begin() + actual_n, distances.end());
+    distances.resize(actual_n);
+  } else {
+    std::sort(distances.begin(), distances.end());
+  }
+
   vector<int> result;
   result.reserve(actual_n);
 
@@ -841,15 +962,8 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
       if (vec_data == nullptr) {
         continue;
       }
-      float dist_sq = 0.0f;
       float cutoff = (top_k.size() == limit && limit > 0) ? top_k.top().first : std::numeric_limits<float>::max();
-      for (size_t d = 0; d < dim; ++d) {
-        float diff = query_data[d] - vec_data[d];
-        dist_sq += diff * diff;
-        if (dist_sq >= cutoff) {
-          break;
-        }
-      }
+      float dist_sq = l2_squared_with_cap(query_data, vec_data, dim, cutoff);
 
       if (top_k.size() == limit && limit > 0 && dist_sq >= cutoff) {
         continue;
