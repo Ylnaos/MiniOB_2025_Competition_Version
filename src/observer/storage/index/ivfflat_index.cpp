@@ -1265,6 +1265,18 @@ bool IvfflatIndex::ready() const
     return false;
   }
 
+  // Fix: Check if inverted lists have data
+  bool has_data = false;
+  for (const auto& list : inverted_lists_) {
+    if (!list.empty()) {
+      has_data = true;
+      break;
+    }
+  }
+  if (!has_data) {
+    return false;
+  }
+
   // 妫€鏌ユ槸鍚︽湁鑷冲皯涓€涓潪闆剁殑鑱氱被涓績锛堥伩鍏嶅叏闆跺垵濮嬪寲鐨勬儏鍐碉級
   bool has_nonzero_centroid = false;
   for (const auto &centroid : centroids_) {
@@ -1379,6 +1391,9 @@ RC IvfflatIndex::load_from_file()
     LOG_WARN("Error occurred while reading index file");
     return RC::IOERR_READ;
   }
+
+  // 重新计算centroid norms（关键修复：load后必须初始化centroid_norms_）
+  refresh_centroid_norms();
 
   LOG_INFO("Index loaded from file: %s, centroids=%d, dimension=%d",
            file_name_.c_str(), num_centroids, dimension_);
