@@ -12,6 +12,8 @@ See the Mulan PSL v2 for more details. */
 
 #include "storage/index/index.h"
 #include <vector>
+#include <cstring>
+#include <algorithm>
 #include <string>
 #include <memory>
 
@@ -30,6 +32,65 @@ struct IvfEntry
   IvfEntry &operator=(const IvfEntry &) = default;
   IvfEntry(IvfEntry &&) noexcept        = default;
   IvfEntry &operator=(IvfEntry &&) noexcept = default;
+};
+
+struct IvfList
+{
+  IvfList() = default;
+  explicit IvfList(int dim) : dimension(dim) {}
+
+  void set_dimension(int dim) { dimension = dim; }
+
+  size_t size() const { return rids.size(); }
+  bool empty() const { return rids.empty(); }
+
+  void clear()
+  {
+    rids.clear();
+    vectors.clear();
+  }
+
+  void reserve(size_t count)
+  {
+    rids.reserve(count);
+    if (dimension > 0) {
+      vectors.reserve(static_cast<size_t>(dimension) * count);
+    }
+  }
+
+  void add_entry(const RID &rid, const vector<float> &vec)
+  {
+    if (dimension <= 0) {
+      dimension = static_cast<int>(vec.size());
+    }
+    const size_t vec_dim = static_cast<size_t>(dimension);
+    const size_t offset  = vectors.size();
+    vectors.resize(offset + vec_dim);
+    if (vec_dim > 0 && !vec.empty()) {
+      std::memcpy(vectors.data() + offset, vec.data(), vec_dim * sizeof(float));
+    }
+    rids.push_back(rid);
+  }
+
+  void add_entry_raw(const RID &rid, const float *data_ptr)
+  {
+    const size_t vec_dim = static_cast<size_t>(std::max(0, dimension));
+    const size_t offset  = vectors.size();
+    vectors.resize(offset + vec_dim);
+    if (vec_dim > 0) {
+      std::memcpy(vectors.data() + offset, data_ptr, vec_dim * sizeof(float));
+    }
+    rids.push_back(rid);
+  }
+
+  const float *data_ptr(size_t idx) const
+  {
+    return vectors.data() + idx * static_cast<size_t>(dimension);
+  }
+
+  vector<RID>   rids;     ///< RID 列表
+  vector<float> vectors;  ///< 连续存储的向量数据，长度=size()*dimension
+  int           dimension = 0;
 };
 
 /**
@@ -161,6 +222,6 @@ private:
   const FieldMeta *get_vector_field_meta() const;
 
   // 核心数据结构
-  vector<vector<float>>        centroids_;       // 聚类中心 [lists][dimension]
-  vector<vector<IvfEntry>>     inverted_lists_;  // 倒排列表 [lists][entries]
+  vector<vector<float>> centroids_;      // 聚类中心 [lists][dimension]
+  vector<IvfList>       inverted_lists_;  // 倒排列表 [lists]
 };

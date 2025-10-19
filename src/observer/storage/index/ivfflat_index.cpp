@@ -24,6 +24,7 @@ See the Mulan PSL v2 for more details. */
 #include <atomic>
 #include <thread>
 #include <numeric>
+#include <cstring>
 #if defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -514,7 +515,7 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
 
   if (vector_lob) {
     LobRef ref;
-    memcpy(&ref, record + vector_field_meta->offset(), sizeof(LobRef));
+    std::memcpy(&ref, record + vector_field_meta->offset(), sizeof(LobRef));
     if (ref.length <= 0 || (ref.length % static_cast<int>(sizeof(float)) != 0)) {
       LOG_WARN("Invalid LobRef length for vector column. table=%s length=%d",
                table_ != nullptr ? table_->name() : "<unknown>", ref.length);
@@ -690,7 +691,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
     probes_ = std::max(1, std::min(probes_, lists_));
 
     centroids_.assign(lists_, std::vector<float>(dimension_, 0.0f));
-    inverted_lists_.assign(lists_, std::vector<IvfEntry>());
+    inverted_lists_.assign(lists_, IvfList(dimension_));
 
     RC save_rc = save_to_file();
     if (save_rc != RC::SUCCESS) {
@@ -725,7 +726,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   kmeans_clustering(all_vectors, actual_lists, 100);
 
   // 鍒濆鍖栧€掓帓鍒楄〃
-  inverted_lists_.resize(actual_lists);
+  inverted_lists_.assign(actual_lists, IvfList(dimension_));
 
   // 灏嗗悜閲忓垎閰嶅埌瀵瑰簲鐨勫€掓帓鍒楄〃锛堝苟琛屽寲浼樺寲锛?
   const size_t total_vectors = all_vectors.size();
@@ -787,17 +788,21 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   }
 
   for (int cluster = 0; cluster < actual_lists; ++cluster) {
-    size_t expected_size = inverted_lists_[cluster].size();
+    auto &global_list = inverted_lists_[cluster];
+    if (global_list.dimension <= 0) {
+      global_list.set_dimension(dimension_);
+    }
+
+    size_t expected_size = global_list.size();
     for (size_t wid = 0; wid < used_worker_count; ++wid) {
       expected_size += thread_local_lists[wid][cluster].size();
     }
-    if (expected_size > inverted_lists_[cluster].capacity()) {
-      inverted_lists_[cluster].reserve(expected_size);
-    }
+    global_list.reserve(expected_size);
+
     for (size_t wid = 0; wid < used_worker_count; ++wid) {
       auto &local_list = thread_local_lists[wid][cluster];
       for (auto &entry : local_list) {
-        inverted_lists_[cluster].emplace_back(std::move(entry));
+        global_list.add_entry(entry.rid, entry.vector_data);
       }
     }
   }
@@ -885,7 +890,7 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
     probes_ = std::max(1, std::min(probes_, lists_));
 
     centroids_.assign(lists_, std::vector<float>(dimension_, 0.0f));
-    inverted_lists_.assign(lists_, std::vector<IvfEntry>());
+    inverted_lists_.assign(lists_, IvfList(dimension_));
   }
 
   float        min_dist_sq = std::numeric_limits<float>::max();
@@ -902,7 +907,7 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
   }
 
   // 鎻掑叆鍒板€掓帓鍒楄〃
-  inverted_lists_[best_cluster].emplace_back(*rid, vec);
+  inverted_lists_[best_cluster].add_entry(*rid, vec);
 
   // 妫€鏌ユ槸鍚﹂渶瑕侀噸寤虹储寮曪紙濡傛灉centroids_鏄叏闆朵笖宸茬疮绉冻澶熸暟鎹級
   bool has_zero_centroids = true;
@@ -931,10 +936,19 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
 
       // 鏀堕泦鎵€鏈夊悜閲?
       vector<vector<float>> all_vectors;
+      vector<RID>           all_rids;
       all_vectors.reserve(total_vectors);
+      all_rids.reserve(total_vectors);
       for (const auto &list : inverted_lists_) {
-        for (const auto &entry : list) {
-          all_vectors.push_back(entry.vector_data);
+        const int list_dim = list.dimension > 0 ? list.dimension : dimension_;
+        for (size_t idx = 0; idx < list.size(); ++idx) {
+          vector<float> vec(static_cast<size_t>(list_dim));
+          const float *ptr = list.data_ptr(idx);
+          if (list_dim > 0 && ptr != nullptr) {
+            std::memcpy(vec.data(), ptr, static_cast<size_t>(list_dim) * sizeof(float));
+          }
+          all_vectors.push_back(std::move(vec));
+          all_rids.push_back(list.rids[idx]);
         }
       }
 
@@ -943,22 +957,20 @@ RC IvfflatIndex::insert_entry(const char *record, const RID *rid)
       if (actual_lists > 0) {
         kmeans_clustering(all_vectors, actual_lists, 50);
         // 閲嶆柊鍒嗛厤鍚戦噺鍒版柊鐨勮仛绫讳腑蹇?
-        vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
-        for (const auto &list : inverted_lists_) {
-          for (const auto &entry : list) {
-            float        min_d_sq = std::numeric_limits<float>::max();
-            int          best_c   = 0;
-            const float *vec_ptr  = entry.vector_data.data();
-            const size_t dim_ptr  = entry.vector_data.size();
-            for (int j = 0; j < actual_lists; ++j) {
-              float d_sq = l2_squared_unrolled(vec_ptr, centroids_[j].data(), dim_ptr);
-              if (d_sq < min_d_sq) {
-                min_d_sq = d_sq;
-                best_c = j;
-              }
+        vector<IvfList> new_inverted_lists(actual_lists, IvfList(dimension_));
+        for (size_t idx = 0; idx < all_vectors.size(); ++idx) {
+          float        min_d_sq = std::numeric_limits<float>::max();
+          int          best_c   = 0;
+          const float *vec_ptr  = all_vectors[idx].data();
+          const size_t dim_ptr  = all_vectors[idx].size();
+          for (int j = 0; j < actual_lists; ++j) {
+            float d_sq = l2_squared_unrolled(vec_ptr, centroids_[j].data(), dim_ptr);
+            if (d_sq < min_d_sq) {
+              min_d_sq = d_sq;
+              best_c   = j;
             }
-            new_inverted_lists[best_c].push_back(entry);
           }
+          new_inverted_lists[best_c].add_entry(all_rids[idx], all_vectors[idx]);
         }
         inverted_lists_ = std::move(new_inverted_lists);
 
@@ -1051,13 +1063,12 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
       continue;
     }
 
-    const auto &entries = inverted_lists_[cluster_id];
-    for (const auto &entry : entries) {
-      const float *vec_data = entry.vector_data.data();
-      if (vec_data == nullptr) {
-        continue;
-      }
+    const auto &list = inverted_lists_[cluster_id];
+    const size_t list_size = list.size();
+    const float *list_data = list.vectors.data();
+    for (size_t idx = 0; idx < list_size; ++idx) {
       float cutoff = (top_k.size() == limit && limit > 0) ? top_k.top().first : std::numeric_limits<float>::max();
+      const float *vec_data = list_data + idx * dim;
       float dist_sq = l2_squared_with_cap(query_data, vec_data, dim, cutoff);
 
       if (top_k.size() == limit && limit > 0 && dist_sq >= cutoff) {
@@ -1065,10 +1076,10 @@ vector<RID> IvfflatIndex::ann_search(const vector<float> &query_vector, size_t l
       }
 
       if (top_k.size() < limit) {
-        top_k.emplace(dist_sq, entry.rid);
+        top_k.emplace(dist_sq, list.rids[idx]);
       } else if (dist_sq < top_k.top().first) {
         top_k.pop();
-        top_k.emplace(dist_sq, entry.rid);
+        top_k.emplace(dist_sq, list.rids[idx]);
       }
     }
   }
@@ -1138,12 +1149,13 @@ RC IvfflatIndex::save_to_file()
     int list_size = static_cast<int>(list.size());
     ofs.write(reinterpret_cast<const char *>(&list_size), sizeof(list_size));
 
-    for (const auto &entry : list) {
-      // 鍐欏叆RID
-      ofs.write(reinterpret_cast<const char *>(&entry.rid), sizeof(RID));
-      // 鍐欏叆鍚戦噺鏁版嵁
-      ofs.write(reinterpret_cast<const char *>(entry.vector_data.data()),
-                entry.vector_data.size() * sizeof(float));
+    const int vec_dim = list.dimension > 0 ? list.dimension : dimension_;
+    for (size_t idx = 0; idx < list.size(); ++idx) {
+      ofs.write(reinterpret_cast<const char *>(&list.rids[idx]), sizeof(RID));
+      if (vec_dim > 0) {
+        const float *vec_ptr = list.data_ptr(idx);
+        ofs.write(reinterpret_cast<const char *>(vec_ptr), static_cast<size_t>(vec_dim) * sizeof(float));
+      }
     }
   }
 
@@ -1182,20 +1194,26 @@ RC IvfflatIndex::load_from_file()
   }
 
   // 璇诲彇鍊掓帓鍒楄〃
-  inverted_lists_.resize(num_centroids);
+  inverted_lists_.assign(num_centroids, IvfList(dimension_));
   for (int i = 0; i < num_centroids; ++i) {
     int list_size = 0;
     ifs.read(reinterpret_cast<char *>(&list_size), sizeof(list_size));
 
-    inverted_lists_[i].reserve(list_size);
+    IvfList &list = inverted_lists_[i];
+    list.set_dimension(dimension_);
+    list.reserve(list_size);
+    list.rids.resize(list_size);
+    const size_t vec_dim = static_cast<size_t>(std::max(0, dimension_));
+    if (vec_dim > 0) {
+      list.vectors.resize(static_cast<size_t>(list_size) * vec_dim);
+    }
+
     for (int j = 0; j < list_size; ++j) {
-      RID rid;
-      ifs.read(reinterpret_cast<char *>(&rid), sizeof(RID));
-
-      vector<float> vec(dimension_);
-      ifs.read(reinterpret_cast<char *>(vec.data()), dimension_ * sizeof(float));
-
-      inverted_lists_[i].emplace_back(rid, vec);
+      ifs.read(reinterpret_cast<char *>(&list.rids[j]), sizeof(RID));
+      if (vec_dim > 0) {
+        float *dest = list.vectors.data() + static_cast<size_t>(j) * vec_dim;
+        ifs.read(reinterpret_cast<char *>(dest), vec_dim * sizeof(float));
+      }
     }
   }
 
