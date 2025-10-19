@@ -12,32 +12,14 @@ See the Mulan PSL v2 for more details. */
 
 #include "storage/index/index.h"
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
+#include <fstream>
 
 /**
- * @brief 倒排列表项：存储RID和对应的向量
- */
-struct IvfEntry
-{
-  RID           rid;
-  vector<float> vector_data;
-  float         norm_sq = 0.0f;
-
-  IvfEntry()                                   = default;
-  IvfEntry(const RID &r, const vector<float> &v) : rid(r), vector_data(v) {}
-  IvfEntry(const RID &r, vector<float> &&v) : rid(r), vector_data(std::move(v)) {}
-  IvfEntry(const IvfEntry &)            = default;
-  IvfEntry &operator=(const IvfEntry &) = default;
-  IvfEntry(IvfEntry &&) noexcept        = default;
-  IvfEntry &operator=(IvfEntry &&) noexcept = default;
-};
-
-/**
- * @brief ivfflat 向量索引
+ * @brief ivfflat 向量索引（使用Annoy库实现）
  * @ingroup Index
- * @details 实现基于倒排文件的向量索引，使用K-Means聚类加速ANN搜索
+ * @details 使用Spotify的Annoy库实现高性能ANN搜索，替代原有的K-Means聚类实现
  */
 class IvfflatIndex : public Index
 {
@@ -46,12 +28,12 @@ public:
   virtual ~IvfflatIndex() noexcept;
 
   /**
-   * @brief 创建索引：扫描表数据，执行K-Means聚类，构建倒排索引
+   * @brief 创建索引：扫描表数据，使用Annoy构建索引
    */
   RC create(Table *table, const char *file_name, const IndexMeta &index_meta, span<const FieldMeta> field_metas) override;
 
   /**
-   * @brief 打开已存在的索引：加载聚类中心和倒排列表
+   * @brief 打开已存在的索引：加载Annoy索引和RID映射
    */
   RC open(Table *table, const char *file_name, const IndexMeta &index_meta, span<const FieldMeta> field_metas) override;
 
@@ -66,7 +48,7 @@ public:
   RC close();
 
   /**
-   * @brief 插入向量条目到索引
+   * @brief 插入向量条目到索引（暂不支持动态插入，需要重建索引）
    */
   RC insert_entry(const char *record, const RID *rid) override;
 
@@ -103,75 +85,51 @@ public:
 
 private:
   /**
-   * @brief K-Means聚类算法
-   * @param vectors 所有向量数据
-   * @param k 聚类数量（lists参数）
-   * @param max_iter 最大迭代次数
-   */
-  void kmeans_clustering(const vector<vector<float>> &vectors, int k, int max_iter = 100);
-
-  /**
-   * @brief 计算L2距离
-   */
-  float compute_l2_distance(const vector<float> &a, const vector<float> &b) const;
-
-  /**
-   * @brief 计算L2平方距离（用于K-Means内部比较，避免sqrt开销）
-   */
-  float compute_l2_squared(const vector<float> &a, const vector<float> &b) const;
-
-  /**
-   * @brief 找到距离查询向量最近的n个聚类中心
-   */
-  vector<int> find_nearest_clusters(const vector<float> &query_vector, int n) const;
-
-  /**
    * @brief 从记录中提取向量数据
    */
   RC extract_vector_from_record(const char *record, vector<float> &vec) const;
 
   /**
-   * @brief 保存索引到文件
+   * @brief 保存RID映射到辅助文件
    */
-  RC save_to_file();
+  RC save_rid_mapping();
 
   /**
-   * @brief 从文件加载索引
+   * @brief 加载RID映射（使用mmap）
    */
-  RC load_from_file();
-
-  void apply_meta_config(const IndexMeta &index_meta);
-  RC   enqueue_pending_entry(IvfEntry &&entry, bool force_flush = false);
-  RC   process_batch(std::vector<IvfEntry> &batch);
-  RC   flush_pending_entries();
-  void refresh_centroid_norms();
-
-private:
-  bool   inited_ = false;
-  Table *table_  = nullptr;
-  string file_name_;
-
-  // 索引参数
-  int lists_  = 100;   // 聚类数量
-  int probes_ = 10;    // 查询时探测的聚类数量
-  int dimension_ = 0;  // 向量维度
-  string distance_type_;
-  string index_type_;
-
-  // 向量字段信息
-  string vector_field_name_;  // 保存字段名而不是指针，避免悬空指针
+  RC load_rid_mapping();
 
   /**
    * @brief 从table中安全地获取FieldMeta
    */
   const FieldMeta *get_vector_field_meta() const;
 
-  // 核心数据结构
-  vector<vector<float>>        centroids_;       // 聚类中心 [lists][dimension]
-  vector<vector<IvfEntry>>     inverted_lists_;  // 倒排列表 [lists][entries]
-  mutable std::mutex           mutex_;
-  std::vector<IvfEntry>        pending_entries_;
-  size_t                       pending_batch_limit_ = 16384;  // 增大批量：8192→16384
-  std::vector<float>           centroid_norms_;
-  bool                         centroids_ready_ = false;  // 质心是否已就绪，避免重复检测
+  /**
+   * @brief 应用IndexMeta中的配置参数
+   */
+  void apply_meta_config(const IndexMeta &index_meta);
+
+private:
+  bool   inited_ = false;
+  Table *table_  = nullptr;
+  string file_name_;
+
+  // Annoy索引参数
+  int lists_  = 100;   // Annoy中对应n_trees（构建的树数量）
+  int probes_ = -1;    // Annoy中对应search_k（搜索参数，-1表示auto）
+  int dimension_ = 0;  // 向量维度
+  string distance_type_;
+  string index_type_;
+
+  // 向量字段信息
+  string vector_field_name_;
+
+  // Annoy核心数据
+  void *annoy_index_ = nullptr;  // Annoy索引对象（void*避免模板暴露）
+  std::vector<RID> rid_map_;     // RID映射数组（构建时使用）
+  int item_count_ = 0;           // 已添加的向量数量
+
+  // 辅助文件（存储RID映射）
+  std::ofstream aux_file_;       // 写入时使用
+  RID *rid_map_mmap_ = nullptr;  // mmap加载的RID映射（查询时使用）
 };

@@ -52,6 +52,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/vector_index_scan_logical_operator.h"
 #include "sql/operator/vector_index_scan_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
+#include "storage/index/index.h"
+#include "storage/index/ivfflat_index.h"
 
 using namespace std;
 
@@ -264,8 +266,148 @@ RC PhysicalPlanGenerator::create_plan(ProjectLogicalOperator &project_oper, uniq
 
   unique_ptr<PhysicalOperator> child_phy_oper;
 
+  // 尝试将 ORDER BY l2_distance() LIMIT n 优化为向量索引扫描
+  do {
+    int limit = project_oper.limit();
+    LOG_WARN("[VECTOR_OPT] limit=%d, child_opers.size()=%zu", limit, child_opers.size());
+    if (limit <= 0 || child_opers.size() != 1 ||
+        child_opers[0]->type() != LogicalOperatorType::ORDER_BY) {
+      LOG_WARN("[VECTOR_OPT] early exit - limit=%d, child_opers.size()=%zu, type=%d",
+                limit, child_opers.size(),
+                child_opers.empty() ? -1 : static_cast<int>(child_opers[0]->type()));
+      break;
+    }
+
+    auto *order_by_oper = static_cast<OrderByLogicalOperator *>(child_opers[0].get());
+    auto &order_by_children = order_by_oper->children();
+    auto &order_by_exprs = order_by_oper->expressions();
+
+    LOG_WARN("[VECTOR_OPT] order_by_exprs.size()=%zu", order_by_exprs.size());
+    if (!order_by_exprs.empty()) {
+      LOG_WARN("[VECTOR_OPT] order_by_exprs[0]->type()=%d (ExprType::FUNCTION=%d)",
+                static_cast<int>(order_by_exprs[0]->type()), static_cast<int>(ExprType::FUNCTION));
+    }
+
+    // 检查: ORDER BY function(...)
+    if (order_by_exprs.size() != 1 ||
+        order_by_exprs[0]->type() != ExprType::FUNCTION) {
+      LOG_WARN("[VECTOR_OPT] not a function expression");
+      break;
+    }
+
+    auto *func_expr = static_cast<ScalarFunctionExpr *>(order_by_exprs[0].get());
+    auto func_type = func_expr->function_type();
+
+    LOG_WARN("[VECTOR_OPT] func_type=%d (L2=%d, COSINE=%d, INNER=%d)",
+              static_cast<int>(func_type),
+              static_cast<int>(ScalarFunctionExpr::FuncType::L2_DISTANCE),
+              static_cast<int>(ScalarFunctionExpr::FuncType::COSINE_DISTANCE),
+              static_cast<int>(ScalarFunctionExpr::FuncType::INNER_PRODUCT));
+
+    // 判断是否为向量距离函数 (L2_DISTANCE / COSINE_DISTANCE / INNER_PRODUCT)
+    if (func_type != ScalarFunctionExpr::FuncType::L2_DISTANCE &&
+        func_type != ScalarFunctionExpr::FuncType::COSINE_DISTANCE &&
+        func_type != ScalarFunctionExpr::FuncType::INNER_PRODUCT) {
+      LOG_WARN("[VECTOR_OPT] not a vector distance function");
+      break;
+    }
+
+    // 提取 distance(field, vector) 或 distance(vector, field) 的两个参数
+    Expression *left_expr = func_expr->child().get();
+    Expression *right_expr = func_expr->child2().get();
+
+    LOG_WARN("[VECTOR_OPT] left_expr=%p, right_expr=%p", left_expr, right_expr);
+    if (left_expr) {
+      LOG_WARN("[VECTOR_OPT] left_expr->type()=%d (FIELD=%d, VALUE=%d)",
+                static_cast<int>(left_expr->type()),
+                static_cast<int>(ExprType::FIELD),
+                static_cast<int>(ExprType::VALUE));
+    }
+    if (right_expr) {
+      LOG_WARN("[VECTOR_OPT] right_expr->type()=%d, value_type=%d (VECTORS=%d)",
+                static_cast<int>(right_expr->type()),
+                static_cast<int>(right_expr->value_type()),
+                static_cast<int>(AttrType::VECTORS));
+    }
+
+    FieldExpr *field_expr = nullptr;
+    ValueExpr *value_expr = nullptr;
+
+    // 支持两种顺序: (field, vector) 或 (vector, field)
+    if (left_expr && right_expr) {
+      if (left_expr->type() == ExprType::FIELD &&
+          right_expr->type() == ExprType::VALUE &&
+          right_expr->value_type() == AttrType::VECTORS) {
+        field_expr = static_cast<FieldExpr *>(left_expr);
+        value_expr = static_cast<ValueExpr *>(right_expr);
+        LOG_WARN("[VECTOR_OPT] matched pattern (field, vector)");
+      } else if (right_expr->type() == ExprType::FIELD &&
+                 left_expr->type() == ExprType::VALUE &&
+                 left_expr->value_type() == AttrType::VECTORS) {
+        field_expr = static_cast<FieldExpr *>(right_expr);
+        value_expr = static_cast<ValueExpr *>(left_expr);
+        LOG_WARN("[VECTOR_OPT] matched pattern (vector, field)");
+      }
+    }
+
+    if (!field_expr || !value_expr) {
+      LOG_WARN("[VECTOR_OPT] parameter type mismatch");
+      break;  // 参数类型不匹配
+    }
+
+    // 检查是否是简单的 TABLE_GET (无复杂谓词)
+    if (order_by_children.size() != 1 ||
+        order_by_children[0]->type() != LogicalOperatorType::TABLE_GET) {
+      LOG_WARN("[VECTOR_OPT] not a simple TABLE_GET, children.size()=%zu", order_by_children.size());
+      break;
+    }
+
+    auto *table_get_oper = static_cast<TableGetLogicalOperator *>(order_by_children[0].get());
+    Table *table = table_get_oper->table();
+
+    LOG_WARN("[VECTOR_OPT] field_name=%s, table=%s", field_expr->field_name(), table->name());
+
+    // 查找匹配的向量索引
+    Index *index = table->find_index_by_field(field_expr->field_name());
+    LOG_WARN("[VECTOR_OPT] index=%p", index);
+    if (index) {
+      LOG_WARN("[VECTOR_OPT] index->is_vector_index()=%d", index->is_vector_index());
+    }
+
+    if (!index || !index->is_vector_index()) {
+      LOG_WARN("[VECTOR_OPT] no vector index found");
+      break;  // 没有找到向量索引
+    }
+
+    // 从Value中提取vector<float>
+    Value query_value = value_expr->get_value();
+    if (query_value.attr_type() != AttrType::VECTORS) {
+      break;
+    }
+
+    const char *data = query_value.data();
+    int byte_length = query_value.length();
+    if (byte_length <= 0 || byte_length % sizeof(float) != 0) {
+      LOG_WARN("Invalid vector data length: %d", byte_length);
+      break;
+    }
+
+    int dim = byte_length / sizeof(float);
+    const float *float_ptr = reinterpret_cast<const float *>(data);
+    std::vector<float> query_vector(float_ptr, float_ptr + dim);
+
+    // 创建 VectorIndexScanPhysicalOperator !!!
+    child_phy_oper = std::make_unique<VectorIndexScanPhysicalOperator>(
+        table, index, query_vector, static_cast<size_t>(limit));
+
+    LOG_WARN("[VECTOR_OPT] *** SUCCESS *** Optimized ORDER BY %s() LIMIT %d to VectorIndexScan with %d dims",
+              func_type == ScalarFunctionExpr::FuncType::L2_DISTANCE ? "l2_distance" :
+              func_type == ScalarFunctionExpr::FuncType::COSINE_DISTANCE ? "cosine_distance" : "inner_product",
+              limit, dim);
+  } while (false);
+
   RC rc = RC::SUCCESS;
-  if (!child_opers.empty()) {
+  if (!child_opers.empty() && child_phy_oper == nullptr) {
     LogicalOperator *child_oper = child_opers.front().get();
 
     rc = create(*child_oper, child_phy_oper, session);

@@ -1,27 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(docker:*)",
-      "Bash(docker-compose build:*)",
-      "Bash(winpty docker run -it --name miniob-container ubuntu:20.04 /bin/bash)",
-      "Bash(cd:*)",
-      "Bash(dir:*)",
-      "mcp__codex__codex",
+      "Bash(docker exec:*)",
       "Read(//d/迅雷下载/miniob-2024-main/miniob-2024-main/**)",
-      "Bash(python miniob_test.py:*)",
-      "Bash(git log:*)",
-      "Bash(find:*)",
-      "Bash(python:*)",
+      "Read(//d/迅雷下载/MiniOB2025/**)",
       "Read(//d/迅雷下载/**)",
-      "Bash(cat:*)",
-      "Bash(git reset:*)",
-      "Bash(git restore:*)",
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nOptimize IVFFlat index implementation\n\n- Enhanced probe list generation and distance calculation\n- Improved memory management for centroid data\n- Added bounds checking for cluster assignments\n- Updated .gitignore to exclude runtime database files\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(git push:*)",
-      "Bash(git prune:*)",
-      "Bash(git gc:*)",
-      "mcp__filesystem__edit_file"
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
