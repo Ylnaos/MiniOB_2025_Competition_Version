@@ -539,13 +539,13 @@ void IvfflatIndex::apply_meta_config(const IndexMeta &index_meta)
 
   int configured_lists = index_meta.lists();
   if (configured_lists <= 0) {
-    configured_lists = 245;
+    configured_lists = 512;  // 提升召回率：245→512，适配60K数据集
   }
   lists_ = std::max(1, configured_lists);
 
   int configured_probes = index_meta.probes();
   if (configured_probes <= 0) {
-    configured_probes = 10;  // 提高默认probes：5→10，提升召回率
+    configured_probes = 128;  // 提升召回率：10→128，目标覆盖25%聚类
   }
   if (configured_probes > lists_) {
     LOG_INFO("Adjust probes from %d to %d to match lists", configured_probes, lists_);
@@ -767,7 +767,7 @@ RC IvfflatIndex::process_batch(std::vector<IvfEntry> &batch)
 
       int actual_lists = std::min(static_cast<int>(lists), static_cast<int>(all_vectors.size()));
       if (actual_lists > 0) {
-        kmeans_clustering(all_vectors, actual_lists, 20);  // 零质心重建：20次迭代
+        kmeans_clustering(all_vectors, actual_lists, 50);  // 零质心重建：50次迭代提升聚类质量
 
         vector<vector<IvfEntry>> new_inverted_lists(actual_lists);
         for (const auto &list : inverted_lists_) {
@@ -922,7 +922,7 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   lists_  = actual_lists;
   LOG_INFO("Finalize IVF-Flat index config: requested_lists=%d actual_lists=%d probes=%d",
            requested_lists, lists_, probes_);
-  kmeans_clustering(all_vectors, actual_lists, 20);  // 平衡优化：20次迭代保证质量
+  kmeans_clustering(all_vectors, actual_lists, 50);  // 提升召回率：50次迭代保证聚类质量
 
   // 鍒濆鍖栧€掓帓鍒楄〃
   inverted_lists_.resize(actual_lists);
