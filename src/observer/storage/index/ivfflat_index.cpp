@@ -24,11 +24,66 @@ See the Mulan PSL v2 for more details. */
 #include <atomic>
 #include <thread>
 #include <numeric>
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 namespace {
 
+#if defined(__AVX2__)
+inline float horizontal_sum_ps(__m256 value)
+{
+  alignas(32) float buffer[8];
+  _mm256_storeu_ps(buffer, value);
+  return buffer[0] + buffer[1] + buffer[2] + buffer[3] + buffer[4] + buffer[5] + buffer[6] + buffer[7];
+}
+#endif
+
 inline float l2_squared_unrolled(const float *a, const float *b, size_t dim)
 {
+#if defined(__AVX2__)
+  size_t i         = 0;
+  const size_t blk = (dim / 16) * 16;
+  __m256       acc0 = _mm256_setzero_ps();
+  __m256       acc1 = _mm256_setzero_ps();
+
+  for (; i < blk; i += 16) {
+    __m256 va0   = _mm256_loadu_ps(a + i);
+    __m256 vb0   = _mm256_loadu_ps(b + i);
+    __m256 diff0 = _mm256_sub_ps(va0, vb0);
+    acc0         = _mm256_fmadd_ps(diff0, diff0, acc0);
+
+    __m256 va1   = _mm256_loadu_ps(a + i + 8);
+    __m256 vb1   = _mm256_loadu_ps(b + i + 8);
+    __m256 diff1 = _mm256_sub_ps(va1, vb1);
+    acc1         = _mm256_fmadd_ps(diff1, diff1, acc1);
+  }
+
+  if (i + 8 <= dim) {
+    __m256 va0   = _mm256_loadu_ps(a + i);
+    __m256 vb0   = _mm256_loadu_ps(b + i);
+    __m256 diff0 = _mm256_sub_ps(va0, vb0);
+    acc0         = _mm256_fmadd_ps(diff0, diff0, acc0);
+    i += 8;
+  }
+
+  float total = horizontal_sum_ps(acc0) + horizontal_sum_ps(acc1);
+
+  for (; i + 4 <= dim; i += 4) {
+    float diff0 = a[i] - b[i];
+    float diff1 = a[i + 1] - b[i + 1];
+    float diff2 = a[i + 2] - b[i + 2];
+    float diff3 = a[i + 3] - b[i + 3];
+    total += diff0 * diff0 + diff1 * diff1 + diff2 * diff2 + diff3 * diff3;
+  }
+
+  for (; i < dim; ++i) {
+    float diff = a[i] - b[i];
+    total += diff * diff;
+  }
+
+  return total;
+#else
   size_t i     = 0;
   size_t bound = dim & ~static_cast<size_t>(3);
 
@@ -57,6 +112,7 @@ inline float l2_squared_unrolled(const float *a, const float *b, size_t dim)
   }
 
   return total;
+#endif
 }
 
 inline float l2_squared_with_cap(const float *a, const float *b, size_t dim, float cap)
@@ -68,6 +124,44 @@ inline float l2_squared_with_cap(const float *a, const float *b, size_t dim, flo
   const bool check_cap = cap < std::numeric_limits<float>::max();
   float       total     = 0.0f;
   size_t      i         = 0;
+#if defined(__AVX2__)
+  if (!check_cap) {
+    return l2_squared_unrolled(a, b, dim);
+  }
+
+  const size_t blk16 = (dim / 16) * 16;
+  for (; i < blk16; i += 16) {
+    __m256 va0   = _mm256_loadu_ps(a + i);
+    __m256 vb0   = _mm256_loadu_ps(b + i);
+    __m256 diff0 = _mm256_sub_ps(va0, vb0);
+    __m256 sq0   = _mm256_mul_ps(diff0, diff0);
+
+    __m256 va1   = _mm256_loadu_ps(a + i + 8);
+    __m256 vb1   = _mm256_loadu_ps(b + i + 8);
+    __m256 diff1 = _mm256_sub_ps(va1, vb1);
+    __m256 sq1   = _mm256_mul_ps(diff1, diff1);
+
+    float block_sum = horizontal_sum_ps(_mm256_add_ps(sq0, sq1));
+    total += block_sum;
+    if (total >= cap) {
+      return total;
+    }
+  }
+
+  const size_t blk8 = (dim / 8) * 8;
+  for (; i < blk8; i += 8) {
+    __m256 va0   = _mm256_loadu_ps(a + i);
+    __m256 vb0   = _mm256_loadu_ps(b + i);
+    __m256 diff0 = _mm256_sub_ps(va0, vb0);
+    __m256 sq0   = _mm256_mul_ps(diff0, diff0);
+
+    float block_sum = horizontal_sum_ps(sq0);
+    total += block_sum;
+    if (total >= cap) {
+      return total;
+    }
+  }
+#else
   size_t      bound     = dim & ~static_cast<size_t>(3);
 
   for (; i < bound; i += 4) {
@@ -95,6 +189,7 @@ inline float l2_squared_with_cap(const float *a, const float *b, size_t dim, flo
       return total;
     }
   }
+#endif
 
   for (; i < dim; ++i) {
     float diff = a[i] - b[i];
