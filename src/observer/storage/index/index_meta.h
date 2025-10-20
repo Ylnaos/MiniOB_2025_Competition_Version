@@ -45,16 +45,19 @@ public:
   const vector<string> &fields() const { return fields_; }
   bool                  unique() const { return unique_; }
   bool                  is_vector_index() const { return is_vector_index_; }
+  bool                  is_full_text_index() const { return is_full_text_index_; }
   const string         &index_type() const { return index_type_; }
   const string         &distance_type() const { return distance_type_; }
   int                   lists() const { return lists_; }
   int                   probes() const { return probes_; }
+  const string         &full_text_parser() const { return full_text_parser_; }
 
   void set_vector_options(bool is_vector_index,
                           const string &index_type,
                           const string &distance_type,
                           int lists,
                           int probes);
+  void set_full_text_options(bool is_full_text_index, const string &parser_name);
 
   void desc(ostream &os) const;
 
@@ -67,8 +70,10 @@ protected:
   vector<string> fields_;  // field names (ordered)
   bool           unique_ = false; // unique index flag
   bool           is_vector_index_ = false;
+  bool           is_full_text_index_ = false;
   string         index_type_;
   string         distance_type_;
+  string         full_text_parser_;
   int            lists_  = 0;
   int            probes_ = 0;
 };

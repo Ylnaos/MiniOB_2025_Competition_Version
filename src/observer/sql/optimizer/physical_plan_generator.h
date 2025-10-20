@@ -31,6 +31,7 @@ class CalcLogicalOperator;
 class GroupByLogicalOperator;
 class SubqueryLogicalOperator;
 class VectorIndexScanLogicalOperator;
+class UnionLogicalOperator;
 
 /**
  * @brief 物理计划生成器
@@ -60,6 +61,7 @@ private:
   RC create_plan(GroupByLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session);
   RC create_plan(SubqueryLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session);
   RC create_plan(VectorIndexScanLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session);
+  RC create_plan(UnionLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session);
   RC create_vec_plan(ProjectLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session);
   RC create_vec_plan(TableGetLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session);
   RC create_vec_plan(GroupByLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session);

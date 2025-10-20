@@ -49,6 +49,10 @@ RC CreateIndexExecutor::execute(SQLStageEvent *sql_event)
     vector_options.lists           = create_index_stmt->lists();
     vector_options.probes          = create_index_stmt->probes();
     vector_options_ptr             = &vector_options;
+  } else if (create_index_stmt->is_full_text_index()) {
+    vector_options.is_full_text_index = true;
+    vector_options.fulltext_parser    = create_index_stmt->parser_name();
+    vector_options_ptr                = &vector_options;
   }
 
   return table->create_index(trx,

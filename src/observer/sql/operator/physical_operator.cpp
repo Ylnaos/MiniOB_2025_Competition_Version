@@ -28,6 +28,7 @@ string physical_operator_type_name(PhysicalOperatorType type)
     case PhysicalOperatorType::PREDICATE_VEC: return "PREDICATE_VEC";
     case PhysicalOperatorType::PROJECT: return "PROJECT";
     case PhysicalOperatorType::PROJECT_VEC: return "PROJECT_VEC";
+    case PhysicalOperatorType::UNION_OP: return "UNION";
     case PhysicalOperatorType::CALC: return "CALC";
     case PhysicalOperatorType::ORDER_BY: return "ORDER_BY";
     case PhysicalOperatorType::STRING_LIST: return "STRING_LIST";

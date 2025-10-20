@@ -35,7 +35,9 @@ public:
                   bool is_vector_index = false,
                   const string &distance_type = "",
                   const string &index_type = "",
-                  int lists = 0, int probes = 0)
+                  int lists = 0, int probes = 0,
+                  bool is_full_text_index = false,
+                  const string &parser_name = "")
       : table_(table),
         field_metas_(std::move(field_metas)),
         index_name_(index_name),
@@ -44,7 +46,9 @@ public:
         is_vector_index_(is_vector_index),
         distance_type_(distance_type),
         index_type_(index_type),
-        lists_(lists), probes_(probes)
+        lists_(lists), probes_(probes),
+        is_full_text_index_(is_full_text_index),
+        parser_name_(parser_name)
   {}
 
   virtual ~CreateIndexStmt() = default;
@@ -63,6 +67,8 @@ public:
   const string                   &index_type() const { return index_type_; }
   int                             lists() const { return lists_; }
   int                             probes() const { return probes_; }
+  bool                            is_full_text_index() const { return is_full_text_index_; }
+  const string                   &parser_name() const { return parser_name_; }
 
 public:
   static RC create(Db *db, const CreateIndexSqlNode &create_index, Stmt *&stmt);
@@ -80,4 +86,6 @@ private:
   string                          index_type_;
   int                             lists_ = 0;
   int                             probes_ = 0;
+  bool                            is_full_text_index_ = false;
+  string                          parser_name_;
 };

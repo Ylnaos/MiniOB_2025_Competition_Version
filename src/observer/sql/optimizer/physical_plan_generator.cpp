@@ -49,6 +49,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/subquery_logical_operator.h"
 #include "sql/operator/subquery_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
+#include "sql/operator/union_logical_operator.h"
+#include "sql/operator/union_physical_operator.h"
 #include "sql/operator/vector_index_scan_logical_operator.h"
 #include "sql/operator/vector_index_scan_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
@@ -94,6 +96,10 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
 
     case LogicalOperatorType::JOIN: {
       return create_plan(static_cast<JoinLogicalOperator &>(logical_operator), oper, session);
+    } break;
+
+    case LogicalOperatorType::UNION: {
+      return create_plan(static_cast<UnionLogicalOperator &>(logical_operator), oper, session);
     } break;
 
     case LogicalOperatorType::GROUP_BY: {
@@ -454,6 +460,29 @@ RC PhysicalPlanGenerator::create_plan(GroupByLogicalOperator &logical_oper, uniq
 
   oper = std::move(group_by_oper);
   return rc;
+}
+
+RC PhysicalPlanGenerator::create_plan(UnionLogicalOperator &logical_oper, unique_ptr<PhysicalOperator> &oper, Session *session)
+{
+  auto union_oper = make_unique<UnionPhysicalOperator>(logical_oper.distinct());
+  vector<unique_ptr<LogicalOperator>> &child_opers = logical_oper.children();
+  if (child_opers.empty()) {
+    LOG_WARN("union logical operator has no children");
+    return RC::INTERNAL;
+  }
+
+  for (auto &child_logical : child_opers) {
+    unique_ptr<PhysicalOperator> child_physical;
+    RC rc = create(*child_logical, child_physical, session);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to create union child plan. rc=%s", strrc(rc));
+      return rc;
+    }
+    union_oper->add_child(std::move(child_physical));
+  }
+
+  oper = std::move(union_oper);
+  return RC::SUCCESS;
 }
 
 RC PhysicalPlanGenerator::create_plan(

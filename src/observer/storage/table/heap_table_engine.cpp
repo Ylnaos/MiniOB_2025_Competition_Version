@@ -298,15 +298,26 @@ RC HeapTableEngine::create_index(Trx *trx,
     return rc;
   }
 
-  bool is_vector_index = false;
+  bool   is_vector_index     = false;
+  bool   is_full_text_index  = false;
+  string fulltext_parser;
   if (vector_options != nullptr) {
-    is_vector_index = vector_options->is_vector_index;
-    if (is_vector_index) {
+    if (vector_options->is_vector_index && vector_options->is_full_text_index) {
+      LOG_WARN("vector index and full-text index flags conflict. table=%s index=%s",
+               table_meta_->name(), index_name);
+      return RC::INVALID_ARGUMENT;
+    }
+    if (vector_options->is_vector_index) {
+      is_vector_index = true;
       new_index_meta.set_vector_options(true,
                                         vector_options->index_type,
                                         vector_options->distance_type,
                                         vector_options->lists,
                                         vector_options->probes);
+    } else if (vector_options->is_full_text_index) {
+      is_full_text_index = true;
+      fulltext_parser    = vector_options->fulltext_parser;
+      new_index_meta.set_full_text_options(true, fulltext_parser);
     }
   }
   // 额外兜底：若未显式指定但字段类型为向量，则视为向量索引
@@ -316,6 +327,10 @@ RC HeapTableEngine::create_index(Trx *trx,
   }
   if (is_vector_index && !(field_metas.size() == 1 && field_metas[0].type() == AttrType::VECTORS)) {
     LOG_WARN("vector index must be built on single vector column. table=%s index=%s", table_meta_->name(), index_name);
+    return RC::INVALID_ARGUMENT;
+  }
+  if (is_full_text_index && field_metas.size() != 1) {
+    LOG_WARN("full-text index must be built on single column. table=%s index=%s", table_meta_->name(), index_name);
     return RC::INVALID_ARGUMENT;
   }
 

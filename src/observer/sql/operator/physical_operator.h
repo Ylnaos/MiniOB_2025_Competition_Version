@@ -45,6 +45,7 @@ enum class PhysicalOperatorType
   PREDICATE_VEC,
   PROJECT,
   PROJECT_VEC,
+  UNION_OP,
   CALC,
   STRING_LIST,
   DELETE,

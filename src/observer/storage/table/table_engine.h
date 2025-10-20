@@ -36,8 +36,10 @@ class Db;
 struct VectorIndexOptions
 {
   bool        is_vector_index = false;
+  bool        is_full_text_index = false;
   std::string distance_type;
   std::string index_type;
+  std::string fulltext_parser;
   int         lists  = 0;
   int         probes = 0;
 };

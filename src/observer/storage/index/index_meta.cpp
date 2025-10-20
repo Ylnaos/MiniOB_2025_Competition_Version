@@ -28,6 +28,8 @@ const static Json::StaticString FIELD_INDEX_TYPE("index_type");
 const static Json::StaticString FIELD_DISTANCE_TYPE("distance_type");
 const static Json::StaticString FIELD_LISTS("lists");
 const static Json::StaticString FIELD_PROBES("probes");
+const static Json::StaticString FIELD_IS_FULL_TEXT_INDEX("is_full_text_index");
+const static Json::StaticString FIELD_FULLTEXT_PARSER("fulltext_parser");
 
 RC IndexMeta::init(const char *name, span<const FieldMeta> fields, bool unique)
 {
@@ -49,8 +51,10 @@ RC IndexMeta::init(const char *name, span<const FieldMeta> fields, bool unique)
   }
   unique_            = unique;
   is_vector_index_   = false;
+  is_full_text_index_ = false;
   index_type_.clear();
   distance_type_.clear();
+  full_text_parser_.clear();
   lists_  = 0;
   probes_ = 0;
   return RC::SUCCESS;
@@ -72,10 +76,29 @@ void IndexMeta::set_vector_options(bool is_vector_index,
   }
 
   is_vector_index_ = true;
+  is_full_text_index_ = false;
   index_type_      = index_type;
   distance_type_   = distance_type;
   lists_           = std::max(0, lists);
   probes_          = std::max(0, probes);
+  full_text_parser_.clear();
+}
+
+void IndexMeta::set_full_text_options(bool is_full_text_index, const string &parser_name)
+{
+  if (!is_full_text_index) {
+    is_full_text_index_ = false;
+    full_text_parser_.clear();
+    return;
+  }
+
+  is_full_text_index_ = true;
+  is_vector_index_    = false;
+  index_type_.clear();
+  distance_type_.clear();
+  lists_  = 0;
+  probes_ = 0;
+  full_text_parser_ = parser_name.empty() ? "jieba" : parser_name;
 }
 
 void IndexMeta::to_json(Json::Value &json_value) const
@@ -93,10 +116,16 @@ void IndexMeta::to_json(Json::Value &json_value) const
       json_value[FIELD_INDEX_TYPE] = index_type_;
     }
     if (!distance_type_.empty()) {
-      json_value[FIELD_DISTANCE_TYPE] = distance_type_;
+    json_value[FIELD_DISTANCE_TYPE] = distance_type_;
     }
     json_value[FIELD_LISTS]  = lists_;
     json_value[FIELD_PROBES] = probes_;
+  }
+  if (is_full_text_index_) {
+    json_value[FIELD_IS_FULL_TEXT_INDEX] = true;
+    if (!full_text_parser_.empty()) {
+      json_value[FIELD_FULLTEXT_PARSER] = full_text_parser_;
+    }
   }
 }
 
@@ -174,6 +203,20 @@ RC IndexMeta::from_json(const TableMeta &table, const Json::Value &json_value, I
   }
 
   index.set_vector_options(is_vector_index, index_type, distance_type, lists, probes);
+
+  bool is_full_text_index = false;
+  const Json::Value &fulltext_flag_value = json_value[FIELD_IS_FULL_TEXT_INDEX];
+  if (fulltext_flag_value.isBool()) {
+    is_full_text_index = fulltext_flag_value.asBool();
+  }
+  string fulltext_parser;
+  if (is_full_text_index) {
+    const Json::Value &parser_value = json_value[FIELD_FULLTEXT_PARSER];
+    if (parser_value.isString()) {
+      fulltext_parser = parser_value.asString();
+    }
+  }
+  index.set_full_text_options(is_full_text_index, fulltext_parser);
   return RC::SUCCESS;
 }
 
@@ -193,5 +236,7 @@ void IndexMeta::desc(ostream &os) const {
        << ", distance_type=" << distance_type_
        << ", lists=" << lists_
        << ", probes=" << probes_ << ")";
+  } else if (is_full_text_index_) {
+    os << ", fulltext(parser=" << full_text_parser_ << ")";
   }
 }

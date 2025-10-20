@@ -22,6 +22,7 @@ See the Mulan PSL v2 for more details. */
 
 class Expression;
 class ParsedSqlNode;  // forward declaration for CTAS
+struct SelectSqlNode;  // forward declaration for set operations
 
 /**
  * @defgroup SQLParser SQL Parser
@@ -112,6 +113,18 @@ struct ConditionSqlNode
   ConditionSqlNode& operator=(const ConditionSqlNode&) = delete;
 };
 
+enum class SetOperatorType
+{
+  UNION,
+  UNION_ALL
+};
+
+struct SelectSetOperationSqlNode
+{
+  SetOperatorType              type = SetOperatorType::UNION;
+  std::unique_ptr<SelectSqlNode> select;
+};
+
 /**
  * @brief 表示一个 ORDER BY 条目：表达式 + 升降序
  */
@@ -142,9 +155,14 @@ struct SelectSqlNode
   vector<ConditionSqlNode>       having;       ///< having clause (AND chained conditions)
   vector<OrderBySqlNode>         order_by;     ///< order by clause
   int                            limit = -1;   ///< limit clause (default -1 means no limit)
+  vector<SelectSetOperationSqlNode> set_operations; ///< UNION / UNION ALL 后续的子查询
 
   SelectSqlNode() = default;
   ~SelectSqlNode();  // 定义在 parse_defs.cpp 中
+  SelectSqlNode(SelectSqlNode &&) noexcept = default;
+  SelectSqlNode &operator=(SelectSqlNode &&) noexcept = default;
+  SelectSqlNode(const SelectSqlNode &) = delete;
+  SelectSqlNode &operator=(const SelectSqlNode &) = delete;
 };
 
 /**
@@ -262,6 +280,8 @@ struct CreateIndexSqlNode
   string              index_type;               ///< Index type: ivfflat
   int                 lists = 0;                ///< Number of clusters for IVF-Flat
   int                 probes = 0;               ///< Number of probes during search
+  bool                is_full_text_index = false; ///< Whether this is a full-text index
+  string              parser_name;                ///< Full-text parser name (e.g., jieba)
 };
 
 /**

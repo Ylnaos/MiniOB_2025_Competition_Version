@@ -694,7 +694,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   }
 
   // 组装 SelectStmt
-  SelectStmt *select_stmt = new SelectStmt();
+  unique_ptr<SelectStmt> select_stmt_guard(new SelectStmt());
+  SelectStmt *select_stmt = select_stmt_guard.get();
   select_stmt->tables_.swap(tables);
   select_stmt->table_aliases_.swap(table_aliases);
   select_stmt->query_expressions_.swap(bound_expressions);
@@ -764,6 +765,33 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
   }
 
-  stmt = select_stmt;
+  if (!select_sql.set_operations.empty()) {
+    const size_t expected_columns = select_stmt->query_expressions_.size();
+    for (auto &set_node : select_sql.set_operations) {
+      if (!set_node.select) {
+        LOG_WARN("union branch is null");
+        return RC::INVALID_ARGUMENT;
+      }
+      Stmt *child_stmt = nullptr;
+      RC rc2 = SelectStmt::create(db, *set_node.select, child_stmt);
+      if (OB_FAIL(rc2)) {
+        LOG_WARN("failed to create select stmt for union branch. rc=%s", strrc(rc2));
+        return rc2;
+      }
+      unique_ptr<SelectStmt> child_select(static_cast<SelectStmt *>(child_stmt));
+      if (expected_columns != child_select->query_expressions().size()) {
+        LOG_WARN("union branches column count mismatch. expected=%zu, got=%zu",
+            expected_columns,
+            child_select->query_expressions().size());
+        return RC::SQL_SYNTAX;
+      }
+      SelectStmt::SetOperation op;
+      op.type = set_node.type;
+      op.stmt = std::move(child_select);
+      select_stmt->set_operations_.emplace_back(std::move(op));
+    }
+  }
+
+  stmt = select_stmt_guard.release();
   return RC::SUCCESS;
 }

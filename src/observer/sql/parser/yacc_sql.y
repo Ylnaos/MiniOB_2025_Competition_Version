@@ -142,8 +142,11 @@ static size_t default_length_for_attr_type(AttrType type)
         TABLES
         INDEX
         UNIQUE
+        FULLTEXT
         CALC
         SELECT
+        UNION
+        ALL
         DESC
         AS
         ASC
@@ -212,11 +215,15 @@ static size_t default_length_for_attr_type(AttrType type)
         CHANGE
         RENAME
         TO
+        MATCH
+        AGAINST
+        PARSER
         STRING_TO_VECTOR_F
         TO_VECTOR_F
         VECTOR_TO_STRING_F
         FROM_VECTOR_F
         VECTOR_DISTANCE_F
+        TOKENIZE_F
         WITH
         DISTANCE
         TYPE
@@ -245,6 +252,7 @@ static size_t default_length_for_attr_type(AttrType type)
   RelationSqlNode *                          relation_node;
   vector<string> *                           key_list;
   vector<pair<string, Expression*>> *        update_list;
+  vector<SelectSetOperationSqlNode> *        set_op_list;
   char *                                     cstring;
   int                                        number;
   float                                      floats;
@@ -262,6 +270,7 @@ static size_t default_length_for_attr_type(AttrType type)
 // %destructor { delete $$; } <rel_attr_list>
 %destructor { delete $$; } <relation_list>
 %destructor { delete $$; } <key_list>
+%destructor { delete $$; } <set_op_list>
 
 %token <number> NUMBER
 %token <floats> FLOAT
@@ -312,8 +321,13 @@ static size_t default_length_for_attr_type(AttrType type)
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
 %type <cstring>             identifier
+%type <cstring>             fulltext_parser_opt
 %type <sql_node>            calc_stmt
 %type <sql_node>            select_stmt
+%type <sql_node>            select_core
+%type <set_op_list>         select_set_opt_list
+%type <set_op_list>         select_set_list
+%type <set_op_list>         select_set_item
 %type <sql_node>            insert_stmt
 %type <sql_node>            update_stmt
 %type <sql_node>            delete_stmt
@@ -543,6 +557,43 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       create_index.probes = $26;
       create_index.unique = false;
     }
+    | CREATE FULLTEXT INDEX ID ON ID LBRACE attr_list RBRACE fulltext_parser_opt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_name      = $4;
+      create_index.relation_name   = $6;
+      if ($8 != nullptr) {
+        create_index.attribute_names.swap(*$8);
+        delete $8;
+      }
+      create_index.unique             = false;
+      create_index.is_full_text_index = true;
+      if ($10 != nullptr) {
+        create_index.parser_name = $10;
+      }
+    }
+    | ALTER TABLE ID ADD FULLTEXT INDEX ID LBRACE attr_list RBRACE fulltext_parser_opt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.relation_name   = $3;
+      create_index.index_name      = $7;
+      if ($9 != nullptr) {
+        create_index.attribute_names.swap(*$9);
+        delete $9;
+      }
+      create_index.unique             = false;
+      create_index.is_full_text_index = true;
+      if ($11 != nullptr) {
+        create_index.parser_name = $11;
+      }
+    }
+    ;
+
+fulltext_parser_opt:
+    /* empty */ { $$ = nullptr; }
+  | WITH PARSER identifier { $$ = $3; }
     ;
 
 drop_index_stmt:      /*drop index 语句的语法解析树*/
@@ -927,6 +978,65 @@ update_list:
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
+    select_core select_set_opt_list
+    {
+      $$ = $1;
+      if ($2 != nullptr) {
+        $$->selection.set_operations.swap(*$2);
+        delete $2;
+      }
+    }
+    ;
+
+select_set_opt_list:
+    /* empty */ { $$ = nullptr; }
+    | select_set_list { $$ = $1; }
+    ;
+
+select_set_list:
+    select_set_item
+    | select_set_list select_set_item
+    {
+      if ($1 != nullptr && $2 != nullptr) {
+        $$ = $1;
+        for (auto &node : *$2) {
+          $$->emplace_back(std::move(node));
+        }
+        delete $2;
+      } else if ($1 != nullptr) {
+        $$ = $1;
+      } else {
+        $$ = $2;
+      }
+    }
+    ;
+
+select_set_item:
+    UNION select_core
+    {
+      $$ = new vector<SelectSetOperationSqlNode>;
+      SelectSetOperationSqlNode item;
+      item.type = SetOperatorType::UNION;
+      auto child = unique_ptr<SelectSqlNode>(new SelectSqlNode());
+      *child = std::move($2->selection);
+      item.select = std::move(child);
+      $$->emplace_back(std::move(item));
+      delete $2;
+    }
+    | UNION ALL select_core
+    {
+      $$ = new vector<SelectSetOperationSqlNode>;
+      SelectSetOperationSqlNode item;
+      item.type = SetOperatorType::UNION_ALL;
+      auto child = unique_ptr<SelectSqlNode>(new SelectSqlNode());
+      *child = std::move($3->selection);
+      item.select = std::move(child);
+      $$->emplace_back(std::move(item));
+      delete $3;
+    }
+    ;
+
+select_core:        /*  select 语句的语法解析树*/
     SELECT expression_list FROM rel_list where group_by having order_by limit_opt
     {
       $$ = new ParsedSqlNode(SCF_SELECT);

@@ -772,7 +772,8 @@ RC Db::alter_table_modify_columns(const AlterTableStmt &stmt)
   }
 
   Table *reopened = new Table();
-  rc = reopened->open(this, old_meta_file.c_str(), path_.c_str());
+  std::string reopened_meta_name = getFileName(old_meta_file);
+  rc = reopened->open(this, reopened_meta_name.c_str(), path_.c_str());
   if (OB_FAIL(rc)) {
     delete reopened;
     return rc;
@@ -861,7 +862,8 @@ RC Db::alter_table_rename_table(const AlterTableStmt &stmt)
   }
 
   Table *reopened = new Table();
-  rc = reopened->open(this, new_meta_file.c_str(), path_.c_str());
+  std::string reopened_meta_name = getFileName(new_meta_file);
+  rc = reopened->open(this, reopened_meta_name.c_str(), path_.c_str());
   if (OB_FAIL(rc)) {
     delete reopened;
     return rc;

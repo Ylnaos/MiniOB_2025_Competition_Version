@@ -53,6 +53,23 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     field_metas.push_back(field_meta);
   }
 
+  string parser_name;
+
+  if (create_index.is_full_text_index) {
+    if (field_metas.size() != 1) {
+      LOG_WARN("full-text index only supports single column. table=%s, index=%s",
+               table_name, create_index.index_name.c_str());
+      return RC::INVALID_ARGUMENT;
+    }
+    const FieldMeta *target_field = field_metas[0];
+    if (target_field->type() != AttrType::CHARS && target_field->type() != AttrType::TEXTS) {
+      LOG_WARN("full-text index expects CHAR/TEXT column. table=%s, field=%s, type=%d",
+               table_name, target_field->name(), static_cast<int>(target_field->type()));
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+    parser_name = create_index.parser_name.empty() ? "jieba" : create_index.parser_name;
+  }
+
   // 幂等处理：若已存在同名索引，且字段列表、唯一性与本次请求一致，则视为成功
   // 否则保持与现有行为一致，返回索引名重复错误
   if (Index *exist = table->find_index(create_index.index_name.c_str()); exist != nullptr) {
@@ -60,6 +77,13 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     const vector<string>       &exist_fields  = meta.fields();
     const vector<string>       &req_fields    = create_index.attribute_names;
     const bool                  same_unique   = (meta.unique() == create_index.unique);
+    const bool                  same_vector   = (meta.is_vector_index() == create_index.is_vector_index);
+    const bool                  meta_fulltext = (!meta.is_vector_index() && meta.is_full_text_index());
+    bool                        same_fulltext = (meta_fulltext == create_index.is_full_text_index);
+    if (same_fulltext && meta_fulltext) {
+      const string &exist_parser = meta.full_text_parser();
+      same_fulltext = (0 == strcasecmp(exist_parser.c_str(), parser_name.c_str()));
+    }
     const bool                  same_field_sz = (exist_fields.size() == req_fields.size());
     bool                        same_fields   = same_field_sz;
     if (same_field_sz) {
@@ -70,7 +94,7 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
         }
       }
     }
-    if (same_fields && same_unique) {
+    if (same_fields && same_unique && same_vector && same_fulltext) {
       // 已存在完全相同定义的索引：幂等返回成功，符合官方期望
       return RC::SUCCESS;
     }
@@ -85,6 +109,10 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
     return RC::SCHEMA_INDEX_NAME_REPEAT;
   }
 
+  if (!create_index.is_full_text_index) {
+    parser_name.clear();
+  }
+
   stmt = new CreateIndexStmt(table,
                              std::move(field_metas),
                              create_index.index_name,
@@ -94,6 +122,8 @@ RC CreateIndexStmt::create(Db *db, const CreateIndexSqlNode &create_index, Stmt 
                              create_index.distance_type,
                              create_index.index_type,
                              create_index.lists,
-                             create_index.probes);
+                             create_index.probes,
+                             create_index.is_full_text_index,
+                             parser_name);
   return RC::SUCCESS;
 }
