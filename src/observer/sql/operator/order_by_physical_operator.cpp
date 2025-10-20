@@ -18,6 +18,10 @@ RC OrderByPhysicalOperator::open(Trx *trx)
     return RC::INTERNAL;
   }
 
+  rows_.clear();
+  shared_specs_.reset();
+  current_index_ = 0;
+
   RC rc = children_[0]->open(trx);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to open child operator. rc=%s", strrc(rc));
@@ -44,7 +48,23 @@ RC OrderByPhysicalOperator::open(Trx *trx)
       return RC::INTERNAL;
     }
 
+    if (!shared_specs_) {
+      auto specs_holder = std::make_shared<vector<TupleCellSpec>>();
+      specs_holder->reserve(child_tuple->cell_num());
+      for (int i = 0; i < child_tuple->cell_num(); i++) {
+        TupleCellSpec spec;
+        rc = child_tuple->spec_at(i, spec);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("failed to fetch tuple spec. rc=%s", strrc(rc));
+          return rc;
+        }
+        specs_holder->push_back(spec);
+      }
+      shared_specs_ = std::move(specs_holder);
+    }
+
     RowWithKeys row_with_keys;
+    row_with_keys.row.set_shared_specs(shared_specs_);
     rc = ValueListTuple::make(*child_tuple, row_with_keys.row);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to materialize tuple. rc=%s", strrc(rc));
@@ -144,6 +164,7 @@ RC OrderByPhysicalOperator::close()
     children_[0]->close();
   }
   rows_.clear();
+  shared_specs_.reset();
   opened_        = false;
   current_index_ = 0;
   return RC::SUCCESS;

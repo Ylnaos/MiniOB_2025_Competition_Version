@@ -20,6 +20,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/tuple_cell.h"
 #include "sql/parser/parse.h"
 #include "common/value.h"
+#include <memory>
 #include <cstring>
 #include <cstdint>
 #include <string>
@@ -484,7 +485,15 @@ public:
   ValueListTuple()          = default;
   virtual ~ValueListTuple() = default;
 
-  void set_names(const vector<TupleCellSpec> &specs) { specs_ = specs; }
+  void set_names(const vector<TupleCellSpec> &specs) { specs_ = specs; shared_specs_.reset(); }
+
+  void set_shared_specs(const std::shared_ptr<vector<TupleCellSpec>> &specs)
+  {
+    shared_specs_ = specs;
+    specs_.clear();
+  }
+
+  const std::shared_ptr<vector<TupleCellSpec>> &shared_specs() const { return shared_specs_; }
   void set_cells(const vector<Value> &cells) { cells_ = cells; }
 
   virtual int cell_num() const override { return static_cast<int>(cells_.size()); }
@@ -505,17 +514,28 @@ public:
       return RC::NOTFOUND;
     }
 
-    spec = specs_[index];
+    if (shared_specs_) {
+      spec = (*shared_specs_)[index];
+    } else {
+      spec = specs_[index];
+    }
     return RC::SUCCESS;
   }
 
   virtual RC find_cell(const TupleCellSpec &spec, Value &cell) const override
   {
-    ASSERT(cells_.size() == specs_.size(), "cells_.size()=%d, specs_.size()=%d", cells_.size(), specs_.size());
+    const vector<TupleCellSpec> *specs_holder = nullptr;
+    if (shared_specs_) {
+      specs_holder = shared_specs_.get();
+    } else {
+      specs_holder = &specs_;
+    }
 
-    const int size = static_cast<int>(specs_.size());
+    ASSERT(cells_.size() == specs_holder->size(), "cells_.size()=%d, specs_.size()=%d", cells_.size(), specs_holder->size());
+
+    const int size = static_cast<int>(specs_holder->size());
     for (int i = 0; i < size; i++) {
-      if (specs_[i].equals(spec)) {
+      if ((*specs_holder)[i].equals(spec)) {
         cell = cells_[i];
         return RC::SUCCESS;
       }
@@ -525,7 +545,17 @@ public:
 
   static RC make(const Tuple &tuple, ValueListTuple &value_list)
   {
+    value_list.cells_.clear();
+    const bool use_shared_specs = static_cast<bool>(value_list.shared_specs_);
+    if (!use_shared_specs) {
+      value_list.specs_.clear();
+    }
+
     const int cell_num = tuple.cell_num();
+    value_list.cells_.reserve(cell_num);
+    if (!use_shared_specs) {
+      value_list.specs_.reserve(cell_num);
+    }
     for (int i = 0; i < cell_num; i++) {
       Value cell;
       RC    rc = tuple.cell_at(i, cell);
@@ -540,22 +570,19 @@ public:
       }
 
       value_list.cells_.push_back(cell);
-      value_list.specs_.push_back(spec);
+      if (!use_shared_specs) {
+        value_list.specs_.push_back(spec);
+      }
     }
     return RC::SUCCESS;
   }
 
 private:
-  vector<Value>         cells_;
-  vector<TupleCellSpec> specs_;
+  vector<Value>                         cells_;
+  vector<TupleCellSpec>                 specs_;
+  std::shared_ptr<vector<TupleCellSpec>> shared_specs_;
 };
 
-/**
- * @brief 将两个tuple合并为一个tuple
- * @ingroup Tuple
- * @details 在join算子中使用
- * TODO replace with composite tuple
- */
 class JoinedTuple : public Tuple
 {
 public:

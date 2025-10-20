@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/operator/physical_operator.h"
 #include "sql/expr/expression.h"
+#include <memory>
 
 /**
  * @brief ORDER BY 物理算子
@@ -48,5 +49,5 @@ private:
   vector<RowWithKeys>     rows_;
   size_t                  current_index_ = 0;
   bool                    opened_        = false;
+  std::shared_ptr<vector<TupleCellSpec>> shared_specs_;
 };
-

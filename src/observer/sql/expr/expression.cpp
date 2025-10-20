@@ -1970,10 +1970,103 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       return RC::SUCCESS;
     }
     case FuncType::STRING_TO_VECTOR:
-    case FuncType::VECTOR_TO_STRING:
-    case FuncType::DISTANCE: {
+    case FuncType::VECTOR_TO_STRING: {
       // 这些函数需要参数,在try_get_value中不支持常量折叠
       return RC::UNIMPLEMENTED;
+    }
+    case FuncType::DISTANCE: {
+      // DISTANCE 支持在所有参数均为常量时直接计算
+      if (!child2_ || !child3_) {
+        return RC::INVALID_ARGUMENT;
+      }
+
+      Value arg1;
+      Value arg2;
+      Value arg3;
+      RC rc1 = child_->try_get_value(arg1);
+      RC rc2 = child2_->try_get_value(arg2);
+      RC rc3 = child3_->try_get_value(arg3);
+      // 任意一个参数无法在编译期确定,则回退到执行期计算
+      if (OB_FAIL(rc1) || OB_FAIL(rc2) || OB_FAIL(rc3)) {
+        return RC::UNIMPLEMENTED;
+      }
+
+      // 向量参数若不是向量类型,尝试进行类型转换
+      Value vec_arg1 = arg1;
+      Value vec_arg2 = arg2;
+      if (arg1.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg1, AttrType::VECTORS, vec_arg1);
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
+      }
+      if (arg2.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
+      }
+      const int len1 = vec_arg1.length();
+      const int len2 = vec_arg2.length();
+      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+
+      Value dist_arg = arg3;
+      if (arg3.attr_type() != AttrType::CHARS) {
+        rc = Value::cast_to(arg3, AttrType::CHARS, dist_arg);
+        if (OB_FAIL(rc)) {
+          return RC::INVALID_ARGUMENT;
+        }
+      }
+      string dist_type = dist_arg.get_string();
+      for (char &c : dist_type) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      }
+
+      const int dim = len1 / static_cast<int>(sizeof(float));
+      const float *a = reinterpret_cast<const float *>(vec_arg1.data());
+      const float *b = reinterpret_cast<const float *>(vec_arg2.data());
+
+      double acc = 0.0;
+      if (dist_type == "EUCLIDEAN") {
+        for (int i = 0; i < dim; i++) {
+          double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+          acc += d * d;
+        }
+        acc = std::sqrt(acc);
+      } else if (dist_type == "DOT") {
+        for (int i = 0; i < dim; i++) {
+          acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+        }
+      } else if (dist_type == "COSINE") {
+        double dot = 0.0;
+        double na  = 0.0;
+        double nb  = 0.0;
+        for (int i = 0; i < dim; i++) {
+          double va = static_cast<double>(a[i]);
+          double vb = static_cast<double>(b[i]);
+          dot += va * vb;
+          na += va * va;
+          nb += vb * vb;
+        }
+        if (na <= 0.0 || nb <= 0.0) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
+        double cos = dot / (std::sqrt(na) * std::sqrt(nb));
+        acc = 1.0 - cos;
+      } else {
+        return RC::INVALID_ARGUMENT;
+      }
+
+      double p  = std::pow(10.0, 2.0);
+      double rf = round_half_to_even(acc * p) / p;
+      value.set_float(static_cast<float>(rf));
+      return RC::SUCCESS;
     }
   }
   return RC::UNIMPLEMENTED;
