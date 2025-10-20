@@ -355,8 +355,9 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
 
     if (filter_unit->comp() != IN_OP && filter_unit->comp() != NOT_IN_OP &&
         filter_unit->comp() != IS_NULL && filter_unit->comp() != IS_NOT_NULL &&
-        // 避免对子查询做隐式转换
+        // 避免对子查询/EXISTS 做隐式转换
         left->type() != ExprType::SUBQUERY && right->type() != ExprType::SUBQUERY &&
+        left->type() != ExprType::EXISTS && right->type() != ExprType::EXISTS &&
         // 避免对含 NULL 的比较做隐式转换（与 NULL 的比较应直接交由执行期按 UNKNOWN 处理）
         left->value_type() != AttrType::NULLS && right->value_type() != AttrType::NULLS &&
         // 类型确实不同，且不包含 NULL

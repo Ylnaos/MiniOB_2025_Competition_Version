@@ -199,6 +199,9 @@ static RC bind_expression_fields(unique_ptr<Expression> &expr, Db *db, Table *de
   else if (expr->type() == ExprType::SUBQUERY) {
     return RC::SUCCESS;
   }
+  else if (expr->type() == ExprType::EXISTS) {
+    return RC::SUCCESS;
+  }
 
   return RC::SUCCESS;
 }

@@ -83,6 +83,11 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       // 作为叶子节点，无需递归
     } break;
 
+    case ExprType::EXISTS: {
+      auto &exists_expr = static_cast<ExistsExpr &>(expr);
+      rc = callback(exists_expr.subquery());
+    } break;
+
     case ExprType::IN_LIST: {
       auto &in_expr = static_cast<InExpr &>(expr);
       if (OB_SUCC(rc)) {

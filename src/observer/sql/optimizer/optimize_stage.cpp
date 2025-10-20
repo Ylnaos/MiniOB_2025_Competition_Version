@@ -93,13 +93,13 @@ RC OptimizeStage::generate_physical_plan(
   // 当查询中出现子查询(尤其是聚合子查询)时，向量化通道当前不支持，会在谓词评估时触发未实现或异常。
   // 这里检测逻辑计划中的表达式是否包含子查询，如包含则强制回退到行迭代执行计划，避免崩溃/断连。
   std::function<bool(Expression &)> contains_subquery_expr = [&](Expression &expr) -> bool {
-    if (expr.type() == ExprType::SUBQUERY) {
+    if (expr.type() == ExprType::SUBQUERY || expr.type() == ExprType::EXISTS) {
       return true;
     }
     bool found = false;
     (void)ExpressionIterator::iterate_child_expr(expr, [&](std::unique_ptr<Expression> &child) -> RC {
       if (child) {
-        if (child->type() == ExprType::SUBQUERY) {
+        if (child->type() == ExprType::SUBQUERY || child->type() == ExprType::EXISTS) {
           found = true;
           return RC::SUCCESS;
         }

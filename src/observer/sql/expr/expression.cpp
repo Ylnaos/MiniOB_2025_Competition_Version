@@ -1396,6 +1396,64 @@ RC SubqueryExpr::get_value(const Tuple &tuple, Value &value) const
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// ExistsExpr
+
+ExistsExpr::ExistsExpr(std::unique_ptr<Expression> subquery, bool negated)
+    : subquery_(std::move(subquery)), negated_(negated)
+{}
+
+ExistsExpr::ExistsExpr(Expression *subquery, bool negated)
+    : subquery_(subquery), negated_(negated)
+{}
+
+std::unique_ptr<Expression> ExistsExpr::copy() const
+{
+  std::unique_ptr<Expression> sub_copy;
+  if (subquery_) {
+    sub_copy = subquery_->copy();
+  }
+  auto copied = std::make_unique<ExistsExpr>(std::move(sub_copy), negated_);
+  copied->set_name(name());
+  if (alias() != nullptr) {
+    copied->set_alias(std::string(alias()));
+  }
+  return copied;
+}
+
+RC ExistsExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  if (!subquery_ || subquery_->type() != ExprType::SUBQUERY) {
+    LOG_WARN("exists expression requires subquery child");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  auto *subq = static_cast<SubqueryExpr *>(subquery_.get());
+  RC rc      = subq->execute_with_context(&tuple);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  bool has_rows = !subq->results().empty();
+  value.set_boolean(negated_ ? !has_rows : has_rows);
+  return RC::SUCCESS;
+}
+
+RC ExistsExpr::try_get_value(Value &value) const
+{
+  if (!subquery_ || subquery_->type() != ExprType::SUBQUERY) {
+    return RC::INVALID_ARGUMENT;
+  }
+  auto *subq = static_cast<SubqueryExpr *>(subquery_.get());
+  RC rc      = subq->execute_with_context(nullptr);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  bool has_rows = !subq->results().empty();
+  value.set_boolean(negated_ ? !has_rows : has_rows);
+  return RC::SUCCESS;
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // ScalarFunctionExpr
 
 RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
@@ -1597,31 +1655,42 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       return RC::SUCCESS;
     }
     case FuncType::STRING_TO_VECTOR: {
-      // STRING_TO_VECTOR: 将字符串 "[1,2,3]" 转换为向量
-      if (arg.attr_type() != AttrType::CHARS) {
+      // STRING_TO_VECTOR: 将字符串 "[1,2,3]" 转换为向量，若参数已是向量则原样返回
+      if (arg.attr_type() == AttrType::VECTORS) {
+        value = arg;  // 向量输入直接透传
+        return RC::SUCCESS;
+      }
+      if (arg.attr_type() != AttrType::CHARS && arg.attr_type() != AttrType::TEXTS) {
         return RC::INVALID_ARGUMENT;
       }
-      const char *str = arg.get_string().c_str();
-      // 解析字符串格式 "[1,2,3]"
+      const string literal = arg.get_string();
       std::vector<float> elems;
-      if (str && str[0] == '[') {
-        const char *p = str + 1;
+      if (!literal.empty() && literal.front() == '[') {
+        const char *p = literal.c_str() + 1;
         while (*p && *p != ']') {
           char *end = nullptr;
           float val = strtof(p, &end);
-          if (end == p) break;  // 解析失败
+          if (end == p) {
+            elems.clear();
+            break;
+          }
           elems.push_back(val);
           p = end;
-          while (*p == ' ' || *p == '\t') p++;  // 跳过空格
-          if (*p == ',') p++;
-          while (*p == ' ' || *p == '\t') p++;  // 跳过逗号后的空格
+          while (*p == ' ' || *p == '\t') p++;
+          if (*p == ',') {
+            ++p;
+            while (*p == ' ' || *p == '\t') ++p;
+          }
+        }
+        if (*p != ']') {
+          elems.clear();
         }
       }
       value.set_type(AttrType::VECTORS);
       if (!elems.empty()) {
-        value.set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+        value.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
       } else {
-        value.set_data((const char *)nullptr, 0);
+        value.set_data(static_cast<const char *>(nullptr), 0);
       }
       return RC::SUCCESS;
     }

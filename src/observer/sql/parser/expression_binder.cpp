@@ -67,6 +67,12 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     return RC::SUCCESS;
   }
 
+  if (expr->type() == ExprType::EXISTS) {
+    // EXISTS 表达式内部只包含一个子查询，保持原状交给执行期处理
+    bound_expressions.emplace_back(std::move(expr));
+    return RC::SUCCESS;
+  }
+
   if (expr->type() == ExprType::FUNCTION) {
     auto *func = static_cast<ScalarFunctionExpr *>(expr.get());
     auto bind_child = [&](unique_ptr<Expression> &child) -> RC {
@@ -169,9 +175,13 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
         }
       } break;
       case ScalarFunctionExpr::FuncType::STRING_TO_VECTOR: {
-        // 字符串到向量的转换函数
-        if (arg_type != AttrType::CHARS) {
-          LOG_WARN("string_to_vector expects char type, got %d", (int)arg_type);
+        // 字符串到向量的转换函数，兼容已经解析成向量的字面量
+        if (arg_type == AttrType::CHARS || arg_type == AttrType::TEXTS) {
+          // 字符串输入保持现状，由执行阶段完成解析
+        } else if (arg_type == AttrType::VECTORS) {
+          // 字面量或列已经是向量，直接放行
+        } else {
+          LOG_WARN("string_to_vector expects char/text/vector type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
         }
       } break;

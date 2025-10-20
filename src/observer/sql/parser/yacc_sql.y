@@ -184,6 +184,7 @@ static size_t default_length_for_attr_type(AttrType type)
         KEY
         IN
         NOT
+        EXISTS
         JOIN
         INNER
         IS
@@ -1444,6 +1445,30 @@ condition:
       $$->comp = NOT_IN_OP;
       $$->left_is_attr = -1; $$->right_is_attr = -1;
     }
+    | EXISTS LBRACE select_stmt RBRACE
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_is_attr  = -1;
+      $$->right_is_attr = -1;
+      $$->comp          = EQUAL_TO;
+      Value __true; __true.set_boolean(true);
+      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($3)), false);
+      exists_expr->set_name(token_name(sql_string, &@$));
+      $$->left_expr.reset(exists_expr);
+      $$->right_expr.reset(new ValueExpr(__true));
+    }
+    | NOT EXISTS LBRACE select_stmt RBRACE
+    {
+      $$ = new ConditionSqlNode;
+      $$->left_is_attr  = -1;
+      $$->right_is_attr = -1;
+      $$->comp          = EQUAL_TO;
+      Value __true; __true.set_boolean(true);
+      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($4)), true);
+      exists_expr->set_name(token_name(sql_string, &@$));
+      $$->left_expr.reset(exists_expr);
+      $$->right_expr.reset(new ValueExpr(__true));
+    }
     ;
 
 // WHERE 的布尔表达式解析（支持 AND/OR 与括号）
@@ -1518,6 +1543,18 @@ condition_expr:
       std::vector<Value> vals; if ($5) { vals = std::move(*$5); delete $5; }
       AttrType rt = AttrType::UNDEFINED; int rlen = -1; if (!vals.empty()) { rt = vals[0].attr_type(); rlen = vals[0].length(); }
       $$ = new InExpr(std::unique_ptr<Expression>($1), std::make_unique<SubqueryExpr>(vals, rt, rlen), true);
+    }
+    | EXISTS LBRACE select_stmt RBRACE
+    {
+      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($3)), false);
+      exists_expr->set_name(token_name(sql_string, &@$));
+      $$ = exists_expr;
+    }
+    | NOT EXISTS LBRACE select_stmt RBRACE
+    {
+      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($4)), true);
+      exists_expr->set_name(token_name(sql_string, &@$));
+      $$ = exists_expr;
     }
     ;
 

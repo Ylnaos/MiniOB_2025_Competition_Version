@@ -1,0 +1,13 @@
+
+Welcome to the OceanBase database implementation course.
+
+Copyright (c) 2021 OceanBase and/or its affiliates.
+
+Learn more about OceanBase at https://github.com/oceanbase/oceanbase
+Learn more about MiniOB at https://github.com/oceanbase/miniob
+
+Successfully load etc/observer.ini
+Failed to open file miniob/db/sys/items.data, because Permission denied.
+Failed to open disk buffer pool for file:miniob/db/sys/items.data. rc=33:IOERR_ACCESS
+Create table file failed. filename=miniob/db/sys/alter_table_1.table, errmsg=13:Permission denied
+Failed to create table alter_table_1.

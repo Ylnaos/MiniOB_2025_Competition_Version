@@ -173,8 +173,10 @@ RC PhysicalPlanGenerator::create_plan(TableGetLogicalOperator &table_get_oper, u
   for (auto &expr : predicates) {
     if (expr->type() == ExprType::COMPARISON) {
       auto comparison_expr = static_cast<ComparisonExpr *>(expr.get());
-      // 简单处理，就找等值查询
-      if (comparison_expr->comp() != EQUAL_TO && comparison_expr->comp() != NOT_EQUAL) {
+      // 简单处理：目前仅在等值比较时使用索引
+      // 对于 "<>" 等不等比较，如果仍构造 [value, value] 的扫描范围，会导致仅扫描等于该值的记录，
+      // 从而漏掉其他满足条件的行。因此遇到非等值比较时直接跳过，回退到全表扫描。
+      if (comparison_expr->comp() != EQUAL_TO) {
         continue;
       }
 

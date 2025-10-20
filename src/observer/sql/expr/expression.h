@@ -50,6 +50,7 @@ enum class ExprType
   AGGREGATION,  ///< 聚合运算
   FUNCTION,     ///< 标量函数表达式（如 LENGTH/ROUND/DATE_FORMAT）
   SUBQUERY,     ///< 子查询表达式（返回单列结果）
+  EXISTS,       ///< EXISTS / NOT EXISTS 子查询判定表达式
   IN_LIST,      ///< IN/NOT IN 表达式（右侧可以为子查询）
 };
 
@@ -614,6 +615,34 @@ private:
   mutable AttrType                     result_type_ = AttrType::UNDEFINED;
   mutable int                          result_len_  = -1;
   std::unique_ptr<ParsedSqlNode>       subquery_node_;
+};
+
+/**
+ * @brief EXISTS/NOT EXISTS 表达式
+ */
+class ExistsExpr : public Expression
+{
+public:
+  explicit ExistsExpr(std::unique_ptr<Expression> subquery, bool negated = false);
+  explicit ExistsExpr(Expression *subquery, bool negated = false);
+  virtual ~ExistsExpr() = default;
+
+  std::unique_ptr<Expression> copy() const override;
+
+  ExprType type() const override { return ExprType::EXISTS; }
+  AttrType value_type() const override { return AttrType::BOOLEANS; }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+  RC try_get_value(Value &value) const override;
+  RC get_column(Chunk &chunk, Column &column) override { return RC::UNIMPLEMENTED; }
+
+  std::unique_ptr<Expression> &subquery() { return subquery_; }
+  const std::unique_ptr<Expression> &subquery() const { return subquery_; }
+  bool negated() const { return negated_; }
+
+private:
+  std::unique_ptr<Expression> subquery_;
+  bool                        negated_ = false;
 };
 
 /**
