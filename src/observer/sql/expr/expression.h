@@ -683,7 +683,18 @@ private:
 class ScalarFunctionExpr : public Expression
 {
 public:
-  enum class FuncType { LENGTH, ROUND, DATE_FORMAT, L2_DISTANCE, COSINE_DISTANCE, INNER_PRODUCT, STRING_TO_VECTOR, VECTOR_TO_STRING, DISTANCE };
+  enum class FuncType {
+    LENGTH,
+    ROUND,
+    DATE_FORMAT,
+    L2_DISTANCE,
+    COSINE_DISTANCE,
+    INNER_PRODUCT,
+    STRING_TO_VECTOR,
+    VECTOR_TO_STRING,
+    TOKENIZE,
+    DISTANCE
+  };
 
   explicit ScalarFunctionExpr(FuncType func_type, std::unique_ptr<Expression> child)
       : func_type_(func_type), child_(std::move(child))
@@ -729,6 +740,7 @@ public:
       case FuncType::INNER_PRODUCT: return AttrType::FLOATS;
       case FuncType::STRING_TO_VECTOR: return AttrType::VECTORS;
       case FuncType::VECTOR_TO_STRING: return AttrType::CHARS;
+      case FuncType::TOKENIZE: return AttrType::TEXTS;
       case FuncType::DISTANCE: return AttrType::FLOATS;
     }
     return AttrType::UNDEFINED;
@@ -745,6 +757,7 @@ public:
       case FuncType::INNER_PRODUCT: return sizeof(float);
       case FuncType::STRING_TO_VECTOR: return -1; // 动态长度，取决于输入字符串
       case FuncType::VECTOR_TO_STRING: return 262128; // 最大输出大小: 16 * 16383
+      case FuncType::TOKENIZE: return TEXT_MAX_LENGTH;
       case FuncType::DISTANCE: return sizeof(float);
     }
     return -1;

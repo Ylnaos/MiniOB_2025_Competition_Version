@@ -1329,6 +1329,16 @@ function_expression:
         $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::VECTOR_TO_STRING, $3);
         $$->set_name(token_name(sql_string, &@$));
       }
+    | TOKENIZE_F LBRACE expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::TOKENIZE, $3);
+        $$->set_name(token_name(sql_string, &@$));
+      }
+    | TOKENIZE_F LBRACE expression COMMA expression RBRACE
+      {
+        $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::TOKENIZE, $3, $5);
+        $$->set_name(token_name(sql_string, &@$));
+      }
     | DISTANCE LBRACE expression COMMA expression COMMA expression RBRACE
       {
         // DISTANCE(vector1, vector2, distance_type)

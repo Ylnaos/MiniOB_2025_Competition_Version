@@ -14,10 +14,18 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/expr/expression.h"
 #include "common/type/attr_type.h"
+#include "common/lang/string.h"
+#include "common/os/process_param.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_iterator.h"
 #include <cmath>
 #include <limits>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <sstream>
+#include <unordered_set>
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -27,8 +35,253 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/physical_plan_generator.h"
 #include "session/session.h"
 #include "storage/db/db.h"
+#include "cppjieba/Jieba.hpp"
 
 using namespace std;
+
+namespace {
+
+namespace fs = std::filesystem;
+
+static bool has_jieba_resource(const fs::path &dir)
+{
+  if (dir.empty()) {
+    return false;
+  }
+
+  std::error_code ec;
+  const bool ok = fs::exists(dir / "jieba.dict.utf8", ec) && !ec &&
+                  fs::exists(dir / "hmm_model.utf8", ec) && !ec &&
+                  fs::exists(dir / "user.dict.utf8", ec) && !ec &&
+                  fs::exists(dir / "idf.utf8", ec) && !ec &&
+                  fs::exists(dir / "stop_words.utf8", ec) && !ec;
+  return ok;
+}
+
+static fs::path detect_jieba_dict_dir()
+{
+  vector<fs::path> candidates;
+
+  if (const char *env_dir = std::getenv("MINIOB_JIEBA_DICT_DIR"); env_dir != nullptr && env_dir[0] != '\0') {
+    candidates.emplace_back(env_dir);
+  }
+
+  if (const char *miniob_home = std::getenv("MINIOB_HOME"); miniob_home != nullptr && miniob_home[0] != '\0') {
+    candidates.emplace_back(fs::path(miniob_home) / "deps/3rd/cppjieba/dict");
+  }
+
+  if (auto *proc = common::the_process_param(); proc != nullptr) {
+    const string &conf = proc->get_conf();
+    if (!conf.empty()) {
+      fs::path conf_path(conf);
+      if (!conf_path.is_absolute()) {
+        conf_path = fs::current_path() / conf_path;
+      }
+      std::error_code ec;
+      conf_path = fs::weakly_canonical(conf_path, ec);
+      if (!ec) {
+        fs::path base = conf_path.parent_path().parent_path();
+        if (!base.empty()) {
+          candidates.emplace_back(base / "deps/3rd/cppjieba/dict");
+        }
+      }
+    }
+  }
+
+  static const char *const relative_dirs[] = {
+      "deps/3rd/cppjieba/dict",
+      "../deps/3rd/cppjieba/dict",
+      "../../deps/3rd/cppjieba/dict",
+      "../../../deps/3rd/cppjieba/dict",
+      "../../../../deps/3rd/cppjieba/dict"};
+  for (const char *rel : relative_dirs) {
+    candidates.emplace_back(fs::current_path() / rel);
+  }
+
+  fs::path source_based = fs::path(__FILE__).parent_path();
+  for (int i = 0; i < 4 && !source_based.empty(); ++i) {
+    source_based = source_based.parent_path();
+  }
+  if (!source_based.empty()) {
+    candidates.emplace_back(source_based / "deps/3rd/cppjieba/dict");
+  }
+
+  for (const auto &dir : candidates) {
+    std::error_code ec;
+    fs::path normalized = fs::weakly_canonical(dir, ec);
+    const fs::path &target = ec ? dir : normalized;
+    if (has_jieba_resource(target)) {
+      return target;
+    }
+  }
+
+  return {};
+}
+
+class JiebaTokenizer
+{
+public:
+  static RC tokenize(const string &text, const string &parser, vector<string> &tokens)
+  {
+    string parser_name = parser;
+    if (!parser_name.empty()) {
+      common::str_to_lower(parser_name);
+    }
+    if (!parser_name.empty() && parser_name != "jieba") {
+      LOG_WARN("Unsupported full-text parser: %s", parser.c_str());
+      return RC::UNIMPLEMENTED;
+    }
+
+    auto &ctx = context();
+    std::call_once(ctx.init_once, [&ctx]() {
+      ctx.init_rc = ctx.initialize();
+    });
+    if (ctx.init_rc != RC::SUCCESS) {
+      return ctx.init_rc;
+    }
+
+    vector<string> raw;
+    ctx.jieba->Cut(text, raw, true);
+
+    tokens.clear();
+    tokens.reserve(raw.size());
+    for (auto &word : raw) {
+      if (word.empty()) {
+        continue;
+      }
+      if (common::is_blank(word.c_str())) {
+        continue;
+      }
+      if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
+        continue;
+      }
+      tokens.emplace_back(word);
+    }
+    return RC::SUCCESS;
+  }
+
+private:
+  struct Context
+  {
+    std::once_flag init_once;
+    RC init_rc = RC::SUCCESS;
+    unique_ptr<cppjieba::Jieba> jieba;
+    unordered_set<string> stop_words;
+    fs::path dict_dir;
+
+    RC initialize()
+    {
+      dict_dir = detect_jieba_dict_dir();
+      if (dict_dir.empty()) {
+        LOG_WARN("Failed to locate jieba dictionary directory");
+        return RC::NOTFOUND;
+      }
+
+      const string dict_path     = (dict_dir / "jieba.dict.utf8").string();
+      const string hmm_path      = (dict_dir / "hmm_model.utf8").string();
+      const string user_path     = (dict_dir / "user.dict.utf8").string();
+      const string idf_path      = (dict_dir / "idf.utf8").string();
+      const string stop_path     = (dict_dir / "stop_words.utf8").string();
+
+      try {
+        jieba = make_unique<cppjieba::Jieba>(dict_path, hmm_path, user_path, idf_path, stop_path);
+      } catch (const std::exception &e) {
+        LOG_WARN("Failed to initialize jieba tokenizer: %s", e.what());
+        return RC::INTERNAL;
+      }
+
+      ifstream input(stop_path);
+      if (!input.is_open()) {
+        LOG_WARN("Failed to open stop_words file: %s", stop_path.c_str());
+        return RC::IOERR_OPEN;
+      }
+      string line;
+      while (getline(input, line)) {
+        if (!line.empty() && static_cast<unsigned char>(line[0]) == 0xEF && line.size() >= 3 &&
+            static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
+          line.erase(0, 3);
+        }
+        if (line.empty() || common::is_blank(line.c_str())) {
+          continue;
+        }
+        stop_words.insert(line);
+      }
+      return RC::SUCCESS;
+    }
+  };
+
+  static Context &context()
+  {
+    static Context ctx;
+    return ctx;
+  }
+};
+
+static string escape_json_string(const string &input)
+{
+  string result;
+  result.reserve(input.size() + 4);
+  for (char ch : input) {
+    switch (ch) {
+      case '\\': result.append("\\\\"); break;
+      case '"': result.append("\\\""); break;
+      case '\n': result.append("\\n"); break;
+      case '\r': result.append("\\r"); break;
+      case '\t': result.append("\\t"); break;
+      default: result.push_back(ch); break;
+    }
+  }
+  return result;
+}
+
+static string tokens_to_json(const vector<string> &tokens)
+{
+  ostringstream oss;
+  oss << "[";
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    if (i > 0) {
+      oss << ", ";
+    }
+    oss << "\"" << escape_json_string(tokens[i]) << "\"";
+  }
+  oss << "]";
+  return oss.str();
+}
+
+static RC eval_tokenize_value(const Value &text_value, const Value *parser_value, Value &output)
+{
+  if (text_value.attr_type() == AttrType::NULLS) {
+    output.set_null();
+    return RC::SUCCESS;
+  }
+  if (text_value.attr_type() != AttrType::CHARS && text_value.attr_type() != AttrType::TEXTS) {
+    LOG_WARN("TOKENIZE expects string or text argument, got type=%d", static_cast<int>(text_value.attr_type()));
+    return RC::INVALID_ARGUMENT;
+  }
+
+  string parser = "jieba";
+  if (parser_value != nullptr && parser_value->attr_type() != AttrType::NULLS) {
+    if (parser_value->attr_type() != AttrType::CHARS && parser_value->attr_type() != AttrType::TEXTS) {
+      LOG_WARN("TOKENIZE parser name must be string, got type=%d", static_cast<int>(parser_value->attr_type()));
+      return RC::INVALID_ARGUMENT;
+    }
+    parser = parser_value->get_string();
+  }
+
+  vector<string> tokens;
+  RC rc = JiebaTokenizer::tokenize(text_value.get_string(), parser, tokens);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  const string json_repr = tokens_to_json(tokens);
+  output.reset();
+  output.set_string(json_repr.c_str());
+  output.set_type(AttrType::TEXTS);
+  return RC::SUCCESS;
+}
+
+}  // namespace
 
 // 实现“银行家舍入”（ties to even）以符合官方期望：
 // - 对于精确的 .5 情况，舍入到最接近的偶数整数
@@ -1693,6 +1946,18 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       }
       return RC::SUCCESS;
     }
+    case FuncType::TOKENIZE: {
+      Value *parser_ptr = nullptr;
+      Value  parser_value;
+      if (child2_ != nullptr) {
+        rc = child2_->get_value(tuple, parser_value);
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+        parser_ptr = &parser_value;
+      }
+      return eval_tokenize_value(arg, parser_ptr, value);
+    }
     case FuncType::VECTOR_TO_STRING: {
       // VECTOR_TO_STRING: 将向量转换为字符串 "[1,2,3]"
       if (arg.attr_type() != AttrType::VECTORS) {
@@ -1979,6 +2244,21 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       // 这些函数需要参数,在try_get_value中不支持常量折叠
       return RC::UNIMPLEMENTED;
     }
+    case FuncType::TOKENIZE: {
+      Value *parser_ptr = nullptr;
+      Value  parser_value;
+      if (child2_ != nullptr) {
+        RC rc2 = child2_->try_get_value(parser_value);
+        if (rc2 == RC::UNIMPLEMENTED) {
+          return RC::UNIMPLEMENTED;
+        }
+        if (OB_FAIL(rc2)) {
+          return rc2;
+        }
+        parser_ptr = &parser_value;
+      }
+      return eval_tokenize_value(arg, parser_ptr, value);
+    }
     case FuncType::DISTANCE: {
       // DISTANCE 支持在所有参数均为常量时直接计算
       if (!child2_ || !child3_) {
@@ -2115,6 +2395,12 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
     if (!child3_) return RC::INVALID_ARGUMENT;
     has_arg3 = true;
     rc = child3_->get_column(chunk, arg3_col);
+    if (OB_FAIL(rc)) return rc;
+  }
+  Column parser_col; bool has_parser = false;
+  if (func_type_ == FuncType::TOKENIZE && child2_ != nullptr) {
+    has_parser = true;
+    rc = child2_->get_column(chunk, parser_col);
     if (OB_FAIL(rc)) return rc;
   }
 
@@ -2298,6 +2584,22 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
           out.set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
         } else {
           out.set_data((const char *)nullptr, 0);
+        }
+      } break;
+      case FuncType::TOKENIZE: {
+        if (arg.attr_type() == AttrType::NULLS) {
+          out.set_null();
+          break;
+        }
+        Value *parser_ptr = nullptr;
+        Value  parser_value;
+        if (has_parser) {
+          parser_value = parser_col.get_value(i);
+          parser_ptr   = &parser_value;
+        }
+        RC rc2 = eval_tokenize_value(arg, parser_ptr, out);
+        if (OB_FAIL(rc2)) {
+          return rc2;
         }
       } break;
       case FuncType::VECTOR_TO_STRING: {
@@ -2492,11 +2794,34 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node(const ParsedS
       }
       dst.conditions.emplace_back(std::move(new_cond));
     }
+    // where expression
+    if (src.where_expr) {
+      dst.where_expr = src.where_expr->copy();
+    }
     // group by
     for (const auto &grp : src.group_by) {
       if (grp) {
         dst.group_by.emplace_back(grp->copy());
       }
+    }
+    // having
+    dst.having.reserve(src.having.size());
+    for (const auto &cond : src.having) {
+      ConditionSqlNode new_cond;
+      new_cond.left_is_attr  = cond.left_is_attr;
+      new_cond.right_is_attr = cond.right_is_attr;
+      new_cond.left_value    = cond.left_value;
+      new_cond.right_value   = cond.right_value;
+      new_cond.left_attr     = cond.left_attr;
+      new_cond.right_attr    = cond.right_attr;
+      new_cond.comp          = cond.comp;
+      if (cond.left_expr) {
+        new_cond.left_expr.reset(cond.left_expr->copy().release());
+      }
+      if (cond.right_expr) {
+        new_cond.right_expr.reset(cond.right_expr->copy().release());
+      }
+      dst.having.emplace_back(std::move(new_cond));
     }
     // order by
     for (const auto &ord : src.order_by) {
@@ -2507,6 +2832,7 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node(const ParsedS
       }
       dst.order_by.emplace_back(std::move(item));
     }
+    dst.limit = src.limit;
   }
   return copied;
 }
@@ -2574,6 +2900,15 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     dst.conditions.emplace_back(std::move(new_cond));
   }
 
+  // where 表达式相关引用替换
+  if (src.where_expr) {
+    bool sub = false; RC rc = RC::SUCCESS;
+    auto new_where = copy_and_substitute_outer_refs(*src.where_expr, inner_names, outer_tuple, sub, rc);
+    if (!new_where || rc != RC::SUCCESS) return nullptr;
+    dst.where_expr.reset(new_where.release());
+    did_substitute = did_substitute || sub;
+  }
+
   // group by（做相关引用替换）
   for (const auto &grp : src.group_by) {
     if (grp) {
@@ -2583,6 +2918,34 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
       dst.group_by.emplace_back(std::move(new_grp));
       did_substitute = did_substitute || sub;
     }
+  }
+  // having（做相关引用替换）
+  dst.having.reserve(src.having.size());
+  for (const auto &cond : src.having) {
+    ConditionSqlNode new_cond;
+    new_cond.left_is_attr  = cond.left_is_attr;
+    new_cond.right_is_attr = cond.right_is_attr;
+    new_cond.left_value    = cond.left_value;
+    new_cond.right_value   = cond.right_value;
+    new_cond.left_attr     = cond.left_attr;
+    new_cond.right_attr    = cond.right_attr;
+    new_cond.comp          = cond.comp;
+    RC rc = RC::SUCCESS;
+    bool sub = false;
+    if (cond.left_expr) {
+      auto left_new = copy_and_substitute_outer_refs(*cond.left_expr, inner_names, outer_tuple, sub, rc);
+      if (!left_new || rc != RC::SUCCESS) return nullptr;
+      new_cond.left_expr.reset(left_new.release());
+      did_substitute = did_substitute || sub;
+    }
+    sub = false;
+    if (cond.right_expr) {
+      auto right_new = copy_and_substitute_outer_refs(*cond.right_expr, inner_names, outer_tuple, sub, rc);
+      if (!right_new || rc != RC::SUCCESS) return nullptr;
+      new_cond.right_expr.reset(right_new.release());
+      did_substitute = did_substitute || sub;
+    }
+    dst.having.emplace_back(std::move(new_cond));
   }
   // order by（做相关引用替换）
   for (const auto &ord : src.order_by) {
@@ -2597,6 +2960,7 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     }
     dst.order_by.emplace_back(std::move(item));
   }
+  dst.limit = src.limit;
   return copied;
 }std::unique_ptr<Expression> SubqueryExpr::copy_and_substitute_outer_refs(
     const Expression &expr,

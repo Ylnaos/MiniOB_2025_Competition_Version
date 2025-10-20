@@ -38,6 +38,23 @@ static AttrInfoSqlNode build_attr_info_from_field(const FieldMeta &field, const 
   return info;
 }
 
+static const FieldMeta *find_visible_field_ignore_case(const TableMeta &table_meta, const std::string &name)
+{
+  if (common::is_blank(name.c_str())) {
+    return nullptr;
+  }
+
+  const int sys_num = table_meta.sys_field_num();
+  const int total   = table_meta.field_num();
+  for (int i = sys_num; i < total; ++i) {
+    const FieldMeta *field = table_meta.field(i);
+    if (field != nullptr && field->visible() && 0 == strcasecmp(field->name(), name.c_str())) {
+      return field;
+    }
+  }
+  return nullptr;
+}
+
 RC AlterTableStmt::create(Db *db, const AlterTableSqlNode &alter_table, Stmt *&stmt)
 {
   stmt = nullptr;
@@ -75,7 +92,7 @@ RC AlterTableStmt::create(Db *db, const AlterTableSqlNode &alter_table, Stmt *&s
       if (column_info.length == 0) {
         column_info.length = 4;
       }
-      if (table_meta.field(column_info.name.c_str()) != nullptr) {
+      if (find_visible_field_ignore_case(table_meta, column_info.name) != nullptr) {
         LOG_WARN("column already exists. table=%s column=%s", table_meta.name(), column_info.name.c_str());
         return RC::EXIST;
       }
@@ -87,8 +104,8 @@ RC AlterTableStmt::create(Db *db, const AlterTableSqlNode &alter_table, Stmt *&s
       if (common::is_blank(target_column.c_str())) {
         return RC::INVALID_ARGUMENT;
       }
-      const FieldMeta *field_meta = table_meta.field(target_column.c_str());
-      if (field_meta == nullptr || !field_meta->visible()) {
+      const FieldMeta *field_meta = find_visible_field_ignore_case(table_meta, target_column);
+      if (field_meta == nullptr) {
         LOG_WARN("column not found or invisible. table=%s column=%s", table_meta.name(), target_column.c_str());
         return RC::SCHEMA_FIELD_NOT_EXIST;
       }
@@ -105,14 +122,14 @@ RC AlterTableStmt::create(Db *db, const AlterTableSqlNode &alter_table, Stmt *&s
         return RC::INVALID_ARGUMENT;
       }
 
-      const FieldMeta *field_meta = table_meta.field(target_column.c_str());
-      if (field_meta == nullptr || !field_meta->visible()) {
+      const FieldMeta *field_meta = find_visible_field_ignore_case(table_meta, target_column);
+      if (field_meta == nullptr) {
         LOG_WARN("column not found or invisible. table=%s column=%s", table_meta.name(), target_column.c_str());
         return RC::SCHEMA_FIELD_NOT_EXIST;
       }
 
       if (0 != strcasecmp(target_column.c_str(), new_column_name.c_str()) &&
-          table_meta.field(new_column_name.c_str()) != nullptr) {
+          find_visible_field_ignore_case(table_meta, new_column_name) != nullptr) {
         LOG_WARN("new column name already exists. table=%s column=%s", table_meta.name(), new_column_name.c_str());
         return RC::EXIST;
       }
