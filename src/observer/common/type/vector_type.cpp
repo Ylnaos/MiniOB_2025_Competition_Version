@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include <vector>
 #include <functional>
 #include <sstream>
+#include <iomanip>
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
@@ -100,6 +101,8 @@ RC VectorType::to_string(const Value &val, string &result) const
   const int dim = len / static_cast<int>(sizeof(float));
   const float *data = reinterpret_cast<const float *>(val.data());
   std::ostringstream oss;
+  oss.setf(std::ios::scientific, std::ios::floatfield);
+  oss << std::setprecision(5);
   oss << "[";
   for (int i = 0; i < dim; ++i) {
     if (i > 0) oss << ",";
@@ -112,25 +115,7 @@ RC VectorType::to_string(const Value &val, string &result) const
       oss << (elem > 0 ? "Inf" : "-Inf");
       continue;
     }
-    if (elem == std::floor(elem)) {
-      oss << static_cast<int>(elem);
-    } else {
-      // 四舍五入保留两位小数，并清理尾随零
-      float rounded = std::round(elem * 100.0f) / 100.0f;
-      char buffer[32];
-      std::snprintf(buffer, sizeof(buffer), "%.2f", rounded);
-      char *dot = std::strchr(buffer, '.');
-      if (dot != nullptr) {
-        char *end = buffer + std::strlen(buffer) - 1;
-        while (end > dot && *end == '0') {
-          *end-- = '\0';
-        }
-        if (end == dot) {
-          *end = '\0';
-        }
-      }
-      oss << buffer;
-    }
+    oss << static_cast<double>(elem);
   }
   oss << "]";
   result = oss.str();

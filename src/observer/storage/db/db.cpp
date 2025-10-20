@@ -16,11 +16,19 @@ See the Mulan PSL v2 for more details. */
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <strings.h>
+#include <unistd.h>
+#include <fstream>
+#include <cstring>
+#include <functional>
+#include <cerrno>
 
 #include "common/lang/string.h"
 #include "common/log/log.h"
 #include "common/os/path.h"
 #include "common/global_context.h"
+#include "common/value.h"
+#include "common/types.h"
 #include "storage/common/meta_util.h"
 #include "storage/table/table.h"
 #include "storage/table/table_meta.h"
@@ -28,9 +36,321 @@ See the Mulan PSL v2 for more details. */
 #include "storage/clog/disk_log_handler.h"
 #include "storage/clog/integrated_log_replayer.h"
 #include "storage/view/view.h"
+#include "storage/record/record.h"
+#include "storage/record/lob_handler.h"
+#include "storage/record/lob_ref.h"
+#include "storage/record/record_manager.h"
+#include "storage/record/record_scanner.h"
+#include "sql/stmt/alter_table_stmt.h"
+#include "json/json.h"
 
 using namespace common;
 
+namespace {
+
+struct ColumnPlan
+{
+  AttrInfoSqlNode attr;
+  const FieldMeta *source_field = nullptr;  ///< nullptr 表示新增列，使用默认值
+};
+
+struct IndexPlan
+{
+  std::string              name;
+  bool                     unique       = false;
+  bool                     is_vector    = false;
+  std::string              index_type;
+  std::string              distance_type;
+  int                      lists        = 0;
+  int                      probes       = 0;
+  std::vector<std::string> fields;
+};
+
+struct SchemaChangePlan
+{
+  std::vector<ColumnPlan>   columns;
+  std::vector<std::string>  primary_keys;
+  std::vector<IndexPlan>    indexes;
+};
+
+inline bool same_name(const std::string &lhs, const std::string &rhs)
+{
+  return 0 == strcasecmp(lhs.c_str(), rhs.c_str());
+}
+
+static AttrInfoSqlNode attr_from_field(const FieldMeta &field, const std::string &name)
+{
+  AttrInfoSqlNode attr;
+  attr.name     = name;
+  attr.type     = field.type();
+  attr.length   = (field.type() == AttrType::VECTORS) ? field.vector_length() : static_cast<size_t>(field.len());
+  attr.nullable = field.nullable();
+  return attr;
+}
+
+static bool file_exists(const std::string &path)
+{
+  return access(path.c_str(), F_OK) == 0;
+}
+
+static RC rewrite_table_meta(const std::string &meta_path, const std::string &table_name, int32_t table_id)
+{
+  std::ifstream ifs(meta_path);
+  if (!ifs.is_open()) {
+    LOG_WARN("failed to open meta file for rewrite. file=%s", meta_path.c_str());
+    return RC::IOERR_OPEN;
+  }
+
+  Json::Value             root;
+  Json::CharReaderBuilder builder;
+  std::string             errors;
+  if (!Json::parseFromStream(builder, ifs, &root, &errors)) {
+    LOG_WARN("failed to parse meta json. file=%s err=%s", meta_path.c_str(), errors.c_str());
+    return RC::JSON_PARSE_FAILED;
+  }
+  ifs.close();
+
+  root["table_name"] = table_name;
+  root["table_id"]   = table_id;
+
+  std::ofstream ofs(meta_path, std::ios::out | std::ios::trunc);
+  if (!ofs.is_open()) {
+    LOG_WARN("failed to open meta file for write. file=%s", meta_path.c_str());
+    return RC::IOERR_OPEN;
+  }
+  Json::StreamWriterBuilder writer_builder;
+  std::unique_ptr<Json::StreamWriter> writer(writer_builder.newStreamWriter());
+  writer->write(root, &ofs);
+  ofs.close();
+  return RC::SUCCESS;
+}
+
+static RC fetch_field_value(const Table &table, const FieldMeta &field, const Record &record, Value &value)
+{
+  const TableMeta &meta = table.table_meta();
+
+  if (field.nullable()) {
+    int nb_off = meta.null_bitmap_offset();
+    int fid    = field.field_id();
+    if (nb_off >= 0 && fid >= 0) {
+      const unsigned char *bitmap = reinterpret_cast<const unsigned char *>(record.data() + nb_off);
+      if (bitmap[fid / 8] & (1U << (fid % 8))) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+    }
+  }
+
+  const char *data = record.data() + field.offset();
+  switch (field.type()) {
+    case AttrType::INTS: {
+      int32_t v = 0;
+      memcpy(&v, data, sizeof(int32_t));
+      value.set_int(v);
+    } break;
+    case AttrType::FLOATS: {
+      float v = 0;
+      memcpy(&v, data, sizeof(float));
+      value.set_float(v);
+    } break;
+    case AttrType::BOOLEANS: {
+      bool v = *(reinterpret_cast<const bool *>(data));
+      value.set_boolean(v);
+    } break;
+    case AttrType::DATES: {
+      int32_t v = 0;
+      memcpy(&v, data, sizeof(int32_t));
+      value.set_date(v);
+    } break;
+    case AttrType::CHARS: {
+      size_t max_len = static_cast<size_t>(field.len());
+      size_t real_len = strnlen(data, max_len);
+      value.set_type(AttrType::CHARS);
+      value.set_data(data, static_cast<int>(real_len));
+    } break;
+    case AttrType::TEXTS: {
+      const LobRef *ref = reinterpret_cast<const LobRef *>(data);
+      value.set_type(AttrType::TEXTS);
+      if (ref->length > 0) {
+        std::string buffer;
+        buffer.resize(ref->length);
+        LobFileHandler *handler = const_cast<Table &>(table).lob_handler();
+        if (handler == nullptr) {
+          LOG_WARN("lob handler not initialized for table %s", table.name());
+          return RC::INTERNAL;
+        }
+        RC rc = handler->get_data(ref->offset, ref->length, buffer.data());
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+        value.set_data(buffer.data(), ref->length);
+      } else {
+        value.set_data(static_cast<char *>(nullptr), 0);
+      }
+    } break;
+    case AttrType::VECTORS: {
+      value.set_type(AttrType::VECTORS);
+      if (field.vector_length() > 1000) {
+        const LobRef *ref = reinterpret_cast<const LobRef *>(data);
+        if (ref->length > 0) {
+          std::string buffer;
+          buffer.resize(ref->length);
+          LobFileHandler *handler = const_cast<Table &>(table).lob_handler();
+          if (handler == nullptr) {
+            LOG_WARN("lob handler not initialized for table %s", table.name());
+            return RC::INTERNAL;
+          }
+          RC rc = handler->get_data(ref->offset, ref->length, buffer.data());
+          if (OB_FAIL(rc)) {
+            return rc;
+          }
+          value.set_data(buffer.data(), ref->length);
+        } else {
+          value.set_data(static_cast<char *>(nullptr), 0);
+        }
+      } else {
+        value.set_data(data, field.len());
+      }
+    } break;
+    default: {
+      LOG_WARN("unsupported field type when extracting value. table=%s field=%s type=%d",
+          table.name(), field.name(), static_cast<int>(field.type()));
+      return RC::UNIMPLEMENTED;
+    }
+  }
+  return RC::SUCCESS;
+}
+
+static RC build_schema_change_plan(const TableMeta &old_meta,
+                                   const AlterTableStmt &stmt,
+                                   SchemaChangePlan &plan)
+{
+  plan.columns.clear();
+  plan.primary_keys = old_meta.primary_keys();
+  plan.indexes.clear();
+
+  auto add_existing_columns = [&](const std::function<bool(const FieldMeta &)> &predicate,
+                                  const std::function<std::string(const FieldMeta &)> &name_mapper) -> RC {
+    const int sys_num = old_meta.sys_field_num();
+    const int total   = old_meta.field_num();
+    for (int i = sys_num; i < total; ++i) {
+      const FieldMeta &field = *old_meta.field(i);
+      if (!field.visible()) {
+        continue;
+      }
+      if (predicate(field)) {
+        ColumnPlan plan_col;
+        std::string mapped_name = name_mapper(field);
+        plan_col.attr          = attr_from_field(field, mapped_name);
+        plan_col.source_field  = &field;
+        plan.columns.push_back(std::move(plan_col));
+      }
+    }
+    return RC::SUCCESS;
+  };
+
+  switch (stmt.alter_type()) {
+    case AlterTableStmt::AlterType::ADD_COLUMN: {
+      RC rc = add_existing_columns([](const FieldMeta &) { return true; }, [](const FieldMeta &field) { return std::string(field.name()); });
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      ColumnPlan new_col;
+      new_col.attr = stmt.column_info();
+      if (new_col.attr.length == 0) {
+        new_col.attr.length = 4;
+      }
+      plan.columns.push_back(std::move(new_col));
+    } break;
+
+    case AlterTableStmt::AlterType::DROP_COLUMN: {
+      bool found = false;
+      std::string target = stmt.target_column();
+      RC rc = add_existing_columns(
+          [&](const FieldMeta &field) {
+            if (same_name(field.name(), target)) {
+              found = true;
+              return false;
+            }
+            return true;
+          },
+          [](const FieldMeta &field) { return std::string(field.name()); });
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      if (!found) {
+        LOG_WARN("drop column plan: column not found. column=%s", target.c_str());
+        return RC::SCHEMA_FIELD_NOT_EXIST;
+      }
+    } break;
+
+    case AlterTableStmt::AlterType::CHANGE_COLUMN: {
+      bool found = false;
+      std::string target = stmt.target_column();
+      std::string new_name = stmt.new_column_name().empty() ? target : stmt.new_column_name();
+      RC rc = add_existing_columns(
+          [&](const FieldMeta &field) { return true; },
+          [&](const FieldMeta &field) {
+            if (same_name(field.name(), target)) {
+              found = true;
+              return new_name;
+            }
+            return std::string(field.name());
+          });
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      if (!found) {
+        LOG_WARN("change column plan: column not found. column=%s", target.c_str());
+        return RC::SCHEMA_FIELD_NOT_EXIST;
+      }
+
+      for (std::string &pk : plan.primary_keys) {
+        if (same_name(pk, target)) {
+          pk = new_name;
+        }
+      }
+    } break;
+
+    case AlterTableStmt::AlterType::RENAME_TABLE: {
+      // rename table 不需要列变更
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
+  // 处理索引信息
+  const int index_num = old_meta.index_num();
+  plan.indexes.reserve(index_num);
+  for (int i = 0; i < index_num; ++i) {
+    const IndexMeta *index_meta = old_meta.index(i);
+    IndexPlan index_plan;
+    index_plan.name          = index_meta->name();
+    index_plan.unique        = index_meta->unique();
+    index_plan.is_vector     = index_meta->is_vector_index();
+    index_plan.index_type    = index_meta->index_type();
+    index_plan.distance_type = index_meta->distance_type();
+    index_plan.lists         = index_meta->lists();
+    index_plan.probes        = index_meta->probes();
+
+    for (const std::string &field_name : index_meta->fields()) {
+      if (stmt.alter_type() == AlterTableStmt::AlterType::DROP_COLUMN && same_name(field_name, stmt.target_column())) {
+        LOG_WARN("cannot drop column referenced by index. column=%s index=%s", field_name.c_str(), index_meta->name());
+        return RC::UNSUPPORTED;
+      }
+      if (stmt.alter_type() == AlterTableStmt::AlterType::CHANGE_COLUMN && same_name(field_name, stmt.target_column())) {
+        std::string new_name = stmt.new_column_name().empty() ? field_name : stmt.new_column_name();
+        index_plan.fields.push_back(new_name);
+      } else {
+        index_plan.fields.push_back(field_name);
+      }
+    }
+    plan.indexes.push_back(std::move(index_plan));
+  }
+
+  return RC::SUCCESS;
+}
+
+} // namespace
 Db::~Db()
 {
   for (auto &iter : opened_tables_) {
@@ -213,6 +533,342 @@ RC Db::drop_table(const char *table_name)
   // 在实际实现中，应该查询表的元数据来获取所有索引信息
 
   LOG_INFO("Drop table success. table name=%s", table_name);
+  return RC::SUCCESS;
+}
+
+RC Db::alter_table(const AlterTableStmt &stmt)
+{
+  switch (stmt.alter_type()) {
+    case AlterTableStmt::AlterType::ADD_COLUMN:
+    case AlterTableStmt::AlterType::DROP_COLUMN:
+    case AlterTableStmt::AlterType::CHANGE_COLUMN:
+      return alter_table_modify_columns(stmt);
+    case AlterTableStmt::AlterType::RENAME_TABLE:
+      return alter_table_rename_table(stmt);
+    default:
+      return RC::UNIMPLEMENTED;
+  }
+}
+
+RC Db::alter_table_modify_columns(const AlterTableStmt &stmt)
+{
+  Table *old_table = find_table(stmt.table_name().c_str());
+  if (old_table == nullptr) {
+    return RC::SCHEMA_TABLE_NOT_EXIST;
+  }
+
+  const TableMeta &old_meta = old_table->table_meta();
+
+  SchemaChangePlan plan;
+  RC rc = build_schema_change_plan(old_meta, stmt, plan);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  std::vector<AttrInfoSqlNode> new_attrs;
+  new_attrs.reserve(plan.columns.size());
+  for (const ColumnPlan &column_plan : plan.columns) {
+    new_attrs.push_back(column_plan.attr);
+  }
+
+  // 生成一个临时表名
+  std::string temp_name;
+  bool        temp_ready = false;
+  for (int attempt = 0; attempt < 1024; ++attempt) {
+    temp_name = "__tmp_" + stmt.table_name() + "_" + std::to_string(attempt);
+    if (opened_tables_.count(temp_name) != 0) {
+      continue;
+    }
+    std::string meta_path = table_meta_file(path_.c_str(), temp_name.c_str());
+    if (!file_exists(meta_path)) {
+      temp_ready = true;
+      break;
+    }
+  }
+  if (!temp_ready) {
+    LOG_WARN("failed to generate temporary table name for alter table. base=%s", stmt.table_name().c_str());
+    return RC::EXIST;
+  }
+
+  rc = create_table(temp_name.c_str(), new_attrs, plan.primary_keys, old_meta.storage_format());
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  Table *new_table = find_table(temp_name.c_str());
+  if (new_table == nullptr) {
+    drop_table(temp_name.c_str());
+    LOG_WARN("temporary table not found after creation. name=%s", temp_name.c_str());
+    return RC::INTERNAL;
+  }
+
+  RecordScanner *scanner = nullptr;
+  rc = old_table->get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
+  if (OB_FAIL(rc)) {
+    drop_table(temp_name.c_str());
+    return rc;
+  }
+
+  Record record;
+  while (RC::SUCCESS == (rc = scanner->next(record))) {
+    std::vector<Value> values;
+    values.reserve(plan.columns.size());
+    for (const ColumnPlan &column_plan : plan.columns) {
+      Value value;
+      if (column_plan.source_field != nullptr) {
+        rc = fetch_field_value(*old_table, *column_plan.source_field, record, value);
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      } else {
+        value.set_null();
+      }
+      values.push_back(std::move(value));
+    }
+    if (OB_FAIL(rc)) {
+      break;
+    }
+
+    Record new_record;
+    rc = new_table->make_record(static_cast<int>(values.size()), values.data(), new_record);
+    if (OB_FAIL(rc)) {
+      break;
+    }
+    rc = new_table->insert_record(new_record);
+    if (OB_FAIL(rc)) {
+      break;
+    }
+  }
+
+  if (scanner != nullptr) {
+    scanner->close_scan();
+    delete scanner;
+    scanner = nullptr;
+  }
+
+  if (rc != RC::RECORD_EOF && OB_FAIL(rc)) {
+    drop_table(temp_name.c_str());
+    return rc;
+  }
+  rc = RC::SUCCESS;
+
+  for (const IndexPlan &index_plan : plan.indexes) {
+    std::vector<FieldMeta> field_metas;
+    field_metas.reserve(index_plan.fields.size());
+    for (const std::string &field_name : index_plan.fields) {
+      const FieldMeta *field_meta = new_table->table_meta().field(field_name.c_str());
+      if (field_meta == nullptr) {
+        LOG_WARN("failed to locate field when rebuilding index. field=%s", field_name.c_str());
+        drop_table(temp_name.c_str());
+        return RC::SCHEMA_FIELD_NOT_EXIST;
+      }
+      field_metas.push_back(*field_meta);
+    }
+
+    VectorIndexOptions options;
+    VectorIndexOptions *options_ptr = nullptr;
+    if (index_plan.is_vector) {
+      options.is_vector_index = true;
+      options.index_type      = index_plan.index_type;
+      options.distance_type   = index_plan.distance_type;
+      options.lists           = index_plan.lists;
+      options.probes          = index_plan.probes;
+      options_ptr             = &options;
+    }
+
+    rc = new_table->create_index(nullptr, field_metas, index_plan.name.c_str(), index_plan.unique, options_ptr);
+    if (OB_FAIL(rc)) {
+      drop_table(temp_name.c_str());
+      return rc;
+    }
+  }
+
+  new_table->sync();
+
+  // 准备替换文件
+  std::string old_table_name = stmt.table_name();
+  int32_t     old_table_id   = old_table->table_id();
+  std::string old_meta_file  = table_meta_file(path_.c_str(), old_table_name.c_str());
+  std::string old_data_file  = table_data_file(path_.c_str(), old_table_name.c_str());
+  std::string old_lob_file   = table_lob_file(path_.c_str(), old_table_name.c_str());
+
+  std::vector<std::string> old_index_files;
+  for (int i = 0; i < old_meta.index_num(); ++i) {
+    const IndexMeta *index_meta = old_meta.index(i);
+    old_index_files.emplace_back(table_index_file(path_.c_str(), old_table_name.c_str(), index_meta->name()));
+  }
+
+  std::string new_meta_file = table_meta_file(path_.c_str(), temp_name.c_str());
+  std::string new_data_file = table_data_file(path_.c_str(), temp_name.c_str());
+  std::string new_lob_file  = table_lob_file(path_.c_str(), temp_name.c_str());
+
+  std::vector<std::string> new_index_files;
+  new_index_files.reserve(plan.indexes.size());
+  for (const IndexPlan &index_plan : plan.indexes) {
+    new_index_files.emplace_back(table_index_file(path_.c_str(), temp_name.c_str(), index_plan.name.c_str()));
+  }
+
+  // 移除旧表
+  opened_tables_.erase(old_table_name);
+  delete old_table;
+  old_table = nullptr;
+
+  auto remove_file_if_exists = [](const std::string &path) {
+    if (file_exists(path)) {
+      ::remove(path.c_str());
+    }
+  };
+
+  remove_file_if_exists(old_meta_file);
+  remove_file_if_exists(old_data_file);
+  remove_file_if_exists(old_lob_file);
+  for (const std::string &idx_file : old_index_files) {
+    remove_file_if_exists(idx_file);
+  }
+
+  // 从 opened_tables_ 移除并销毁临时表对象，但保留文件以便后续rename
+  opened_tables_.erase(temp_name);
+  delete new_table;
+  new_table = nullptr;
+
+  auto safe_rename = [](const std::string &src, const std::string &dst) -> RC {
+    if (!file_exists(src)) {
+      return RC::SUCCESS;
+    }
+    if (::rename(src.c_str(), dst.c_str()) != 0) {
+      LOG_ERROR("failed to rename file. src=%s dst=%s errno=%d", src.c_str(), dst.c_str(), errno);
+      return RC::IOERR_WRITE;
+    }
+    return RC::SUCCESS;
+  };
+
+  rc = safe_rename(new_meta_file, old_meta_file);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  rc = safe_rename(new_data_file, old_data_file);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  if (file_exists(new_lob_file)) {
+    rc = safe_rename(new_lob_file, old_lob_file);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
+  for (size_t i = 0; i < new_index_files.size(); ++i) {
+    const std::string &src = new_index_files[i];
+    std::string dst = table_index_file(path_.c_str(), old_table_name.c_str(), plan.indexes[i].name.c_str());
+    rc = safe_rename(src, dst);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
+  rc = rewrite_table_meta(old_meta_file, old_table_name, old_table_id);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  Table *reopened = new Table();
+  rc = reopened->open(this, old_meta_file.c_str(), path_.c_str());
+  if (OB_FAIL(rc)) {
+    delete reopened;
+    return rc;
+  }
+  opened_tables_[old_table_name] = reopened;
+
+  LOG_INFO("alter table %s success", old_table_name.c_str());
+  return RC::SUCCESS;
+}
+
+RC Db::alter_table_rename_table(const AlterTableStmt &stmt)
+{
+  Table *table = find_table(stmt.table_name().c_str());
+  if (table == nullptr) {
+    return RC::SCHEMA_TABLE_NOT_EXIST;
+  }
+
+  if (same_name(stmt.table_name(), stmt.new_table_name())) {
+    return RC::SUCCESS;
+  }
+
+  if (find_table(stmt.new_table_name().c_str()) != nullptr) {
+    return RC::SCHEMA_TABLE_EXIST;
+  }
+
+  const TableMeta &meta = table->table_meta();
+
+  std::string old_name = stmt.table_name();
+  std::string new_name = stmt.new_table_name();
+
+  std::string old_meta_file = table_meta_file(path_.c_str(), old_name.c_str());
+  std::string old_data_file = table_data_file(path_.c_str(), old_name.c_str());
+  std::string old_lob_file  = table_lob_file(path_.c_str(), old_name.c_str());
+  std::string new_meta_file = table_meta_file(path_.c_str(), new_name.c_str());
+  std::string new_data_file = table_data_file(path_.c_str(), new_name.c_str());
+  std::string new_lob_file  = table_lob_file(path_.c_str(), new_name.c_str());
+
+  std::vector<std::string> old_index_files;
+  std::vector<std::string> new_index_files;
+  for (int i = 0; i < meta.index_num(); ++i) {
+    const IndexMeta *index_meta = meta.index(i);
+    old_index_files.emplace_back(table_index_file(path_.c_str(), old_name.c_str(), index_meta->name()));
+    new_index_files.emplace_back(table_index_file(path_.c_str(), new_name.c_str(), index_meta->name()));
+  }
+
+  int32_t table_id = table->table_id();
+
+  opened_tables_.erase(old_name);
+  delete table;
+  table = nullptr;
+
+  auto safe_rename = [](const std::string &src, const std::string &dst) -> RC {
+    if (file_exists(src)) {
+      if (::rename(src.c_str(), dst.c_str()) != 0) {
+        LOG_ERROR("failed to rename file. src=%s dst=%s errno=%d", src.c_str(), dst.c_str(), errno);
+        return RC::IOERR_WRITE;
+      }
+    }
+    return RC::SUCCESS;
+  };
+
+  RC rc = safe_rename(old_meta_file, new_meta_file);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  rc = safe_rename(old_data_file, new_data_file);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  if (file_exists(old_lob_file)) {
+    rc = safe_rename(old_lob_file, new_lob_file);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+  for (size_t i = 0; i < old_index_files.size(); ++i) {
+    rc = safe_rename(old_index_files[i], new_index_files[i]);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
+  rc = rewrite_table_meta(new_meta_file, new_name, table_id);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  Table *reopened = new Table();
+  rc = reopened->open(this, new_meta_file.c_str(), path_.c_str());
+  if (OB_FAIL(rc)) {
+    delete reopened;
+    return rc;
+  }
+  opened_tables_[new_name] = reopened;
+
+  LOG_INFO("rename table %s to %s success", stmt.table_name().c_str(), stmt.new_table_name().c_str());
   return RC::SUCCESS;
 }
 

@@ -31,6 +31,7 @@ class View;
 class LogHandler;
 class BufferPoolManager;
 class TrxKit;
+class AlterTableStmt;
 
 /**
  * @brief 一个DB实例负责管理一批表
@@ -76,6 +77,7 @@ public:
    * @param table_name 表名
    */
   RC drop_table(const char *table_name);
+  RC alter_table(const AlterTableStmt &stmt);
 
   /**
    * @brief 根据表名查找表
@@ -132,6 +134,9 @@ private:
 
   /// @brief 初始化数据库的double buffer pool
   RC init_dblwr_buffer();
+
+  RC alter_table_modify_columns(const AlterTableStmt &stmt);
+  RC alter_table_rename_table(const AlterTableStmt &stmt);
 
   StorageEngine get_storage_engine()
   {

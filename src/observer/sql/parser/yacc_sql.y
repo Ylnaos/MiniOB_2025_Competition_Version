@@ -93,6 +93,25 @@ static Value *make_vector_value_from_text(const char *text)
   return vec;
 }
 
+static size_t default_length_for_attr_type(AttrType type)
+{
+  switch (type) {
+    case AttrType::INTS:
+    case AttrType::FLOATS:
+    case AttrType::DATES:
+    case AttrType::BOOLEANS:
+      return 4;
+    case AttrType::CHARS:
+      return 4;
+    case AttrType::TEXTS:
+      return 4;
+    case AttrType::VECTORS:
+      return 2048;
+    default:
+      return 4;
+  }
+}
+
 %}
 
 %define api.pure full
@@ -117,6 +136,7 @@ static Value *make_vector_value_from_text(const char *text)
         CREATE
         VIEW
         DROP
+        ALTER
         GROUP
         TABLE
         TABLES
@@ -186,6 +206,11 @@ static Value *make_vector_value_from_text(const char *text)
         L2_DISTANCE_F
         COSINE_DISTANCE_F
         INNER_PRODUCT_F
+        ADD
+        COLUMN
+        CHANGE
+        RENAME
+        TO
         STRING_TO_VECTOR_F
         TO_VECTOR_F
         VECTOR_TO_STRING_F
@@ -294,6 +319,7 @@ static Value *make_vector_value_from_text(const char *text)
 %type <sql_node>            create_table_stmt
 %type <sql_node>            create_view_stmt
 %type <sql_node>            drop_table_stmt
+%type <sql_node>            alter_table_stmt
 %type <sql_node>            analyze_table_stmt
 %type <sql_node>            show_tables_stmt
 %type <sql_node>            desc_table_stmt
@@ -333,6 +359,7 @@ command_wrapper:
   | create_table_stmt
   | create_view_stmt
   | drop_table_stmt
+  | alter_table_stmt
   | analyze_table_stmt
   | show_tables_stmt
   | desc_table_stmt
@@ -389,6 +416,49 @@ drop_table_stmt:    /*drop table 语句的语法解析树*/
       $$ = new ParsedSqlNode(SCF_DROP_TABLE);
       $$->drop_table.relation_name = $3;
     };
+
+alter_table_stmt:
+    ALTER TABLE ID ADD COLUMN ID type
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter = $$->alter_table;
+      alter.action = AlterTableSqlNode::Action::ADD_COLUMN;
+      alter.table_name = $3;
+      alter.column_info.name = $6;
+      alter.column_info.type = static_cast<AttrType>($7);
+      alter.column_info.length = default_length_for_attr_type(alter.column_info.type);
+      alter.column_info.nullable = true;
+    }
+  | ALTER TABLE ID DROP COLUMN ID
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter = $$->alter_table;
+      alter.action = AlterTableSqlNode::Action::DROP_COLUMN;
+      alter.table_name = $3;
+      alter.target_column = $6;
+    }
+  | ALTER TABLE ID CHANGE COLUMN ID ID type
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter = $$->alter_table;
+      alter.action = AlterTableSqlNode::Action::CHANGE_COLUMN;
+      alter.table_name = $3;
+      alter.target_column = $6;
+      alter.new_column_name = $7;
+      alter.column_info.name = $7;
+      alter.column_info.type = static_cast<AttrType>($8);
+      alter.column_info.length = default_length_for_attr_type(alter.column_info.type);
+      alter.column_info.nullable = true;
+    }
+  | ALTER TABLE ID RENAME TO ID
+    {
+      $$ = new ParsedSqlNode(SCF_ALTER_TABLE);
+      AlterTableSqlNode &alter = $$->alter_table;
+      alter.action = AlterTableSqlNode::Action::RENAME_TABLE;
+      alter.table_name = $3;
+      alter.new_table_name = $6;
+    }
+    ;
 
 create_view_stmt:
     CREATE VIEW ID AS select_stmt

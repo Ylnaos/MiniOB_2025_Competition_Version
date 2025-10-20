@@ -308,6 +308,27 @@ struct SetVariableSqlNode
   Value  value;
 };
 
+/**
+ * @brief ALTER TABLE 语句
+ */
+struct AlterTableSqlNode
+{
+  enum class Action
+  {
+    ADD_COLUMN,
+    DROP_COLUMN,
+    CHANGE_COLUMN,
+    RENAME_TABLE
+  };
+
+  Action action = Action::ADD_COLUMN;
+  string table_name;
+  AttrInfoSqlNode column_info;   ///< 新列定义（用于 ADD/CHANGE 的目标列）
+  string target_column;          ///< 旧列名称（用于 DROP/CHANGE）
+  string new_column_name;        ///< 新列名称（用于 CHANGE）
+  string new_table_name;         ///< 新表名称（用于 RENAME TO）
+};
+
 class ParsedSqlNode;
 
 /**
@@ -363,6 +384,7 @@ enum SqlCommandFlag
   SCF_ANALYZE_TABLE,
   SCF_CREATE_INDEX,
   SCF_DROP_INDEX,
+  SCF_ALTER_TABLE,
   SCF_SYNC,
   SCF_SHOW_TABLES,
   SCF_DESC_TABLE,
@@ -396,6 +418,7 @@ public:
   AnalyzeTableSqlNode analyze_table;
   CreateIndexSqlNode  create_index;
   DropIndexSqlNode    drop_index;
+  AlterTableSqlNode   alter_table;
   DescTableSqlNode    desc_table;
   LoadDataSqlNode     load_data;
   ExplainSqlNode      explain;
