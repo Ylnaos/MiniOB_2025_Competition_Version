@@ -187,7 +187,13 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       } break;
       case ScalarFunctionExpr::FuncType::VECTOR_TO_STRING: {
         // 向量到字符串的转换函数
-        if (arg_type != AttrType::VECTORS) {
+        if (arg_type == AttrType::CHARS) {
+          // 字符串输入：显式增加一次向量转换，便于运行期重用解析逻辑
+          auto cast = make_unique<CastExpr>(func->child()->copy(), AttrType::VECTORS);
+          func->child().reset(cast.release());
+        } else if (arg_type == AttrType::NULLS) {
+          // NULL 直接透传
+        } else if (arg_type != AttrType::VECTORS) {
           LOG_WARN("vector_to_string expects vector type, got %d", (int)arg_type);
           return RC::INVALID_ARGUMENT;
         }

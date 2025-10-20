@@ -1960,11 +1960,22 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
     }
     case FuncType::VECTOR_TO_STRING: {
       // VECTOR_TO_STRING: 将向量转换为字符串 "[1,2,3]"
-      if (arg.attr_type() != AttrType::VECTORS) {
-        return RC::INVALID_ARGUMENT;
+      if (arg.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      Value vec_value;
+      if (arg.attr_type() == AttrType::VECTORS) {
+        vec_value = arg;
+      } else {
+        rc = Value::cast_to(arg, AttrType::VECTORS, vec_value);
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
       }
       string result_str;
-      rc = DataType::type_instance(AttrType::VECTORS)->to_string(arg, result_str);
+      rc = DataType::type_instance(AttrType::VECTORS)->to_string(vec_value, result_str);
       if (OB_FAIL(rc)) return rc;
       value.set_string(result_str.c_str());
       return RC::SUCCESS;
@@ -2603,9 +2614,22 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         }
       } break;
       case FuncType::VECTOR_TO_STRING: {
-        if (arg.attr_type() != AttrType::VECTORS) return RC::INVALID_ARGUMENT;
+        if (arg.attr_type() == AttrType::NULLS) {
+          out.set_null();
+          break;
+        }
+        Value vec_value;
+        if (arg.attr_type() == AttrType::VECTORS) {
+          vec_value = arg;
+        } else {
+          RC rc_cast = Value::cast_to(arg, AttrType::VECTORS, vec_value);
+          if (OB_FAIL(rc_cast)) {
+            out.set_null();
+            break;
+          }
+        }
         string result_str;
-        RC rc2 = DataType::type_instance(AttrType::VECTORS)->to_string(arg, result_str);
+        RC rc2 = DataType::type_instance(AttrType::VECTORS)->to_string(vec_value, result_str);
         if (OB_FAIL(rc2)) return rc2;
         out.set_string(result_str.c_str());
       } break;

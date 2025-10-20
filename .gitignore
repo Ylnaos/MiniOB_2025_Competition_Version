@@ -23,7 +23,11 @@ GPATH
 GTAGS
 docs/book
 **/__pycache__
+
 #*#
+# 忽略 Python 虚拟环境
+.venv/
+venv/
 
 # ignore generated files
 src/observer/sql/parser/lex_sql.cpp
