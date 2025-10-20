@@ -99,6 +99,7 @@ public:
                   const char *index_name,
                   bool unique,
                   const VectorIndexOptions *vector_options = nullptr);
+  RC drop_index(const char *index_name);
 
   RC get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode);
 

@@ -44,6 +44,7 @@ public:
   {
     return RC::UNIMPLEMENTED;
   }
+  RC drop_index(const char *index_name) override { return RC::UNIMPLEMENTED; }
   RC get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode) override;
   RC get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode) override { return RC::UNIMPLEMENTED; }
   RC visit_record(const RID &rid, function<bool(Record &)> visitor) override { return RC::UNIMPLEMENTED; }

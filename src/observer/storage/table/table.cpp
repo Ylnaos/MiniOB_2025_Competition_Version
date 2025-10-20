@@ -484,6 +484,15 @@ RC Table::create_index(Trx *trx,
   return engine_->create_index(trx, field_metas, index_name, unique, vector_options);
 }
 
+RC Table::drop_index(const char *index_name)
+{
+  if (engine_ == nullptr) {
+    LOG_WARN("table engine is null when dropping index. table=%s", name());
+    return RC::INTERNAL;
+  }
+  return engine_->drop_index(index_name);
+}
+
 RC Table::delete_record(const Record &record)
 {
   return engine_->delete_record(record);

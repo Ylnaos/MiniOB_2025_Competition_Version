@@ -39,6 +39,7 @@ public:
                   const char *index_name,
                   bool unique,
                   const VectorIndexOptions *vector_options) override;
+  RC drop_index(const char *index_name) override;
   RC get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode) override;
   RC get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode) override;
   RC visit_record(const RID &rid, function<bool(Record &)> visitor) override;

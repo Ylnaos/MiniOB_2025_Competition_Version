@@ -142,6 +142,24 @@ RC TableMeta::add_index(const IndexMeta &index)
   return RC::SUCCESS;
 }
 
+RC TableMeta::remove_index(const char *index_name)
+{
+  if (index_name == nullptr) {
+    LOG_WARN("invalid index name when removing index meta. table=%s", name_.c_str());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  for (auto it = indexes_.begin(); it != indexes_.end(); ++it) {
+    if (0 == strcmp(it->name(), index_name)) {
+      indexes_.erase(it);
+      return RC::SUCCESS;
+    }
+  }
+
+  LOG_WARN("index meta not found while removing. table=%s index=%s", name_.c_str(), index_name);
+  return RC::NOT_EXIST;
+}
+
 const char *TableMeta::name() const { return name_.c_str(); }
 
 const FieldMeta *TableMeta::trx_field() const { return &fields_[0]; }

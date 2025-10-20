@@ -434,6 +434,68 @@ string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
   return rc;
 }
 
+RC HeapTableEngine::drop_index(const char *index_name)
+{
+  if (nullptr == index_name || index_name[0] == '\0') {
+    LOG_WARN("invalid index name while dropping index. table=%s", table_meta_->name());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Index *target_index = find_index(index_name);
+  if (target_index == nullptr) {
+    LOG_WARN("index not found on table. table=%s index=%s", table_meta_->name(), index_name);
+    return RC::NOT_EXIST;
+  }
+
+  TableMeta new_table_meta(*table_meta_);
+  RC rc = new_table_meta.remove_index(index_name);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to remove index meta. table=%s index=%s rc=%s", table_meta_->name(), index_name, strrc(rc));
+    return rc;
+  }
+
+  string tmp_file = table_meta_file(db_->path().c_str(), table_meta_->name()) + ".tmp";
+  fstream fs;
+  fs.open(tmp_file, ios_base::out | ios_base::binary | ios_base::trunc);
+  if (!fs.is_open()) {
+    LOG_ERROR("Failed to open file for write. file name=%s, errmsg=%s", tmp_file.c_str(), strerror(errno));
+    return RC::IOERR_OPEN;
+  }
+  if (new_table_meta.serialize(fs) < 0) {
+    LOG_ERROR("Failed to dump new table meta to file: %s. sys err=%d:%s", tmp_file.c_str(), errno, strerror(errno));
+    fs.close();
+    return RC::IOERR_WRITE;
+  }
+  fs.close();
+
+  string meta_file = table_meta_file(db_->path().c_str(), table_meta_->name());
+  if (rename(tmp_file.c_str(), meta_file.c_str()) != 0) {
+    LOG_ERROR("Failed to rename tmp meta file (%s) to normal meta file (%s) while dropping index (%s) on table (%s). "
+              "system error=%d:%s",
+              tmp_file.c_str(), meta_file.c_str(), index_name, table_meta_->name(), errno, strerror(errno));
+    return RC::IOERR_WRITE;
+  }
+
+  table_meta_->swap(new_table_meta);
+
+  for (auto it = indexes_.begin(); it != indexes_.end(); ++it) {
+    if (*it == target_index) {
+      delete *it;
+      indexes_.erase(it);
+      break;
+    }
+  }
+
+  string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+  if (unlink(index_file.c_str()) != 0) {
+    LOG_WARN("failed to remove index file while dropping index. file=%s err=%d:%s",
+             index_file.c_str(), errno, strerror(errno));
+  }
+
+  LOG_INFO("Successfully dropped index (%s) on the table (%s)", index_name, table_meta_->name());
+  return RC::SUCCESS;
+}
+
 RC HeapTableEngine::insert_entry_of_indexes(const char *record, const RID &rid)
 {
   RC rc = RC::SUCCESS;
