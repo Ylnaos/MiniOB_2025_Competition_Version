@@ -1617,9 +1617,12 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       // 现在使用转换后的向量值
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+      if (len1 <= 0 || len2 <= 0) {
         value.set_null();
         return RC::SUCCESS;
+      }
+      if (len1 != len2) {
+        return RC::INVALID_ARGUMENT;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -1719,9 +1722,12 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
 
       const int len1 = arg.length();
       const int len2 = arg2.length();
-      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+      if (len1 <= 0 || len2 <= 0) {
         value.set_null();
         return RC::SUCCESS;
+      }
+      if (len1 != len2) {
+        return RC::INVALID_ARGUMENT;
       }
 
       const int dim = len1 / static_cast<int>(sizeof(float));
@@ -1730,7 +1736,9 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       string dist_type = arg3.get_string();
 
       // 转换为大写
-      for (char &c : dist_type) c = std::toupper(c);
+      for (char &c : dist_type) {
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      }
 
       double acc = 0.0;
       if (dist_type == "EUCLIDEAN") {
@@ -1755,10 +1763,7 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         return RC::INVALID_ARGUMENT;  // 不支持的距离类型
       }
 
-      // 保留两位小数
-      double p = std::pow(10.0, 2.0);
-      double rf = round_half_to_even(acc * p) / p;
-      value.set_float(static_cast<float>(rf));
+      value.set_float(static_cast<float>(acc));
       return RC::SUCCESS;
     }
   }
@@ -2010,9 +2015,12 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       }
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+      if (len1 <= 0 || len2 <= 0) {
         value.set_null();
         return RC::SUCCESS;
+      }
+      if (len1 != len2) {
+        return RC::INVALID_ARGUMENT;
       }
 
       Value dist_arg = arg3;
@@ -2063,9 +2071,7 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
         return RC::INVALID_ARGUMENT;
       }
 
-      double p  = std::pow(10.0, 2.0);
-      double rf = round_half_to_even(acc * p) / p;
-      value.set_float(static_cast<float>(rf));
+      value.set_float(static_cast<float>(acc));
       return RC::SUCCESS;
     }
   }
@@ -2309,13 +2315,16 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
 
         const int len1 = arg.length();
         const int len2 = argb.length();
-        if (len1 <= 0 || len2 <= 0 || len1 != len2) { out.set_null(); break; }
+        if (len1 <= 0 || len2 <= 0) { out.set_null(); break; }
+        if (len1 != len2) { return RC::INVALID_ARGUMENT; }
 
         const int dim = len1 / static_cast<int>(sizeof(float));
         const float *a = reinterpret_cast<const float *>(arg.data());
         const float *b = reinterpret_cast<const float *>(argb.data());
         string dist_type = argc.get_string();
-        for (char &c : dist_type) c = std::toupper(c);
+        for (char &c : dist_type) {
+          c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        }
 
         double acc = 0.0;
         if (dist_type == "EUCLIDEAN") {
@@ -2332,8 +2341,7 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         } else {
           return RC::INVALID_ARGUMENT;
         }
-        double p = std::pow(10.0, 2.0); double rf = round_half_to_even(acc * p) / p;
-        out.set_float(static_cast<float>(rf));
+        out.set_float(static_cast<float>(acc));
       } break;
     }
     column.append_value(out);

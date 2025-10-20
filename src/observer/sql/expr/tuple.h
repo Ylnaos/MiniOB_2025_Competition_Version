@@ -563,15 +563,15 @@ public:
         return rc;
       }
 
-      TupleCellSpec spec;
-      rc = tuple.spec_at(i, spec);
-      if (OB_FAIL(rc)) {
-        return rc;
-      }
-
       value_list.cells_.push_back(cell);
       if (!use_shared_specs) {
-        value_list.specs_.push_back(spec);
+        // 仅在没有共享列定义时才复制元信息，避免大量重复的字符串分配
+        TupleCellSpec spec;
+        rc = tuple.spec_at(i, spec);
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+        value_list.specs_.push_back(std::move(spec));
       }
     }
     return RC::SUCCESS;
