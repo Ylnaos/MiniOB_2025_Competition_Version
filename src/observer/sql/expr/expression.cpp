@@ -1664,9 +1664,10 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         return RC::INVALID_ARGUMENT;
       }
       const string literal = arg.get_string();
+      const char *str = literal.c_str();
       std::vector<float> elems;
-      if (!literal.empty() && literal.front() == '[') {
-        const char *p = literal.c_str() + 1;
+      if (str != nullptr && str[0] == '[') {
+        const char *p = str + 1;
         while (*p && *p != ']') {
           char *end = nullptr;
           float val = strtof(p, &end);
@@ -1677,13 +1678,8 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
           elems.push_back(val);
           p = end;
           while (*p == ' ' || *p == '\t') p++;
-          if (*p == ',') {
-            ++p;
-            while (*p == ' ' || *p == '\t') ++p;
-          }
-        }
-        if (*p != ']') {
-          elems.clear();
+          if (*p == ',') p++;
+          while (*p == ' ' || *p == '\t') p++;
         }
       }
       value.set_type(AttrType::VECTORS);
@@ -2177,15 +2173,20 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         out.set_float(static_cast<float>(rf));
       } break;
       case FuncType::STRING_TO_VECTOR: {
-        if (arg.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
-        const char *str = arg.get_string().c_str();
+        if (arg.attr_type() == AttrType::VECTORS) {
+          out = arg;
+          break;
+        }
+        if (arg.attr_type() != AttrType::CHARS && arg.attr_type() != AttrType::TEXTS) return RC::INVALID_ARGUMENT;
+        const string literal = arg.get_string();
+        const char *str = literal.c_str();
         std::vector<float> elems;
         if (str && str[0] == '[') {
           const char *p = str + 1;
           while (*p && *p != ']') {
             char *end = nullptr;
             float val = strtof(p, &end);
-            if (end == p) break;
+            if (end == p) { elems.clear(); break; }
             elems.push_back(val);
             p = end;
             while (*p == ' ' || *p == '\t') p++;
