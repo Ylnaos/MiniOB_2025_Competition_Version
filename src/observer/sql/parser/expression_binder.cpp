@@ -192,6 +192,20 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
           return RC::INVALID_ARGUMENT;
         }
       } break;
+      case ScalarFunctionExpr::FuncType::TOKENIZE: {
+        // TOKENIZE 函数要求输入为字符串或文本，允许 NULL 直接透传
+        if (arg_type != AttrType::CHARS && arg_type != AttrType::TEXTS && arg_type != AttrType::NULLS) {
+          LOG_WARN("tokenize expects char/text type, got %d", (int)arg_type);
+          return RC::INVALID_ARGUMENT;
+        }
+        if (func->child2()) {
+          AttrType parser_type = func->child2()->value_type();
+          if (parser_type != AttrType::CHARS && parser_type != AttrType::TEXTS && parser_type != AttrType::NULLS) {
+            LOG_WARN("tokenize parser expects char/text type, got %d", (int)parser_type);
+            return RC::INVALID_ARGUMENT;
+          }
+        }
+      } break;
       case ScalarFunctionExpr::FuncType::DISTANCE: {
         // 通用距离函数，需要三个参数：vec1, vec2, distance_type
         // 这里只处理前两个参数的类型检查
