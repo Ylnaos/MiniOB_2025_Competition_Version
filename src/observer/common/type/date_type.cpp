@@ -9,9 +9,13 @@ MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
 #include "common/type/date_type.h"
+#include "common/log/log.h"
+#include "common/lang/string.h"
 #include "common/value.h"
 #include "storage/common/column.h"
 #include "common/lang/sstream.h"
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 
 int DateType::compare(const Value &left, const Value &right) const
@@ -66,28 +70,55 @@ RC DateType::cast_to(const Value &val, AttrType type, Value &result) const
 
 RC DateType::set_value_from_str(Value &val, const string &data) const
 {
-  // 支持 'YYYY-MM-DD' 格式
-  // 期望格式: YYYY-MM-DD
-  int year = 0, month = 0, day = 0;
-
-  // 使用 sscanf 来解析日期字符串
-  if (sscanf(data.c_str(), "%d-%d-%d", &year, &month, &day) != 3) {
+  string str = data;
+  if (str.empty()) {
     return RC::INVALID_ARGUMENT;
   }
 
-  // 检查日期格式是否正确（确保有正确的分隔符）
-  size_t pos1 = data.find('-');
+  // 去除首尾空白，兼容 CHAR 类型存储的日期字面量
+  if (!str.empty()) {
+    common::strip(str);
+  }
+  if (str.empty()) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  size_t pos1 = str.find('-');
   if (pos1 == string::npos) {
     return RC::INVALID_ARGUMENT;
   }
-
-  size_t pos2 = data.find('-', pos1 + 1);
+  size_t pos2 = str.find('-', pos1 + 1);
   if (pos2 == string::npos) {
     return RC::INVALID_ARGUMENT;
   }
+  if (str.find('-', pos2 + 1) != string::npos) {
+    return RC::INVALID_ARGUMENT;
+  }
 
-  // 检查是否还有多余的分隔符
-  if (data.find('-', pos2 + 1) != string::npos) {
+  auto is_digits = [](const string &segment) -> bool {
+    if (segment.empty()) {
+      return false;
+    }
+    return std::all_of(segment.begin(), segment.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; });
+  };
+
+  string year_str  = str.substr(0, pos1);
+  string month_str = str.substr(pos1 + 1, pos2 - pos1 - 1);
+  string day_str   = str.substr(pos2 + 1);
+
+  if (!is_digits(year_str) || !is_digits(month_str) || !is_digits(day_str)) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  int year = 0;
+  int month = 0;
+  int day = 0;
+  try {
+    year  = std::stoi(year_str);
+    month = std::stoi(month_str);
+    day   = std::stoi(day_str);
+  } catch (const std::exception &e) {
+    LOG_WARN("failed to parse date string to integers. data=%s, reason=%s", str.c_str(), e.what());
     return RC::INVALID_ARGUMENT;
   }
 
@@ -95,9 +126,7 @@ RC DateType::set_value_from_str(Value &val, const string &data) const
     return RC::INVALID_ARGUMENT;
   }
 
-  int32_t date_int = date_to_int(year, month, day);
-  val.set_date(date_int);
-
+  val.set_date(date_to_int(year, month, day));
   return RC::SUCCESS;
 }
 

@@ -234,15 +234,40 @@ if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
     return RC::SUCCESS;
   }
 
-  auto is_numeric = [](AttrType t) {
-    return t == AttrType::INTS || t == AttrType::FLOATS;
+  auto is_numeric = [](AttrType t) { return t == AttrType::INTS || t == AttrType::FLOATS; };
+
+  const Value *left_ptr  = &left;
+  const Value *right_ptr = &right;
+  Value        left_cast;
+  Value        right_cast;
+
+  auto try_cast_string_to_date = [](const Value &src, const Value *&out_ptr, Value &holder) -> RC {
+    RC rc = Value::cast_to(src, AttrType::DATES, holder);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to cast string to date for comparison. value=%s", src.to_string().c_str());
+      return rc;
+    }
+    out_ptr = &holder;
+    return RC::SUCCESS;
   };
 
+  if (left.attr_type() == AttrType::DATES && is_string_type(right.attr_type())) {
+    RC rc = try_cast_string_to_date(right, right_ptr, right_cast);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  } else if (right.attr_type() == AttrType::DATES && is_string_type(left.attr_type())) {
+    RC rc = try_cast_string_to_date(left, left_ptr, left_cast);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
   int cmp_result = 0;
-  if ((left.attr_type() == AttrType::FLOATS || right.attr_type() == AttrType::FLOATS) && is_numeric(left.attr_type())
-      && is_numeric(right.attr_type())) {
-    double left_num  = static_cast<double>(left.get_float());
-    double right_num = static_cast<double>(right.get_float());
+  if ((left_ptr->attr_type() == AttrType::FLOATS || right_ptr->attr_type() == AttrType::FLOATS)
+      && is_numeric(left_ptr->attr_type()) && is_numeric(right_ptr->attr_type())) {
+    double left_num  = static_cast<double>(left_ptr->get_float());
+    double right_num = static_cast<double>(right_ptr->get_float());
     double base_tol =
         static_cast<double>(std::numeric_limits<float>::epsilon())
         * std::max({std::fabs(left_num), std::fabs(right_num), 1.0});
@@ -256,7 +281,7 @@ if (!is_string_type(left.attr_type()) || !is_string_type(right.attr_type())) {
       cmp_result = 0;
     }
   } else {
-    cmp_result = left.compare(right);
+    cmp_result = left_ptr->compare(*right_ptr);
   }
   switch (comp_) {
     case EQUAL_TO: {

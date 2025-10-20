@@ -52,19 +52,19 @@ inline float l2_squared_unrolled(const float *a, const float *b, size_t dim)
     __m256 va0   = _mm256_loadu_ps(a + i);
     __m256 vb0   = _mm256_loadu_ps(b + i);
     __m256 diff0 = _mm256_sub_ps(va0, vb0);
-    acc0         = _mm256_fmadd_ps(diff0, diff0, acc0);
+    acc0         = _mm256_add_ps(acc0, _mm256_mul_ps(diff0, diff0));
 
     __m256 va1   = _mm256_loadu_ps(a + i + 8);
     __m256 vb1   = _mm256_loadu_ps(b + i + 8);
     __m256 diff1 = _mm256_sub_ps(va1, vb1);
-    acc1         = _mm256_fmadd_ps(diff1, diff1, acc1);
+    acc1         = _mm256_add_ps(acc1, _mm256_mul_ps(diff1, diff1));
   }
 
   if (i + 8 <= dim) {
     __m256 va0   = _mm256_loadu_ps(a + i);
     __m256 vb0   = _mm256_loadu_ps(b + i);
     __m256 diff0 = _mm256_sub_ps(va0, vb0);
-    acc0         = _mm256_fmadd_ps(diff0, diff0, acc0);
+    acc0         = _mm256_add_ps(acc0, _mm256_mul_ps(diff0, diff0));
     i += 8;
   }
 

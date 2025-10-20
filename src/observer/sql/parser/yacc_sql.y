@@ -65,6 +65,34 @@ static char* alloc_string(const char* str, yyscan_t scanner) {
   return result;
 }
 
+// 将文本形式的向量字面量转换为 Value，解析失败时回退为字符串
+static Value *make_vector_value_from_text(const char *text)
+{
+  if (text == nullptr) {
+    Value *vec = new Value();
+    vec->set_type(AttrType::VECTORS);
+    vec->set_data((const char *)nullptr, 0);
+    return vec;
+  }
+
+  std::vector<float> elems;
+  if (!VectorType::parse_literal(text, elems)) {
+    Value *str_val = new Value();
+    str_val->set_string(text);
+    return str_val;
+  }
+
+  Value *vec = new Value();
+  vec->set_type(AttrType::VECTORS);
+  if (!elems.empty()) {
+    vec->set_data(reinterpret_cast<const char *>(elems.data()),
+                  static_cast<int>(elems.size() * sizeof(float)));
+  } else {
+    vec->set_data((const char *)nullptr, 0);
+  }
+  return vec;
+}
+
 %}
 
 %define api.pure full
@@ -699,6 +727,22 @@ value:
         free(tmp);
       } else {
         $$ = new Value("");
+      }
+    }
+    | STRING_TO_VECTOR_F LBRACE SSS RBRACE
+    {
+      char *tmp = common::substr($3, 1, strlen($3) - 2);
+      $$ = make_vector_value_from_text(tmp);
+      if (tmp != nullptr) {
+        free(tmp);
+      }
+    }
+    | TO_VECTOR_F LBRACE SSS RBRACE
+    {
+      char *tmp = common::substr($3, 1, strlen($3) - 2);
+      $$ = make_vector_value_from_text(tmp);
+      if (tmp != nullptr) {
+        free(tmp);
       }
     }
     | vector_literal {
@@ -1594,6 +1638,52 @@ int sql_parse(const char *s, ParsedSqlResult *sql_result) {
     return str.substr(i, j - i);
   };
 
+  auto append_relations_from_segment = [&](const std::string &segment, std::vector<std::string> &out) {
+    size_t start = 0;
+    int    depth = 0;
+    bool   in_single_quote = false;
+    bool   in_double_quote = false;
+
+    auto emit = [&](size_t end_pos) {
+      if (end_pos <= start) {
+        return;
+      }
+      std::string piece = trim(segment.substr(start, end_pos - start));
+      if (!piece.empty()) {
+        out.push_back(piece);
+      }
+    };
+
+    const size_t len = segment.size();
+    for (size_t i = 0; i < len; ++i) {
+      char ch = segment[i];
+      if (ch == '\'' && !in_double_quote) {
+        in_single_quote = !in_single_quote;
+        continue;
+      }
+      if (ch == '"' && !in_single_quote) {
+        in_double_quote = !in_double_quote;
+        continue;
+      }
+      if (in_single_quote || in_double_quote) {
+        continue;
+      }
+      if (ch == '(') {
+        depth++;
+        continue;
+      }
+      if (ch == ')' && depth > 0) {
+        depth--;
+        continue;
+      }
+      if (ch == ',' && depth == 0) {
+        emit(i);
+        start = i + 1;
+      }
+    }
+    emit(len);
+  };
+
   std::string rewritten = orig_sql; // 默认不改写
   size_t      from_pos  = find_ci(" from ", 0);
   size_t      join_pos  = std::string::npos;
@@ -1657,10 +1747,62 @@ int sql_parse(const char *s, ParsedSqlResult *sql_result) {
         if (next_pos == SIZE_MAX || next_pos > after_from_end) {
           next_pos = after_from_end;
         }
-        std::string cond = trim(orig_sql.substr(on_pos + 4, next_pos - (on_pos + 4)));
-        if (!cond.empty()) join_conds.push_back(std::string("(") + cond + ")");
+        std::string cond_segment = orig_sql.substr(on_pos + 4, next_pos - (on_pos + 4));
+        std::string cond         = trim(cond_segment);
+        if (!cond.empty()) {
+          std::string cond_only = cond;
+          size_t      split_pos = std::string::npos;
+          int         depth     = 0;
+          bool        in_single = false;
+          bool        in_double = false;
+          for (size_t i = 0; i < cond.size(); ++i) {
+            char ch = cond[i];
+            if (ch == '\'' && !in_double) {
+              in_single = !in_single;
+              continue;
+            }
+            if (ch == '"' && !in_single) {
+              in_double = !in_double;
+              continue;
+            }
+            if (in_single || in_double) {
+              continue;
+            }
+            if (ch == '(') {
+              depth++;
+              continue;
+            }
+            if (ch == ')' && depth > 0) {
+              depth--;
+              continue;
+            }
+            if (ch == ',' && depth == 0) {
+              split_pos = i;
+              break;
+            }
+          }
+          std::vector<std::string> extra_relations;
+          if (split_pos != std::string::npos) {
+            cond_only = trim(cond.substr(0, split_pos));
+            std::string trailing = cond.substr(split_pos + 1);
+            append_relations_from_segment(trailing, extra_relations);
+          }
+          if (!cond_only.empty()) {
+            join_conds.push_back(std::string("(") + cond_only + ")");
+          }
+          if (!extra_relations.empty()) {
+            relations.insert(relations.end(), extra_relations.begin(), extra_relations.end());
+          }
+        }
 
         p = next_pos;
+      }
+
+      if (p < after_from_end) {
+        std::string remainder = trim(orig_sql.substr(p, after_from_end - p));
+        if (!remainder.empty()) {
+          append_relations_from_segment(remainder, relations);
+        }
       }
 
       // 重新拼接 SQL：保留 FROM 之前的头部，FROM 后拼接逗号分隔的关系；
