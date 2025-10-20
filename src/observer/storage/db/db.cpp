@@ -323,6 +323,8 @@ static RC build_schema_change_plan(const TableMeta &old_meta,
   plan.indexes.reserve(index_num);
   for (int i = 0; i < index_num; ++i) {
     const IndexMeta *index_meta = old_meta.index(i);
+    bool drop_index = false;
+
     IndexPlan index_plan;
     index_plan.name          = index_meta->name();
     index_plan.unique        = index_meta->unique();
@@ -334,8 +336,8 @@ static RC build_schema_change_plan(const TableMeta &old_meta,
 
     for (const std::string &field_name : index_meta->fields()) {
       if (stmt.alter_type() == AlterTableStmt::AlterType::DROP_COLUMN && same_name(field_name, stmt.target_column())) {
-        LOG_WARN("cannot drop column referenced by index. column=%s index=%s", field_name.c_str(), index_meta->name());
-        return RC::UNSUPPORTED;
+        drop_index = true;
+        break;
       }
       if (stmt.alter_type() == AlterTableStmt::AlterType::CHANGE_COLUMN && same_name(field_name, stmt.target_column())) {
         std::string new_name = stmt.new_column_name().empty() ? field_name : stmt.new_column_name();
@@ -344,6 +346,12 @@ static RC build_schema_change_plan(const TableMeta &old_meta,
         index_plan.fields.push_back(field_name);
       }
     }
+
+    if (drop_index) {
+      LOG_INFO("drop column will remove dependent index. column=%s index=%s", stmt.target_column().c_str(), index_meta->name());
+      continue;
+    }
+
     plan.indexes.push_back(std::move(index_plan));
   }
 
