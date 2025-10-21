@@ -18,44 +18,62 @@ See the Mulan PSL v2 for more details. */
 
 using namespace std;
 
-InsertPhysicalOperator::InsertPhysicalOperator(Table *table, vector<vector<Value>> &&values_rows)
-    : table_(table), values_rows_(std::move(values_rows))
+InsertPhysicalOperator::InsertPhysicalOperator(vector<InsertTask> tasks)
+    : insert_tasks_(std::move(tasks))
 {}
 
 RC InsertPhysicalOperator::open(Trx *trx)
 {
   RC rc = RC::SUCCESS;
-  vector<RID> inserted_rids;
+  struct InsertedRecord
+  {
+    Table *table = nullptr;
+    RID    rid;
+  };
+  vector<InsertedRecord> inserted_records;
 
-  for (const auto &row_values : values_rows_) {
-    Record record;
-    rc = table_->make_record(static_cast<int>(row_values.size()), row_values.data(), record);
-    if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to make record. rc=%s", strrc(rc));
+  for (const auto &task : insert_tasks_) {
+    Table *table = task.table;
+    if (table == nullptr) {
+      LOG_WARN("insert physical operator got null table");
+      rc = RC::INTERNAL;
       break;
     }
 
-    rc = trx->insert_record(table_, record);
+    for (const auto &row_values : task.rows) {
+      Record record;
+      rc = table->make_record(static_cast<int>(row_values.size()), row_values.data(), record);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to make record. table=%s rc=%s", table->name(), strrc(rc));
+        break;
+      }
+
+      rc = trx->insert_record(table, record);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to insert record by transaction. table=%s rc=%s", table->name(), strrc(rc));
+        break;
+      }
+      inserted_records.push_back({table, record.rid()});
+    }
+
     if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to insert record by transaction. rc=%s", strrc(rc));
       break;
     }
-    inserted_rids.push_back(record.rid());
   }
 
   if (rc != RC::SUCCESS) {
-    // 发生错误，回滚本语句已插入的行，保证一次插入要么全部成功要么全部失败
-    for (auto it = inserted_rids.rbegin(); it != inserted_rids.rend(); ++it) {
-      const RID &rid = *it;
+    for (auto it = inserted_records.rbegin(); it != inserted_records.rend(); ++it) {
       Record rec;
-      RC rc_get = table_->get_record(rid, rec);
+      RC rc_get = it->table->get_record(it->rid, rec);
       if (rc_get != RC::SUCCESS) {
-        LOG_WARN("failed to get record for rollback. rid=%s rc=%s", rid.to_string().c_str(), strrc(rc_get));
+        LOG_WARN("failed to get record for rollback. table=%s rid=%s rc=%s",
+            it->table->name(), it->rid.to_string().c_str(), strrc(rc_get));
         continue;
       }
-      RC rc_del = trx->delete_record(table_, rec);
+      RC rc_del = trx->delete_record(it->table, rec);
       if (rc_del != RC::SUCCESS) {
-        LOG_WARN("failed to delete record for rollback. rid=%s rc=%s", rid.to_string().c_str(), strrc(rc_del));
+        LOG_WARN("failed to delete record for rollback. table=%s rid=%s rc=%s",
+            it->table->name(), it->rid.to_string().c_str(), strrc(rc_del));
       }
     }
   }

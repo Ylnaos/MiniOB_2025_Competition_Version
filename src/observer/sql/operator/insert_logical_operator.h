@@ -15,7 +15,7 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include "sql/operator/logical_operator.h"
-#include "sql/parser/parse_defs.h"
+#include "sql/stmt/insert_stmt.h"
 
 /**
  * @brief 插入逻辑算子
@@ -24,18 +24,17 @@ See the Mulan PSL v2 for more details. */
 class InsertLogicalOperator : public LogicalOperator
 {
 public:
-  InsertLogicalOperator(Table *table, vector<vector<Value>> values_rows);
+  explicit InsertLogicalOperator(vector<InsertTask> tasks);
   virtual ~InsertLogicalOperator() = default;
 
   LogicalOperatorType type() const override { return LogicalOperatorType::INSERT; }
 
   OpType get_op_type() const override { return OpType::LOGICALINSERT; }
 
-  Table                              *table() const { return table_; }
-  const vector<vector<Value>>        &values_rows() const { return values_rows_; }
-  vector<vector<Value>>              &values_rows() { return values_rows_; }
+  Table *first_table() const { return insert_tasks_.empty() ? nullptr : insert_tasks_[0].table; }
+  const vector<InsertTask> &insert_tasks() const { return insert_tasks_; }
+  vector<InsertTask>       &insert_tasks() { return insert_tasks_; }
 
 private:
-  Table                      *table_ = nullptr;
-  vector<vector<Value>>       values_rows_;
+  vector<InsertTask> insert_tasks_;
 };

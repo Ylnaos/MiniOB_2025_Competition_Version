@@ -28,7 +28,7 @@ const list<string> &SqlDebug::get_debug_infos() const { return debug_infos_; }
 void sql_debug(const char *fmt, ...)
 {
   Session *session = Session::current_session();
-  if (nullptr == session) {
+  if (nullptr == session || !session->sql_debug_on()) {
     return;
   }
 

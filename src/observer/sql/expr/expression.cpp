@@ -26,6 +26,7 @@ See the Mulan PSL v2 for more details. */
 #include <mutex>
 #include <sstream>
 #include <unordered_set>
+#include <sys/stat.h>
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -43,19 +44,39 @@ namespace {
 
 namespace fs = std::filesystem;
 
+static fs::path make_absolute_safely(const fs::path &path)
+{
+  if (path.empty()) {
+    return {};
+  }
+  return path.lexically_normal();
+}
+
 static bool has_jieba_resource(const fs::path &dir)
 {
   if (dir.empty()) {
     return false;
   }
 
-  std::error_code ec;
-  const bool ok = fs::exists(dir / "jieba.dict.utf8", ec) && !ec &&
-                  fs::exists(dir / "hmm_model.utf8", ec) && !ec &&
-                  fs::exists(dir / "user.dict.utf8", ec) && !ec &&
-                  fs::exists(dir / "idf.utf8", ec) && !ec &&
-                  fs::exists(dir / "stop_words.utf8", ec) && !ec;
-  return ok;
+  const fs::path normalized = dir.lexically_normal();
+  const std::string dir_str = normalized.string();
+
+  struct stat dir_stat {};
+  if (::stat(dir_str.c_str(), &dir_stat) != 0 || !S_ISDIR(dir_stat.st_mode)) {
+    return false;
+  }
+
+  auto ensure_file_exists = [](const fs::path &candidate) -> bool {
+    struct stat file_stat {};
+    std::string file_path = candidate.lexically_normal().string();
+    return ::stat(file_path.c_str(), &file_stat) == 0;
+  };
+
+  return ensure_file_exists(normalized / "jieba.dict.utf8") &&
+         ensure_file_exists(normalized / "hmm_model.utf8") &&
+         ensure_file_exists(normalized / "user.dict.utf8") &&
+         ensure_file_exists(normalized / "idf.utf8") &&
+         ensure_file_exists(normalized / "stop_words.utf8");
 }
 
 static fs::path detect_jieba_dict_dir()
@@ -63,26 +84,21 @@ static fs::path detect_jieba_dict_dir()
   vector<fs::path> candidates;
 
   if (const char *env_dir = std::getenv("MINIOB_JIEBA_DICT_DIR"); env_dir != nullptr && env_dir[0] != '\0') {
-    candidates.emplace_back(env_dir);
+    candidates.emplace_back(make_absolute_safely(fs::path(env_dir)));
   }
 
   if (const char *miniob_home = std::getenv("MINIOB_HOME"); miniob_home != nullptr && miniob_home[0] != '\0') {
-    candidates.emplace_back(fs::path(miniob_home) / "deps/3rd/cppjieba/dict");
+    candidates.emplace_back(make_absolute_safely(fs::path(miniob_home) / "deps/3rd/cppjieba/dict"));
   }
 
   if (auto *proc = common::the_process_param(); proc != nullptr) {
     const string &conf = proc->get_conf();
     if (!conf.empty()) {
-      fs::path conf_path(conf);
-      if (!conf_path.is_absolute()) {
-        conf_path = fs::current_path() / conf_path;
-      }
-      std::error_code ec;
-      conf_path = fs::weakly_canonical(conf_path, ec);
-      if (!ec) {
+      fs::path conf_path = make_absolute_safely(fs::path(conf));
+      if (!conf_path.empty()) {
         fs::path base = conf_path.parent_path().parent_path();
         if (!base.empty()) {
-          candidates.emplace_back(base / "deps/3rd/cppjieba/dict");
+          candidates.emplace_back(make_absolute_safely(base / "deps/3rd/cppjieba/dict"));
         }
       }
     }
@@ -95,7 +111,7 @@ static fs::path detect_jieba_dict_dir()
       "../../../deps/3rd/cppjieba/dict",
       "../../../../deps/3rd/cppjieba/dict"};
   for (const char *rel : relative_dirs) {
-    candidates.emplace_back(fs::current_path() / rel);
+    candidates.emplace_back(make_absolute_safely(fs::path(rel)));
   }
 
   fs::path source_based = fs::path(__FILE__).parent_path();
@@ -103,13 +119,11 @@ static fs::path detect_jieba_dict_dir()
     source_based = source_based.parent_path();
   }
   if (!source_based.empty()) {
-    candidates.emplace_back(source_based / "deps/3rd/cppjieba/dict");
+    candidates.emplace_back(make_absolute_safely(source_based / "deps/3rd/cppjieba/dict"));
   }
 
   for (const auto &dir : candidates) {
-    std::error_code ec;
-    fs::path normalized = fs::weakly_canonical(dir, ec);
-    const fs::path &target = ec ? dir : normalized;
+    fs::path target = make_absolute_safely(dir);
     if (has_jieba_resource(target)) {
       return target;
     }

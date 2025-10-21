@@ -454,9 +454,7 @@ int LogicalPlanGenerator::implicit_cast_cost(AttrType from, AttrType to)
 
 RC LogicalPlanGenerator::create_plan(InsertStmt *insert_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
-  Table *table = insert_stmt->table();
-
-  InsertLogicalOperator *insert_operator = new InsertLogicalOperator(table, insert_stmt->values_rows());
+  InsertLogicalOperator *insert_operator = new InsertLogicalOperator(insert_stmt->insert_tasks());
   logical_operator.reset(insert_operator);
   return RC::SUCCESS;
 }

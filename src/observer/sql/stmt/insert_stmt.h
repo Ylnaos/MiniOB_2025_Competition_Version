@@ -15,10 +15,20 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include "common/sys/rc.h"
+#include "common/value.h"
 #include "sql/stmt/stmt.h"
 
 class Table;
 class Db;
+
+/**
+ * @brief 描述一次底层表的插入任务
+ */
+struct InsertTask
+{
+  Table                      *table = nullptr;
+  vector<vector<Value>>       rows;
+};
 
 /**
  * @brief 插入语句
@@ -28,6 +38,7 @@ class InsertStmt : public Stmt
 {
 public:
   InsertStmt() = default;
+  explicit InsertStmt(vector<InsertTask> tasks);
   InsertStmt(Table *table, vector<vector<Value>> values_rows);
 
   StmtType type() const override { return StmtType::INSERT; }
@@ -36,10 +47,9 @@ public:
   static RC create(Db *db, const InsertSqlNode &insert_sql, Stmt *&stmt);
 
 public:
-  Table       *table() const { return table_; }
-  const vector<vector<Value>> &values_rows() const { return values_rows_; }
+  Table *table() const { return insert_tasks_.empty() ? nullptr : insert_tasks_[0].table; }
+  const vector<InsertTask> &insert_tasks() const { return insert_tasks_; }
 
 private:
-  Table                      *table_ = nullptr;
-  vector<vector<Value>>       values_rows_;
+  vector<InsertTask> insert_tasks_;
 };
