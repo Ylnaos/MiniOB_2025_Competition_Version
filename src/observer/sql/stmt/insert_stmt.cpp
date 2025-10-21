@@ -483,24 +483,21 @@ static RC rewrite_insert_for_view(
         }
       }
 
-      if (!has_value) {
-        LOG_WARN("view insert lacks values for base relation. view=%s relation=%s row=%zu",
-            view->name(),
-            relations[rel_idx].rel_node->relation_name.c_str(),
-            row_idx);
-        return RC::UNIMPLEMENTED;
+      // 只有当该基础表有实际数据需要插入时，才添加到per_table_rows中
+      if (has_value) {
+        per_table_rows[rel_idx].emplace_back(std::move(row_values));
       }
-
-      per_table_rows[rel_idx].emplace_back(std::move(row_values));
     }
   }
 
-  tasks.reserve(relations.size());
+  // 只为有数据需要插入的基础表生成InsertTask
   for (size_t rel_idx = 0; rel_idx < relations.size(); ++rel_idx) {
-    InsertTask task;
-    task.table = relations[rel_idx].table;
-    task.rows  = std::move(per_table_rows[rel_idx]);
-    tasks.emplace_back(std::move(task));
+    if (!per_table_rows[rel_idx].empty()) {
+      InsertTask task;
+      task.table = relations[rel_idx].table;
+      task.rows  = std::move(per_table_rows[rel_idx]);
+      tasks.emplace_back(std::move(task));
+    }
   }
 
   LOG_INFO("rewrite insert into view(%s) to %zu base tables", view->name(), tasks.size());

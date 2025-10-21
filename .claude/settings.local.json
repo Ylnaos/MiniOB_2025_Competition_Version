@@ -20,7 +20,8 @@
       "Bash(git commit -m \"$(cat <<''EOF''\nOptimize IVFFlat index implementation\n\n- Enhanced probe list generation and distance calculation\n- Improved memory management for centroid data\n- Added bounds checking for cluster assignments\n- Updated .gitignore to exclude runtime database files\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
       "Bash(git push:*)",
       "Bash(git prune:*)",
-      "Bash(git gc:*)"
+      "Bash(git gc:*)",
+      "mcp__filesystem__list_directory"
     ],
     "deny": [],
     "ask": []

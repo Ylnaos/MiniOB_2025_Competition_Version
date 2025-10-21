@@ -30,6 +30,9 @@ See the Mulan PSL v2 for more details. */
 #include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -88,11 +91,19 @@ static bool has_jieba_resource(const fs::path &dir)
     return ::stat(file_path.c_str(), &file_stat) == 0;
   };
 
-  return ensure_file_exists(normalized / "jieba.dict.utf8") &&
-         ensure_file_exists(normalized / "hmm_model.utf8") &&
-         ensure_file_exists(normalized / "user.dict.utf8") &&
-         ensure_file_exists(normalized / "idf.utf8") &&
-         ensure_file_exists(normalized / "stop_words.utf8");
+  bool has_dict = ensure_file_exists(normalized / "jieba.dict.utf8");
+  bool has_hmm = ensure_file_exists(normalized / "hmm_model.utf8");
+  bool has_user = ensure_file_exists(normalized / "user.dict.utf8");
+  bool has_idf = ensure_file_exists(normalized / "idf.utf8");
+  bool has_stop = ensure_file_exists(normalized / "stop_words.utf8");
+
+  if (!has_dict) LOG_WARN("Missing jieba.dict.utf8 in %s", normalized.string().c_str());
+  if (!has_hmm) LOG_WARN("Missing hmm_model.utf8 in %s", normalized.string().c_str());
+  if (!has_user) LOG_WARN("Missing user.dict.utf8 in %s", normalized.string().c_str());
+  if (!has_idf) LOG_WARN("Missing idf.utf8 in %s", normalized.string().c_str());
+  if (!has_stop) LOG_WARN("Missing stop_words.utf8 in %s", normalized.string().c_str());
+
+  return has_dict && has_hmm && has_user && has_idf && has_stop;
 }
 
 static void push_unique_path(vector<fs::path> &paths, unordered_set<string> &seen, const fs::path &candidate)
@@ -109,6 +120,18 @@ static void push_unique_path(vector<fs::path> &paths, unordered_set<string> &see
 
 static fs::path locate_executable_dir()
 {
+#ifdef _WIN32
+  // Windows implementation
+  std::array<char, 4096> buffer {};
+  DWORD result = GetModuleFileNameA(NULL, buffer.data(), static_cast<DWORD>(buffer.size()));
+  if (result == 0 || result >= buffer.size()) {
+    return {};
+  }
+  buffer[static_cast<size_t>(result)] = '\0';
+  fs::path exec_path(buffer.data());
+  return make_absolute_safely(exec_path).parent_path();
+#else
+  // Linux/Unix implementation
   std::array<char, 4096> buffer {};
   ssize_t captured = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
   if (captured <= 0) {
@@ -117,6 +140,7 @@ static fs::path locate_executable_dir()
   buffer[static_cast<size_t>(captured)] = '\0';
   fs::path exec_path(buffer.data());
   return make_absolute_safely(exec_path).parent_path();
+#endif
 }
 
 static fs::path detect_jieba_dict_dir()
@@ -201,11 +225,14 @@ static fs::path detect_jieba_dict_dir()
   }
 
   for (const auto &dir : candidates) {
+    LOG_INFO("Checking jieba dict directory: %s", dir.string().c_str());
     if (has_jieba_resource(dir)) {
+      LOG_INFO("Found valid jieba dict directory: %s", dir.string().c_str());
       return dir;
     }
   }
 
+  LOG_WARN("Failed to locate jieba dictionary directory. Checked %zu candidates.", candidates.size());
   return {};
 }
 
@@ -766,8 +793,7 @@ if (left_is_subq && right_is_subq) {
       const auto &rvals = rsubq->results();
 
       if (lvals.empty() || rvals.empty()) {
-        // 绌洪泦鍚堣涓轰笉鍙瘮杈冿紝杩斿洖 false锛堢畝鍖栫殑 NULL 姣旇緝琛屼负锛?
-// 按 SQL 三值逻辑，子查询返回空集合时应返回 NULL
+        // 任意一侧返回空集 -> 结果未知
         value.set_null();
         return RC::SUCCESS;
       }
@@ -775,6 +801,11 @@ if (left_is_subq && right_is_subq) {
         LOG_WARN("scalar subquery returned more than one row: L=%zu R=%zu", lvals.size(), rvals.size());
         sql_debug("scalar subquery returned more than one row: L=%zu R=%zu", lvals.size(), rvals.size());
         return RC::INVALID_ARGUMENT;
+      }
+
+      if (lvals[0].is_null() || rvals[0].is_null()) {
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       bool bool_value = false;
@@ -803,13 +834,17 @@ Value other_val;
 
     // 绌洪泦鍚堬細姣旇緝缁撴灉鎭掍负 false
     if (vals.empty()) {
-      // 按 SQL 三值逻辑，子查询返回空集合时应返回 NULL 而不是 FALSE
+      // 子查询无结果 -> UNKNOWN
       value.set_null();
       return RC::SUCCESS;
     }
 
     // 鍗曡锛氭爣閲忔瘮杈?
 if (vals.size() == 1) {
+      if (vals[0].is_null() || other_val.is_null()) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
       bool bool_value = false;
       rc              = left_is_subq ? compare_value(vals[0], other_val, bool_value)
                                      : compare_value(other_val, vals[0], bool_value);
@@ -838,6 +873,11 @@ if (vals.size() == 1) {
   if (rc != RC::SUCCESS) {
     LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
     return rc;
+  }
+
+  if (left_value.is_null() || right_value.is_null()) {
+    value.set_null();
+    return RC::SUCCESS;
   }
 
   bool bool_value = false;
@@ -1948,17 +1988,15 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       if (arg.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          // 转换失败，返回 NULL（而不是错误）
-          value.set_null();
-          return RC::SUCCESS;
+          // 转换失败，返回错误
+          return rc;
         }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          // 转换失败，返回 NULL
-          value.set_null();
-          return RC::SUCCESS;
+          // 转换失败，返回错误
+          return rc;
         }
       }
 
@@ -1970,7 +2008,8 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         return RC::SUCCESS;
       }
       if (len1 != len2) {
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -1991,13 +2030,22 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
           double vb = static_cast<double>(b[i]);
           dot += va * vb; na += va * va; nb += vb * vb;
         }
-        if (na <= 0.0 || nb <= 0.0) { value.set_null(); return RC::SUCCESS; }
+        if (na <= 0.0 || nb <= 0.0) {
+        // 零向量或无效向量，无法计算余弦距离
+        LOG_WARN("Cannot compute cosine distance with zero vector (na=%.10f, nb=%.10f)", na, nb);
+        value.set_null();
+        return RC::SUCCESS;
+      }
         double cos = dot / (std::sqrt(na) * std::sqrt(nb));
         acc = 1.0 - cos;
         // 数值抖动可能导致 acc 落到极小的负值，需对理论上应为 0 的结果钳位
-        if (acc < 0.0 && std::fabs(acc) < 1e-6) {
+        // 使用更严格的阈值确保数值稳定性
+        if (acc < 0.0 && std::fabs(acc) < 1e-8) {
           acc = 0.0;
         }
+        // 余弦距离理论上应该在[0,2]范围内，进行边界保护
+        if (acc < 0.0) acc = 0.0;
+        if (acc > 2.0) acc = 2.0;
       }
       // 保留两位小数（与 ROUND 使用的一致的银行家舍入）
       double p = std::pow(10.0, 2.0);
@@ -2065,8 +2113,7 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       } else {
         rc = Value::cast_to(arg, AttrType::VECTORS, vec_value);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
       string result_str;
@@ -2089,15 +2136,13 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       if (arg.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
 
@@ -2105,8 +2150,7 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_literal);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
 
@@ -2147,7 +2191,12 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
           double vb = static_cast<double>(b[i]);
           dot += va * vb; na += va * va; nb += vb * vb;
         }
-        if (na <= 0.0 || nb <= 0.0) { value.set_null(); return RC::SUCCESS; }
+        if (na <= 0.0 || nb <= 0.0) {
+        // 零向量或无效向量，无法计算余弦距离
+        LOG_WARN("Cannot compute cosine distance with zero vector (na=%.10f, nb=%.10f)", na, nb);
+        value.set_null();
+        return RC::SUCCESS;
+      }
         double cos = dot / (std::sqrt(na) * std::sqrt(nb));
         acc = 1.0 - cos;
         if (acc < 0.0 && std::fabs(acc) < 1e-6) {
