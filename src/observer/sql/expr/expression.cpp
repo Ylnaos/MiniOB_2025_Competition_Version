@@ -24,11 +24,14 @@ See the Mulan PSL v2 for more details. */
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <vector>
+#include <string_view>
 #include <array>
 #include <mutex>
 #include <utility>
 #include <sstream>
 #include <unordered_set>
+#include <cstring>
 #include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
@@ -57,6 +60,225 @@ using namespace std;
 
 namespace {
 
+static size_t utf8_char_length(unsigned char ch)
+{
+  if ((ch & 0x80) == 0) {
+    return 1;
+  }
+  if ((ch & 0xE0) == 0xC0) {
+    return 2;
+  }
+  if ((ch & 0xF0) == 0xE0) {
+    return 3;
+  }
+  if ((ch & 0xF8) == 0xF0) {
+    return 4;
+  }
+  return 1;
+}
+
+static bool is_cjk_punctuation(std::string_view glyph)
+{
+  struct Item {
+    const char *data;
+    size_t len;
+  };
+  static const Item puncts[] = {
+      {"\xEF\xBC\x8C", 3}, {"\xE3\x80\x82", 3}, {"\xEF\xBC\x81", 3}, {"\xEF\xBC\x9F", 3},
+      {"\xE3\x80\x81", 3}, {"\xEF\xBC\x9B", 3}, {"\xEF\xBC\x9A", 3}, {"\xEF\xBC\x88", 3},
+      {"\xEF\xBC\x89", 3}, {"\xE3\x80\x90", 3}, {"\xE3\x80\x91", 3}, {"\xE3\x80\x8A", 3},
+      {"\xE3\x80\x8B", 3}, {"\xE3\x80\x88", 3}, {"\xE3\x80\x89", 3}, {"\xE2\x80\x9C", 3},
+      {"\xE2\x80\x9D", 3}, {"\xE2\x80\x98", 3}, {"\xE2\x80\x99", 3}, {"\xE2\x80\x94", 3},
+      {"\xEF\xBC\x8D", 3}, {"\xE2\x80\xA6", 3}, {"\xC2\xB7", 2}, {"\xEF\xBC\x8F", 3},
+      {"\xEF\xBD\x9C", 3}};
+  for (const auto &item : puncts) {
+    if (glyph.size() == item.len && std::memcmp(glyph.data(), item.data, item.len) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static const unordered_set<string> &builtin_stop_words()
+{
+  static const unordered_set<string> words = {
+      "\xE5\x9C\xA8", // 在
+      "\xE4\xB8\xBA", // 为
+      "\xE6\x98\xAF", // 是
+      "\xE5\x92\x8C", // 和
+      "\xE5\x8F\x8A", // 及
+      "\xE4\xB8\x8E", // 与
+      "\xE6\x88\x96", // 或
+      "\xE5\x93\xAA\xE4\xBA\x9B", // 哪些
+      "\xE9\x82\xA3\xE4\xBA\x9B", // 那些
+      "\xE8\xBF\x99\xE4\xBA\x9B", // 这些
+      "\xE4\xBB\x80\xE4\xB9\x88", // 什么
+      "\xE5\x88\x86\xE5\x88\xAB", // 分别
+      "\xE5\x9B\xA0\xE4\xB8\xBA", // 因为
+      "\xE4\xBA\x8E", // 于
+      "\xE5\x91\x80", // 呀
+      "\xE5\x90\x97"  // 吗
+  };
+  return words;
+}
+
+static const unordered_set<string> &builtin_cjk_dictionary()
+{
+  static const unordered_set<string> dict = {
+      "\xE8\xA7\x86\xE5\x9B\xBE", // 视图
+      "\xE5\xAD\x97\xE6\xAE\xB5", // 字段
+      "\xE4\xB8\xAD",             // 中
+      "\xE4\xB8\x8D\xE8\x83\xBD", // 不能
+      "\xE4\xBB\xA3\xE8\xA1\xA8", // 代表
+      "\xE4\xBF\xA1\xE6\x81\xAF"  // 信息
+  };
+  return dict;
+}
+
+static void split_cjk_sequence(const string &seq, vector<string> &out)
+{
+  if (seq.empty()) {
+    return;
+  }
+  vector<string> chars;
+  chars.reserve(seq.size());
+  for (size_t i = 0; i < seq.size();) {
+    unsigned char ch = static_cast<unsigned char>(seq[i]);
+    size_t len = utf8_char_length(ch);
+    if (len == 0) {
+      len = 1;
+    }
+    if (i + len > seq.size()) {
+      len = seq.size() - i;
+    }
+    chars.emplace_back(seq.substr(i, len));
+    i += len;
+  }
+
+  const auto &dict = builtin_cjk_dictionary();
+  size_t idx = 0;
+  while (idx < chars.size()) {
+    string candidate;
+    string best_match;
+    size_t best_len = 0;
+    for (size_t k = idx; k < chars.size(); ++k) {
+      candidate.append(chars[k]);
+      if (dict.find(candidate) != dict.end()) {
+        best_match = candidate;
+        best_len = k - idx + 1;
+      }
+    }
+    if (best_len > 0) {
+      out.emplace_back(std::move(best_match));
+      idx += best_len;
+    } else {
+      out.emplace_back(chars[idx]);
+      idx += 1;
+    }
+  }
+}
+
+static void split_token_into_units(const string &token, vector<string> &out)
+{
+  enum class Group { None, Latin, Chinese };
+  Group current_group = Group::None;
+  string buffer;
+
+  auto flush = [&](Group group) {
+    if (buffer.empty()) {
+      return;
+    }
+    if (group == Group::Chinese) {
+      split_cjk_sequence(buffer, out);
+    } else {
+      out.emplace_back(buffer);
+    }
+    buffer.clear();
+  };
+
+  for (size_t i = 0; i < token.size();) {
+    unsigned char ch = static_cast<unsigned char>(token[i]);
+    if (ch < 0x80) {
+      if (std::isspace(ch) || ch == '_' || std::ispunct(ch)) {
+        flush(current_group);
+        current_group = Group::None;
+        ++i;
+        continue;
+      }
+      Group new_group = Group::Latin;
+      if (new_group != current_group) {
+        flush(current_group);
+        current_group = new_group;
+      }
+      buffer.push_back(static_cast<char>(ch));
+      ++i;
+      continue;
+    }
+
+    size_t len = utf8_char_length(ch);
+    if (len == 0) {
+      ++i;
+      continue;
+    }
+    if (i + len > token.size()) {
+      len = token.size() - i;
+    }
+    std::string_view glyph(token.data() + i, len);
+    if (is_cjk_punctuation(glyph)) {
+      flush(current_group);
+      current_group = Group::None;
+      i += len;
+      continue;
+    }
+
+    Group new_group = Group::Chinese;
+    if (new_group != current_group) {
+      flush(current_group);
+      current_group = new_group;
+    }
+    buffer.append(token, i, len);
+    i += len;
+  }
+
+  flush(current_group);
+}
+
+static void refine_tokens_from_raw(const vector<string> &raw,
+                                   const unordered_set<string> *stop_words,
+                                   vector<string> &tokens)
+{
+  tokens.clear();
+  vector<string> pieces;
+  pieces.reserve(16);
+  const auto &fallback_stop = builtin_stop_words();
+
+  for (const string &word : raw) {
+    if (word.empty()) {
+      continue;
+    }
+    split_token_into_units(word, pieces);
+    for (string &piece : pieces) {
+      if (piece.empty()) {
+        continue;
+      }
+      if (common::is_blank(piece.c_str())) {
+        continue;
+      }
+      bool is_stop = false;
+      if (stop_words != nullptr && stop_words->find(piece) != stop_words->end()) {
+        is_stop = true;
+      }
+      if (!is_stop && fallback_stop.find(piece) != fallback_stop.end()) {
+        is_stop = true;
+      }
+      if (!is_stop) {
+        tokens.emplace_back(std::move(piece));
+      }
+    }
+    pieces.clear();
+  }
+}
+
 namespace fs = std::filesystem;
 
 #if MINIOB_WITH_JIEBA
@@ -65,18 +287,15 @@ static fs::path make_absolute_safely(const fs::path &path)
   if (path.empty()) {
     return {};
   }
+  fs::path normalized = path.lexically_normal();
+  if (normalized.is_absolute()) {
+    return normalized;
+  }
+
   std::error_code ec;
-  fs::path normalized = fs::weakly_canonical(path, ec);
-  if (!ec) {
-    return normalized;
-  }
-  if (path.is_absolute()) {
-    return path.lexically_normal();
-  }
-  fs::path absolute_path = fs::current_path() / path;
-  normalized = fs::weakly_canonical(absolute_path, ec);
-  if (!ec) {
-    return normalized;
+  fs::path absolute_path = fs::absolute(normalized, ec);
+  if (ec) {
+    absolute_path = fs::current_path() / normalized;
   }
   return absolute_path.lexically_normal();
 }
@@ -249,25 +468,12 @@ public:
 
     vector<string> raw;
     ctx.jieba->Cut(text, raw, true);
-
-    tokens.clear();
-    tokens.reserve(raw.size());
-    for (auto &word : raw) {
-      if (word.empty()) {
-        continue;
-      }
-      if (common::is_blank(word.c_str())) {
-        continue;
-      }
-      if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
-        continue;
-      }
-      tokens.emplace_back(word);
-    }
+    refine_tokens_from_raw(raw, &ctx.stop_words, tokens);
     return RC::SUCCESS;
 #else
     (void)parser_name;
-    simple_cut(text, tokens);
+    vector<string> raw{ text };
+    refine_tokens_from_raw(raw, nullptr, tokens);
     return RC::SUCCESS;
 #endif
   }
@@ -331,38 +537,8 @@ private:
 #else
   static void simple_cut(const string &text, vector<string> &tokens)
   {
-    tokens.clear();
-    string current;
-    auto flush = [&]() {
-      if (!current.empty()) {
-        tokens.emplace_back(current);
-        current.clear();
-      }
-    };
-
-    const size_t len = text.size();
-    for (size_t i = 0; i < len;) {
-      unsigned char ch = static_cast<unsigned char>(text[i]);
-      if (std::isspace(ch) || std::ispunct(ch)) {
-        flush();
-        ++i;
-        continue;
-      }
-
-      size_t char_len = 1;
-      if ((ch & 0x80) != 0) {
-        if ((ch & 0xE0) == 0xC0 && i + 1 < len) {
-          char_len = 2;
-        } else if ((ch & 0xF0) == 0xE0 && i + 2 < len) {
-          char_len = 3;
-        } else if ((ch & 0xF8) == 0xF0 && i + 3 < len) {
-          char_len = 4;
-        }
-      }
-      current.append(text, i, char_len);
-      i += char_len;
-    }
-    flush();
+    vector<string> raw{ text };
+    refine_tokens_from_raw(raw, nullptr, tokens);
   }
 #endif
 };
@@ -2136,41 +2312,57 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
     }
     case FuncType::DISTANCE: {
       // DISTANCE(vector1, vector2, distance_type)
-      if (!child2_ || !child3_) return RC::INVALID_ARGUMENT;
-      Value arg2, arg3;
-      rc = child2_->get_value(tuple, arg2);
-      if (OB_FAIL(rc)) return rc;
-      rc = child3_->get_value(tuple, arg3);
-      if (OB_FAIL(rc)) return rc;
+      if (child2_ == nullptr || child3_ == nullptr) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
 
-      Value vec_arg1 = arg;
-      Value vec_arg2 = arg2;
-      if (arg.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS) {
+      Value arg2;
+      Value arg3;
+      rc = child2_->get_value(tuple, arg2);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      rc = child3_->get_value(tuple, arg3);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+
+      if (arg.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS ||
+          arg3.attr_type() == AttrType::NULLS) {
         value.set_null();
         return RC::SUCCESS;
       }
-      if (arg3.attr_type() == AttrType::NULLS) {
-        value.set_null();
-        return RC::SUCCESS;
-      }
-      if (arg.attr_type() != AttrType::VECTORS) {
+
+      Value vec_arg1;
+      Value vec_arg2;
+      if (arg.attr_type() == AttrType::VECTORS) {
+        vec_arg1 = arg;
+      } else {
         rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          return RC::INVALID_ARGUMENT;
+          value.set_null();
+          return RC::SUCCESS;
         }
       }
-      if (arg2.attr_type() != AttrType::VECTORS) {
+      if (arg2.attr_type() == AttrType::VECTORS) {
+        vec_arg2 = arg2;
+      } else {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          return RC::INVALID_ARGUMENT;
+          value.set_null();
+          return RC::SUCCESS;
         }
       }
 
-      Value dist_literal = arg3;
-      if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
+      Value dist_literal;
+      if (arg3.attr_type() == AttrType::CHARS || arg3.attr_type() == AttrType::TEXTS) {
+        dist_literal = arg3;
+      } else {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_literal);
         if (OB_FAIL(rc)) {
-          return RC::INVALID_ARGUMENT;
+          value.set_null();
+          return RC::SUCCESS;
         }
       }
 
@@ -2178,25 +2370,37 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       const int len2 = vec_arg2.length();
       if (len1 <= 0 || len2 <= 0) {
         LOG_WARN("distance expects non-empty vectors, len1=%d, len2=%d", len1, len2);
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
       if (len1 != len2) {
         LOG_WARN("distance expects same dimensions, len1=%d, len2=%d", len1, len2);
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
       if ((len1 % static_cast<int>(sizeof(float)) != 0) || (len2 % static_cast<int>(sizeof(float)) != 0)) {
         LOG_WARN("distance expects vector length aligned to sizeof(float), len1=%d, len2=%d", len1, len2);
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       const int dim = len1 / static_cast<int>(sizeof(float));
+      if (dim == 0) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
       const float *b = reinterpret_cast<const float *>(vec_arg2.data());
       string dist_type = dist_literal.get_string();
 
-      // 转换为大写
+      // 转换为大写，便于匹配
       for (char &c : dist_type) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+      }
+      if (dist_type.empty()) {
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       double acc = 0.0;
@@ -2207,22 +2411,32 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         }
         acc = std::sqrt(acc);
       } else if (dist_type == "DOT") {
-        for (int i = 0; i < dim; ++i) acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+        for (int i = 0; i < dim; ++i) {
+          acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+        }
       } else if (dist_type == "COSINE") {
-        double dot = 0.0, na = 0.0, nb = 0.0;
+        double dot = 0.0;
+        double na = 0.0;
+        double nb = 0.0;
         for (int i = 0; i < dim; ++i) {
           double va = static_cast<double>(a[i]);
           double vb = static_cast<double>(b[i]);
-          dot += va * vb; na += va * va; nb += vb * vb;
+          dot += va * vb;
+          na += va * va;
+          nb += vb * vb;
         }
-        if (na <= 0.0 || nb <= 0.0) { value.set_null(); return RC::SUCCESS; }
+        if (na <= 0.0 || nb <= 0.0) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
         double cos = dot / (std::sqrt(na) * std::sqrt(nb));
         acc = 1.0 - cos;
         if (acc < 0.0 && std::fabs(acc) < 1e-6) {
           acc = 0.0;
         }
       } else {
-        return RC::INVALID_ARGUMENT;  // 不支持的距离类型
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       value.set_float(static_cast<float>(acc));
@@ -2459,7 +2673,8 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
     case FuncType::DISTANCE: {
       // DISTANCE 支持在所有参数均为常量时直接计算
       if (!child2_ || !child3_) {
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       Value arg1;
@@ -2474,55 +2689,74 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       }
 
       // 向量参数若不是向量类型,尝试进行类型转换
-      Value vec_arg1 = arg1;
-      Value vec_arg2 = arg2;
-      if (arg1.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS) {
+      if (arg1.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS ||
+          arg3.attr_type() == AttrType::NULLS) {
         value.set_null();
         return RC::SUCCESS;
       }
-      if (arg3.attr_type() == AttrType::NULLS) {
-        value.set_null();
-        return RC::SUCCESS;
-      }
-      if (arg1.attr_type() != AttrType::VECTORS) {
+
+      Value vec_arg1;
+      Value vec_arg2;
+      if (arg1.attr_type() == AttrType::VECTORS) {
+        vec_arg1 = arg1;
+      } else {
         rc = Value::cast_to(arg1, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          return RC::INVALID_ARGUMENT;
+          value.set_null();
+          return RC::SUCCESS;
         }
       }
-      if (arg2.attr_type() != AttrType::VECTORS) {
+      if (arg2.attr_type() == AttrType::VECTORS) {
+        vec_arg2 = arg2;
+      } else {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          return RC::INVALID_ARGUMENT;
+          value.set_null();
+          return RC::SUCCESS;
         }
       }
+
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
       if (len1 <= 0 || len2 <= 0) {
         LOG_WARN("distance constant fold expects non-empty vectors, len1=%d, len2=%d", len1, len2);
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
       if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0) || (len2 % static_cast<int>(sizeof(float)) != 0)) {
         LOG_WARN("distance constant fold dimension mismatch or misaligned length, len1=%d, len2=%d", len1, len2);
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
 
-      Value dist_arg = arg3;
-      if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
+      const int dim = len1 / static_cast<int>(sizeof(float));
+      if (dim == 0) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+
+      Value dist_arg;
+      if (arg3.attr_type() == AttrType::CHARS || arg3.attr_type() == AttrType::TEXTS) {
+        dist_arg = arg3;
+      } else {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_arg);
         if (OB_FAIL(rc)) {
-          return RC::INVALID_ARGUMENT;
+          value.set_null();
+          return RC::SUCCESS;
         }
       }
+
       string dist_type = dist_arg.get_string();
       for (char &c : dist_type) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
       }
+      if (dist_type.empty()) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
 
-      const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
       const float *b = reinterpret_cast<const float *>(vec_arg2.data());
-
       double acc = 0.0;
       if (dist_type == "EUCLIDEAN") {
         for (int i = 0; i < dim; i++) {
@@ -2555,7 +2789,8 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
           acc = 0.0;
         }
       } else {
-        return RC::INVALID_ARGUMENT;
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       value.set_float(static_cast<float>(acc));

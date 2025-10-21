@@ -341,6 +341,16 @@ int Value::compare(const Value &other) const
     return common::compare_string((void *)l.data(), static_cast<int>(l.size()), (void *)r.data(), static_cast<int>(r.size()));
   }
 
+  // 布尔比较：按照布尔语义处理，true > false，其它类型与布尔比较时按布尔值转换
+  if (this->attr_type_ == AttrType::BOOLEANS || other.attr_type() == AttrType::BOOLEANS) {
+    bool lv = this->get_boolean();
+    bool rv = other.get_boolean();
+    if (lv == rv) {
+      return 0;
+    }
+    return lv ? 1 : -1;
+  }
+
   return DataType::type_instance(this->attr_type_)->compare(*this, other);
 }
 

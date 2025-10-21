@@ -1,0 +1,13 @@
+DROP VIEW IF EXISTS create_view_v4;
+DROP TABLE IF EXISTS create_view_t1;
+DROP TABLE IF EXISTS create_view_t2;
+CREATE TABLE create_view_t1(id INT, age INT, name CHAR(10));
+CREATE TABLE create_view_t2(id INT, age INT, name CHAR(10));
+INSERT INTO create_view_t1 VALUES(1, 10, 'A1');
+INSERT INTO create_view_t2 VALUES(1, 10, 'A1');
+CREATE VIEW create_view_v4 AS SELECT t1.id AS id, t1.age AS age, t2.name AS name FROM create_view_t1 t1, create_view_t2 t2 WHERE t1.id=t2.id;
+INSERT INTO create_view_v4 VALUES(111, 111, 'YL65');
+INSERT INTO create_view_v4(id, age) VALUES(86, 86);
+SELECT * FROM create_view_t1 ORDER BY id;
+SELECT * FROM create_view_t2 ORDER BY id;
+SELECT * FROM create_view_v4 ORDER BY id;

@@ -144,6 +144,109 @@ static RC resolve_field_key(const std::vector<RelationInfo> &relations,
   return RC::SUCCESS;
 }
 
+static RC resolve_field_from_expression(const std::vector<RelationInfo> &relations,
+    const std::unordered_map<std::string, size_t> &relation_lookup,
+    Expression *expr,
+    FieldKey &field_key,
+    bool &found)
+{
+  found = false;
+  if (expr == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  switch (expr->type()) {
+    case ExprType::UNBOUND_FIELD: {
+      auto *uf = static_cast<UnboundFieldExpr *>(expr);
+      const char *tbl_name   = uf->table_name();
+      const char *field_name = uf->field_name();
+      RC rc = resolve_field_key(relations, relation_lookup, tbl_name, field_name, field_key);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      found = true;
+      return RC::SUCCESS;
+    }
+    case ExprType::FIELD: {
+      auto *fe = static_cast<FieldExpr *>(expr);
+      const std::string &relation_name = fe->relation_name();
+      const char        *tbl_name = nullptr;
+      if (!relation_name.empty()) {
+        tbl_name = relation_name.c_str();
+      } else {
+        tbl_name = fe->table_name();
+      }
+      RC rc = resolve_field_key(relations, relation_lookup, tbl_name, fe->field_name(), field_key);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      found = true;
+      return RC::SUCCESS;
+    }
+    case ExprType::CAST: {
+      auto *cast = static_cast<CastExpr *>(expr);
+      return resolve_field_from_expression(relations, relation_lookup, cast->child().get(), field_key, found);
+    }
+    default: {
+      return RC::SUCCESS;
+    }
+  }
+}
+
+static RC extract_equalities_from_expression(const std::vector<RelationInfo> &relations,
+    const std::unordered_map<std::string, size_t> &relation_lookup,
+    Expression *expr,
+    std::vector<std::pair<FieldKey, FieldKey>> &equalities)
+{
+  if (expr == nullptr) {
+    return RC::SUCCESS;
+  }
+
+  switch (expr->type()) {
+    case ExprType::CONJUNCTION: {
+      auto *conj = static_cast<ConjunctionExpr *>(expr);
+      if (conj->conjunction_type() != ConjunctionExpr::Type::AND) {
+        return RC::SUCCESS;
+      }
+      for (const auto &child : conj->children()) {
+        RC rc = extract_equalities_from_expression(relations, relation_lookup, child.get(), equalities);
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+      }
+      return RC::SUCCESS;
+    }
+    case ExprType::COMPARISON: {
+      auto *cmp = static_cast<ComparisonExpr *>(expr);
+      if (cmp->comp() != EQUAL_TO) {
+        return RC::SUCCESS;
+      }
+
+      FieldKey left_key;
+      FieldKey right_key;
+      bool     left_found  = false;
+      bool     right_found = false;
+
+      RC rc_left = resolve_field_from_expression(relations, relation_lookup, cmp->left().get(), left_key, left_found);
+      if (OB_FAIL(rc_left)) {
+        return rc_left;
+      }
+      RC rc_right = resolve_field_from_expression(relations, relation_lookup, cmp->right().get(), right_key, right_found);
+      if (OB_FAIL(rc_right)) {
+        return rc_right;
+      }
+
+      if (left_found && right_found) {
+        equalities.emplace_back(left_key, right_key);
+      }
+      return RC::SUCCESS;
+    }
+    default: {
+      return RC::SUCCESS;
+    }
+  }
+}
+
 static RC rewrite_insert_for_view(
     Db *db,
     const char *view_name,
@@ -353,9 +456,18 @@ static RC rewrite_insert_for_view(
     equalities.emplace_back(left_key, right_key);
   }
 
+  if (view_select.where_expr) {
+    RC rc = extract_equalities_from_expression(relations, relation_lookup, view_select.where_expr.get(), equalities);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
   const size_t view_column_count = view_columns.size();
   std::vector<std::vector<Value>> normalized_view_rows;
+  std::vector<std::vector<bool>>  normalized_value_presence;
   normalized_view_rows.reserve(inserts.rows.size());
+  normalized_value_presence.reserve(inserts.rows.size());
 
   std::vector<Value> view_defaults(view_column_count);
   for (auto &val : view_defaults) {
@@ -370,7 +482,8 @@ static RC rewrite_insert_for_view(
             view->name(), row_idx, src_row.size(), view_column_count);
         return RC::SCHEMA_FIELD_MISSING;
       }
-      normalized_view_rows.push_back(src_row);
+      normalized_view_rows.emplace_back(src_row);
+      normalized_value_presence.emplace_back(view_column_count, true);
     }
   } else {
     std::vector<int> attr_to_index;
@@ -396,10 +509,14 @@ static RC rewrite_insert_for_view(
       }
 
       std::vector<Value> view_row = view_defaults;
+      std::vector<bool>  present(view_column_count, false);
       for (size_t i = 0; i < attr_to_index.size(); ++i) {
-        view_row[attr_to_index[i]] = src_row[i];
+        int col_idx = attr_to_index[i];
+        view_row[col_idx] = src_row[i];
+        present[col_idx]  = true;
       }
       normalized_view_rows.emplace_back(std::move(view_row));
+      normalized_value_presence.emplace_back(std::move(present));
     }
   }
 
@@ -425,10 +542,15 @@ static RC rewrite_insert_for_view(
 
   for (size_t row_idx = 0; row_idx < normalized_view_rows.size(); ++row_idx) {
     const std::vector<Value> &view_row = normalized_view_rows[row_idx];
+    const std::vector<bool>  &present_flags = normalized_value_presence[row_idx];
     std::unordered_map<FieldKey, Value, FieldKeyHash> assignments;
     assignments.reserve(view_columns.size());
+    std::vector<bool> relation_has_explicit_value(relations.size(), false);
 
     for (size_t col_idx = 0; col_idx < view_columns.size(); ++col_idx) {
+      if (!present_flags[col_idx]) {
+        continue;
+      }
       const ViewColumnInfo &col = view_columns[col_idx];
       const Value          &val = view_row[col_idx];
 
@@ -442,6 +564,7 @@ static RC rewrite_insert_for_view(
           return RC::INVALID_ARGUMENT;
         }
       }
+      relation_has_explicit_value[col.field.relation_index] = true;
     }
 
     bool updated = true;
@@ -450,6 +573,8 @@ static RC rewrite_insert_for_view(
       for (const auto &eq : equalities) {
         auto it_left  = assignments.find(eq.first);
         auto it_right = assignments.find(eq.second);
+        const size_t left_relation  = eq.first.relation_index;
+        const size_t right_relation = eq.second.relation_index;
         if (it_left != assignments.end() && it_right != assignments.end()) {
           if (it_left->second.compare(it_right->second) != 0) {
             LOG_WARN("conflicting equality propagation when inserting view. view=%s row=%zu",
@@ -457,12 +582,14 @@ static RC rewrite_insert_for_view(
             return RC::INVALID_ARGUMENT;
           }
         } else if (it_left != assignments.end()) {
-          if (assignments.find(eq.second) == assignments.end()) {
+          if (relation_has_explicit_value[right_relation]
+              && assignments.find(eq.second) == assignments.end()) {
             assignments.emplace(eq.second, it_left->second);
             updated = true;
           }
         } else if (it_right != assignments.end()) {
-          if (assignments.find(eq.first) == assignments.end()) {
+          if (relation_has_explicit_value[left_relation]
+              && assignments.find(eq.first) == assignments.end()) {
             assignments.emplace(eq.first, it_right->second);
             updated = true;
           }
@@ -471,6 +598,10 @@ static RC rewrite_insert_for_view(
     }
 
     for (size_t rel_idx = 0; rel_idx < relations.size(); ++rel_idx) {
+      if (!relation_has_explicit_value[rel_idx]) {
+        continue;
+      }
+
       std::vector<Value> row_values = table_defaults[rel_idx];
       bool               has_value  = false;
 
@@ -484,11 +615,9 @@ static RC rewrite_insert_for_view(
       }
 
       if (!has_value) {
-        LOG_WARN("view insert lacks values for base relation. view=%s relation=%s row=%zu",
-            view->name(),
-            relations[rel_idx].rel_node->relation_name.c_str(),
-            row_idx);
-        return RC::UNIMPLEMENTED;
+        LOG_WARN("view insert lacks explicit values after normalization. view=%s relation=%s row=%zu",
+            view->name(), relations[rel_idx].rel_node->relation_name.c_str(), row_idx);
+        return RC::INVALID_ARGUMENT;
       }
 
       per_table_rows[rel_idx].emplace_back(std::move(row_values));
@@ -497,6 +626,9 @@ static RC rewrite_insert_for_view(
 
   tasks.reserve(relations.size());
   for (size_t rel_idx = 0; rel_idx < relations.size(); ++rel_idx) {
+    if (per_table_rows[rel_idx].empty()) {
+      continue;
+    }
     InsertTask task;
     task.table = relations[rel_idx].table;
     task.rows  = std::move(per_table_rows[rel_idx]);
