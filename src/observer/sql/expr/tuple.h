@@ -495,6 +495,7 @@ public:
 
   const std::shared_ptr<vector<TupleCellSpec>> &shared_specs() const { return shared_specs_; }
   void set_cells(const vector<Value> &cells) { cells_ = cells; }
+  void set_cells(vector<Value> &&cells) { cells_ = std::move(cells); }
 
   virtual int cell_num() const override { return static_cast<int>(cells_.size()); }
 

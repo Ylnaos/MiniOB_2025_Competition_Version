@@ -12,7 +12,12 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/operator/physical_operator.h"
 #include "sql/expr/expression.h"
+#include <cstdio>
+#include <filesystem>
 #include <memory>
+#include <queue>
+#include <string>
+#include <vector>
 
 /**
  * @brief ORDER BY 物理算子
@@ -22,7 +27,7 @@ class OrderByPhysicalOperator : public PhysicalOperator
 public:
   using OrderItem = pair<unique_ptr<Expression>, bool>; // bool: true for ASC, false for DESC
 
-  OrderByPhysicalOperator(vector<OrderItem> &&order_by_items) : order_by_items_(std::move(order_by_items)) {}
+  OrderByPhysicalOperator(vector<OrderItem> &&order_by_items);
 
   virtual ~OrderByPhysicalOperator() = default;
 
@@ -42,7 +47,28 @@ private:
     vector<Value>  sort_keys; // 预计算的排序键值
   };
 
-  int compare_rows(const RowWithKeys &lhs, const RowWithKeys &rhs) const;
+  struct RunCursor {
+    FILE         *file     = nullptr;
+    RowWithKeys   current;
+    std::string   file_path;
+  };
+
+  struct MergeComparator {
+    const OrderByPhysicalOperator *op = nullptr;
+    bool operator()(int lhs, int rhs) const;
+  };
+
+  using MergeHeap = std::priority_queue<int, std::vector<int>, MergeComparator>;
+
+  int  compare_rows(const RowWithKeys &lhs, const RowWithKeys &rhs) const;
+  int  compare_keys(const vector<Value> &lhs, const vector<Value> &rhs) const;
+  RC   compute_sort_keys(const Tuple &tuple, vector<Value> &keys) const;
+  RC   flush_rows_to_run();
+  RC   write_row(FILE *file, const ValueListTuple &tuple) const;
+  RC   read_next_row(RunCursor &cursor);
+  RC   deserialize_row(FILE *file, ValueListTuple &tuple);
+  RC   ensure_temp_dir();
+  void cleanup_external_resources();
 
 private:
   vector<OrderItem>       order_by_items_;
@@ -50,4 +76,13 @@ private:
   size_t                  current_index_ = 0;
   bool                    opened_        = false;
   std::shared_ptr<vector<TupleCellSpec>> shared_specs_;
+  bool                    use_external_sort_      = false;
+  bool                    has_current_external_row_ = false;
+  RowWithKeys             current_external_row_;
+  std::filesystem::path   temp_dir_path_;
+  bool                    temp_dir_ready_         = false;
+  vector<std::unique_ptr<RunCursor>> run_cursors_;
+  vector<std::filesystem::path>      run_files_;
+  MergeHeap               merge_heap_;
+  size_t                  chunk_limit_rows_ = 0;
 };
