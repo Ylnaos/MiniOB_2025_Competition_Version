@@ -282,6 +282,20 @@ static RC rewrite_insert_for_view(
     return RC::UNIMPLEMENTED;
   }
 
+  if (view_select.relations.size() != 1) {
+    LOG_INFO("rewrite insert skipped: view %s references %zu relations", view->name(), view_select.relations.size());
+    return RC::UNIMPLEMENTED;
+  }
+
+  if (!view_select.set_operations.empty()
+      || !view_select.group_by.empty()
+      || !view_select.having.empty()
+      || !view_select.order_by.empty()
+      || view_select.limit >= 0) {
+    LOG_INFO("rewrite insert skipped: view %s contains advanced clauses", view->name());
+    return RC::UNIMPLEMENTED;
+  }
+
   std::vector<RelationInfo> relations;
   relations.reserve(view_select.relations.size());
   std::unordered_map<std::string, size_t> relation_lookup;

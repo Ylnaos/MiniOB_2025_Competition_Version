@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/filter_stmt.h"
 #include "sql/expr/expression.h"
 #include "sql/parser/expression_binder.h"
+#include "sql/parser/parse.h"
 #include "common/value.h"
 #include "storage/view/view.h"
 
@@ -27,41 +28,51 @@ namespace {
 // 若无法可靠提取，则返回空串。
 static std::string extract_first_table_name(const std::string &sql)
 {
-  if (sql.empty()) return {};
-  std::string lower = sql;
-  for (auto &ch : lower) ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
-
-  auto find_ci = [&](const std::string &pat, size_t pos) -> size_t {
-    std::string p = pat;
-    for (auto &c : p) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
-    return lower.find(p, pos);
-  };
-
-  size_t from_pos = find_ci(" from ", 0);
-  if (from_pos == std::string::npos) return {};
-  size_t i = from_pos + 6; // skip " from "
-  // skip spaces
-  while (i < lower.size() && isspace(static_cast<unsigned char>(lower[i]))) i++;
-  size_t start = i;
-  // accept identifier characters: letters, digits, underscore and dot
-  while (i < lower.size()) {
-    char c = lower[i];
-    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.') {
-      ++i;
-    } else {
-      break;
-    }
+  if (sql.empty()) {
+    return {};
   }
-  if (i <= start) return {};
-  // strip possible schema prefix db.table -> table
-  std::string name = sql.substr(start, i - start);
-  size_t dot = name.rfind('.');
-  if (dot != std::string::npos && dot + 1 < name.size()) {
-    name = name.substr(dot + 1);
+
+  ParsedSqlResult parsed;
+  RC rc = parse(sql.c_str(), &parsed);
+  if (rc != RC::SUCCESS || parsed.sql_nodes().empty()) {
+    LOG_INFO("skip rewriting update on view: parse failed. rc=%s", strrc(rc));
+    return {};
   }
-  // trim trailing spaces if any (unlikely)
-  while (!name.empty() && isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
-  return name;
+
+  ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+  if (node->flag != SCF_SELECT) {
+    LOG_INFO("skip rewriting update on view: definition is not select");
+    return {};
+  }
+
+  SelectSqlNode &select = node->selection;
+
+  if (!select.set_operations.empty()) {
+    LOG_INFO("skip rewriting update on view: contains set operations");
+    return {};
+  }
+
+  if (select.relations.size() != 1) {
+    LOG_INFO("skip rewriting update on view: relation count=%zu", select.relations.size());
+    return {};
+  }
+
+  if (!select.group_by.empty() || !select.having.empty()) {
+    LOG_INFO("skip rewriting update on view: contains aggregation");
+    return {};
+  }
+
+  if (!select.order_by.empty() || select.limit >= 0) {
+    LOG_INFO("skip rewriting update on view: contains order/limit");
+    return {};
+  }
+
+  const RelationSqlNode &rel = select.relations.front();
+  if (rel.relation_name.empty()) {
+    return {};
+  }
+
+  return rel.relation_name;
 }
 }
 

@@ -350,6 +350,7 @@ static size_t default_length_for_attr_type(AttrType type)
 %type <sql_node>            help_stmt
 %type <sql_node>            exit_stmt
 %type <sql_node>            command_wrapper
+%type <rel_attr_list>       match_attr_list
 // commands should be a list but I use a single command instead
 %type <sql_node>            commands
 
@@ -1204,6 +1205,23 @@ expression:
       $$->set_name(token_name(sql_string, &@$));
       delete $1;
     }
+    | MATCH LBRACE match_attr_list RBRACE AGAINST LBRACE expression RBRACE {
+      vector<unique_ptr<Expression>> columns;
+      if ($3 != nullptr) {
+        columns.reserve($3->size());
+        for (auto &attr : *$3) {
+          auto *field_expr = new UnboundFieldExpr(attr.relation_name, attr.attribute_name);
+          field_expr->set_name(token_name(sql_string, &@$));
+          columns.emplace_back(field_expr);
+        }
+        delete $3;
+      }
+      unique_ptr<Expression> query_expr($7);
+      auto *match_expr = new FullTextMatchExpr(std::move(columns), std::move(query_expr));
+      match_expr->set_name(token_name(sql_string, &@$));
+      $7 = nullptr;
+      $$ = match_expr;
+    }
     | aggregate_expression {
       $$ = $1;
     }
@@ -1241,6 +1259,23 @@ identifier:
     | DATA {
       // DATA 关键字可以作为标识符使用
       $$ = alloc_string("data", scanner);
+    }
+    ;
+
+match_attr_list:
+    rel_attr {
+      $$ = new vector<RelAttrSqlNode>();
+      $$->push_back(*$1);
+      delete $1;
+    }
+    | rel_attr COMMA match_attr_list {
+      if ($3 != nullptr) {
+        $$ = $3;
+      } else {
+        $$ = new vector<RelAttrSqlNode>();
+      }
+      $$->insert($$->begin(), *$1);
+      delete $1;
     }
     ;
 

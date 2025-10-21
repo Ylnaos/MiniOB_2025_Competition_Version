@@ -17,6 +17,8 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/string.h"
 #include "common/lang/memory.h"
 #include "common/lang/unordered_set.h"
+#include <unordered_map>
+#include <vector>
 #include "common/value.h"
 #include "storage/field/field.h"
 #include "sql/expr/aggregator.h"
@@ -24,6 +26,7 @@ See the Mulan PSL v2 for more details. */
 
 class Tuple;
 class ParsedSqlNode;
+class Table;
 
 /**
  * @defgroup Expression
@@ -52,6 +55,7 @@ enum class ExprType
   SUBQUERY,     ///< 子查询表达式（返回单列结果）
   EXISTS,       ///< EXISTS / NOT EXISTS 子查询判定表达式
   IN_LIST,      ///< IN/NOT IN 表达式（右侧可以为子查询）
+  FULLTEXT_MATCH, ///< MATCH(...) AGAINST(...) 全文检索评分表达式
 };
 
 /**
@@ -620,6 +624,57 @@ private:
   bool                                 require_single_column_ = true;
   std::unique_ptr<ParsedSqlNode>       subquery_node_;
 };
+
+class FullTextMatchExpr : public Expression
+{
+public:
+  FullTextMatchExpr(std::vector<std::unique_ptr<Expression>> columns, std::unique_ptr<Expression> query_expr);
+  virtual ~FullTextMatchExpr() = default;
+
+  unique_ptr<Expression> copy() const override;
+
+  ExprType type() const override { return ExprType::FULLTEXT_MATCH; }
+  AttrType value_type() const override { return AttrType::FLOATS; }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+  RC try_get_value(Value &value) const override;
+
+  std::vector<std::unique_ptr<Expression>> &columns() { return columns_; }
+  const std::vector<std::unique_ptr<Expression>> &columns() const { return columns_; }
+
+  std::unique_ptr<Expression> &query_expr() { return query_expr_; }
+  const std::unique_ptr<Expression> &query_expr() const { return query_expr_; }
+
+  void set_table(Table *table) { table_ = table; }
+  Table *table() const { return table_; }
+
+  void set_relation_name(const string &relation) { relation_name_ = relation; }
+  const string &relation_name() const { return relation_name_; }
+
+  void set_field_names(const vector<string> &fields) { field_names_ = fields; }
+  const vector<string> &field_names() const { return field_names_; }
+
+  void set_parser_name(const string &parser) { parser_name_ = parser; }
+
+private:
+  RC ensure_corpus_stats_ready() const;
+  RC gather_document_text(const Tuple &tuple, string &text) const;
+  RC tokenize_document(const string &text, vector<string> &tokens) const;
+
+private:
+  vector<unique_ptr<Expression>> columns_;
+  unique_ptr<Expression>         query_expr_;
+  Table                         *table_ = nullptr;
+  string                         relation_name_;
+  vector<string>                 field_names_;
+  string                         parser_name_ = "jieba";
+
+  mutable bool                               stats_ready_ = false;
+  mutable int                                doc_count_   = 0;
+  mutable double                             avg_doc_len_ = 0.0;
+  mutable unordered_map<string, int>         doc_freq_;
+};
+
 
 /**
  * @brief EXISTS/NOT EXISTS 表达式

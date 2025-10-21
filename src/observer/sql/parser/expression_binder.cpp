@@ -16,6 +16,9 @@ See the Mulan PSL v2 for more details. */
 #include "common/lang/string.h"
 #include "common/lang/ranges.h"
 #include "sql/parser/expression_binder.h"
+#include "storage/table/table.h"
+#include "storage/table/table_meta.h"
+#include "storage/index/index_meta.h"
 #include "sql/expr/expression_iterator.h"
 #include "sql/stmt/select_stmt.h"
 
@@ -258,6 +261,108 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
 
     case ExprType::VALUE: {
       return bind_value_expression(expr, bound_expressions);
+    } break;
+
+    case ExprType::FULLTEXT_MATCH: {
+      auto *match_expr = static_cast<FullTextMatchExpr *>(expr.get());
+      auto &columns = match_expr->columns();
+      if (columns.empty()) {
+        LOG_WARN("full-text match requires at least one column");
+        return RC::INVALID_ARGUMENT;
+      }
+
+      for (auto &column_expr : columns) {
+        RC rc = bind_expression(column_expr, bound_expressions);
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+      }
+
+      if (match_expr->query_expr()) {
+        RC rc = bind_expression(match_expr->query_expr(), bound_expressions);
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+      }
+
+      Table *target_table = nullptr;
+      string relation_name;
+      vector<string> field_names;
+      field_names.reserve(columns.size());
+
+      for (const auto &column_expr : columns) {
+        auto *field_expr = dynamic_cast<FieldExpr *>(column_expr.get());
+        if (field_expr == nullptr) {
+          LOG_WARN("full-text match only supports column references");
+          return RC::INVALID_ARGUMENT;
+        }
+        AttrType column_type = field_expr->value_type();
+        if (column_type != AttrType::CHARS && column_type != AttrType::TEXTS) {
+          LOG_WARN("full-text match column must be char/text type, got %d", static_cast<int>(column_type));
+          return RC::INVALID_ARGUMENT;
+        }
+        Table *column_table = const_cast<Table *>(field_expr->field().table());
+        if (column_table == nullptr) {
+          LOG_WARN("full-text match column lacks table binding");
+          return RC::INTERNAL;
+        }
+        if (target_table == nullptr) {
+          target_table = column_table;
+          relation_name = field_expr->relation_name();
+        } else if (target_table != column_table) {
+          LOG_WARN("full-text match columns must belong to the same table");
+          return RC::INVALID_ARGUMENT;
+        }
+        field_names.emplace_back(field_expr->field_name());
+      }
+
+      if (target_table == nullptr) {
+        LOG_WARN("full-text match failed to resolve target table");
+        return RC::INTERNAL;
+      }
+
+      if (match_expr->query_expr()) {
+        AttrType query_type = match_expr->query_expr()->value_type();
+        if (query_type != AttrType::CHARS && query_type != AttrType::TEXTS && query_type != AttrType::NULLS) {
+          LOG_WARN("full-text match query must be string type, got %d", static_cast<int>(query_type));
+          return RC::INVALID_ARGUMENT;
+        }
+      }
+
+      const TableMeta &table_meta = target_table->table_meta();
+      const IndexMeta *matched_index = nullptr;
+      for (int i = 0; i < table_meta.index_num(); ++i) {
+        const IndexMeta *index_meta = table_meta.index(i);
+        if (!index_meta->is_full_text_index()) {
+          continue;
+        }
+        const vector<string> &meta_fields = index_meta->fields();
+        if (meta_fields.size() != field_names.size()) {
+          continue;
+        }
+        bool same = true;
+        for (size_t k = 0; k < meta_fields.size(); ++k) {
+          if (strcasecmp(meta_fields[k].c_str(), field_names[k].c_str()) != 0) {
+            same = false;
+            break;
+          }
+        }
+        if (same) {
+          matched_index = index_meta;
+          break;
+        }
+      }
+      if (matched_index == nullptr) {
+        LOG_WARN("no full-text index found for MATCH columns");
+        return RC::INVALID_ARGUMENT;
+      }
+
+      match_expr->set_table(target_table);
+      match_expr->set_relation_name(relation_name);
+      match_expr->set_field_names(field_names);
+      match_expr->set_parser_name(matched_index->full_text_parser());
+      bound_expressions.emplace_back(std::move(expr));
+      return RC::SUCCESS;
     } break;
 
     case ExprType::CAST: {

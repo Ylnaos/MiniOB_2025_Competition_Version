@@ -1,0 +1,20 @@
+DROP VIEW IF EXISTS create_view_vp20;
+DROP TABLE IF EXISTS create_view_p20_t1;
+DROP TABLE IF EXISTS create_view_p20_t2;
+CREATE TABLE create_view_p20_t1(id INT, age INT, nick CHAR(10));
+CREATE TABLE create_view_p20_t2(id INT, level INT, name CHAR(10));
+INSERT INTO create_view_p20_t1 VALUES(1, 18, 'T1_A');
+INSERT INTO create_view_p20_t1 VALUES(2, 28, 'T1_B');
+INSERT INTO create_view_p20_t2 VALUES(1, 11, 'T2_A');
+INSERT INTO create_view_p20_t2 VALUES(2, 12, 'T2_B');
+CREATE VIEW create_view_vp20 AS
+  SELECT t1.id AS id, t1.age AS age, t2.name AS name
+  FROM create_view_p20_t1 t1, create_view_p20_t2 t2
+  WHERE t1.id = t2.id;
+INSERT INTO create_view_vp20 VALUES(101, 101, 'VP20_A');
+INSERT INTO create_view_vp20(id, age) VALUES(102, 102);
+UPDATE create_view_vp20 SET age = 66 WHERE id = 1;
+UPDATE create_view_vp20 SET age = 77, name = 'VP20_B' WHERE id = 2;
+SELECT * FROM create_view_p20_t1 ORDER BY id;
+SELECT * FROM create_view_p20_t2 ORDER BY id;
+SELECT * FROM create_view_vp20 ORDER BY id;
