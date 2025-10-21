@@ -22,3 +22,5 @@ EXIT;
 select 1;
 ### 2025-10-21 14:22:38.309
 SELECT TOKENIZE('如何理解STATUS字段的不同状态及其含义？', 'jieba') as text_tokens;
+### 2025-10-22 01:45:35.769
+SELECT TOKENIZE('通过哪些方式可以查看集群配置项？', 'jieba') as text_tokens;

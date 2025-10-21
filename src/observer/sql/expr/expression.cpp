@@ -55,20 +55,17 @@ static fs::path make_absolute_safely(const fs::path &path)
   if (path.empty()) {
     return {};
   }
+  fs::path normalized = path.lexically_normal();
+  if (normalized.is_absolute()) {
+    return normalized;
+  }
   std::error_code ec;
-  fs::path normalized = fs::weakly_canonical(path, ec);
-  if (!ec) {
+  fs::path cwd = fs::current_path(ec);
+  if (ec) {
+    LOG_WARN("make_absolute_safely: failed to get current path, keeping relative path '%s'", normalized.string().c_str());
     return normalized;
   }
-  if (path.is_absolute()) {
-    return path.lexically_normal();
-  }
-  fs::path absolute_path = fs::current_path() / path;
-  normalized = fs::weakly_canonical(absolute_path, ec);
-  if (!ec) {
-    return normalized;
-  }
-  return absolute_path.lexically_normal();
+  return (cwd / normalized).lexically_normal();
 }
 
 static bool has_jieba_resource(const fs::path &dir)
@@ -241,6 +238,8 @@ class JiebaTokenizer
 public:
   static RC tokenize(const string &text, const string &parser, vector<string> &tokens)
   {
+    LOG_INFO("JiebaTokenizer::tokenize called with text='%s', parser='%s'", text.c_str(), parser.c_str());
+
     string parser_name = parser;
     if (!parser_name.empty()) {
       common::str_to_lower(parser_name);
@@ -250,11 +249,15 @@ public:
       return RC::UNIMPLEMENTED;
     }
 
+    LOG_INFO("JiebaTokenizer::tokenize getting context");
     auto &ctx = context();
     std::call_once(ctx.init_once, [&ctx]() {
+      LOG_INFO("JiebaTokenizer::tokenize initializing jieba");
       ctx.init_rc = ctx.initialize();
+      LOG_INFO("JiebaTokenizer::tokenize initialization completed with rc=%d", static_cast<int>(ctx.init_rc));
     });
     if (ctx.init_rc != RC::SUCCESS) {
+      LOG_ERROR("JiebaTokenizer::tokenize initialization failed with rc=%d", static_cast<int>(ctx.init_rc));
       return ctx.init_rc;
     }
 
@@ -2008,8 +2011,7 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         return RC::SUCCESS;
       }
       if (len1 != len2) {
-        value.set_null();
-        return RC::SUCCESS;
+        return RC::INVALID_ARGUMENT;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -2161,8 +2163,7 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         return RC::SUCCESS;
       }
       if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
-        value.set_null();
-        return RC::SUCCESS;
+        return RC::INVALID_ARGUMENT;
       }
 
       const int dim = len1 / static_cast<int>(sizeof(float));
@@ -2720,7 +2721,7 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         // 现在使用转换后的向量值进行计算
         const int len1 = vec_arg1.length();
         const int len2 = vec_arg2.length();
-        if (len1 <= 0 || len2 <= 0 || len1 != len2) { out.set_null(); break; }
+        if (len1 <= 0 || len2 <= 0 || len1 != len2) { return RC::INVALID_ARGUMENT; }
         const int dim = len1 / static_cast<int>(sizeof(float));
         const float *a = reinterpret_cast<const float *>(vec_arg1.data());
         const float *b = reinterpret_cast<const float *>(vec_arg2.data());

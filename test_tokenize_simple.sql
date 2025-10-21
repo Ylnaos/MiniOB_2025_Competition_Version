@@ -1,0 +1,1 @@
+SELECT TOKENIZE('测试', 'jieba') as tokens;
