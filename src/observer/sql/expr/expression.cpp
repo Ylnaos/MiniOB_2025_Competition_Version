@@ -23,10 +23,13 @@ See the Mulan PSL v2 for more details. */
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <array>
 #include <mutex>
 #include <sstream>
 #include <unordered_set>
 #include <sys/stat.h>
+#include <system_error>
+#include <unistd.h>
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -49,7 +52,20 @@ static fs::path make_absolute_safely(const fs::path &path)
   if (path.empty()) {
     return {};
   }
-  return path.lexically_normal();
+  std::error_code ec;
+  fs::path normalized = fs::weakly_canonical(path, ec);
+  if (!ec) {
+    return normalized;
+  }
+  if (path.is_absolute()) {
+    return path.lexically_normal();
+  }
+  fs::path absolute_path = fs::current_path() / path;
+  normalized = fs::weakly_canonical(absolute_path, ec);
+  if (!ec) {
+    return normalized;
+  }
+  return absolute_path.lexically_normal();
 }
 
 static bool has_jieba_resource(const fs::path &dir)
@@ -79,16 +95,46 @@ static bool has_jieba_resource(const fs::path &dir)
          ensure_file_exists(normalized / "stop_words.utf8");
 }
 
+static void push_unique_path(vector<fs::path> &paths, unordered_set<string> &seen, const fs::path &candidate)
+{
+  fs::path normalized = make_absolute_safely(candidate);
+  if (normalized.empty()) {
+    return;
+  }
+  string key = normalized.string();
+  if (seen.insert(key).second) {
+    paths.emplace_back(std::move(normalized));
+  }
+}
+
+static fs::path locate_executable_dir()
+{
+  std::array<char, 4096> buffer {};
+  ssize_t captured = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+  if (captured <= 0) {
+    return {};
+  }
+  buffer[static_cast<size_t>(captured)] = '\0';
+  fs::path exec_path(buffer.data());
+  return make_absolute_safely(exec_path).parent_path();
+}
+
 static fs::path detect_jieba_dict_dir()
 {
   vector<fs::path> candidates;
+  unordered_set<string> candidate_seen;
+  auto add_candidate = [&](const fs::path &path) { push_unique_path(candidates, candidate_seen, path); };
 
   if (const char *env_dir = std::getenv("MINIOB_JIEBA_DICT_DIR"); env_dir != nullptr && env_dir[0] != '\0') {
-    candidates.emplace_back(make_absolute_safely(fs::path(env_dir)));
+    add_candidate(fs::path(env_dir));
   }
 
+  vector<fs::path> base_dirs;
+  unordered_set<string> base_seen;
+  auto add_base = [&](const fs::path &path) { push_unique_path(base_dirs, base_seen, path); };
+
   if (const char *miniob_home = std::getenv("MINIOB_HOME"); miniob_home != nullptr && miniob_home[0] != '\0') {
-    candidates.emplace_back(make_absolute_safely(fs::path(miniob_home) / "deps/3rd/cppjieba/dict"));
+    add_base(fs::path(miniob_home));
   }
 
   if (auto *proc = common::the_process_param(); proc != nullptr) {
@@ -96,12 +142,52 @@ static fs::path detect_jieba_dict_dir()
     if (!conf.empty()) {
       fs::path conf_path = make_absolute_safely(fs::path(conf));
       if (!conf_path.empty()) {
-        fs::path base = conf_path.parent_path().parent_path();
-        if (!base.empty()) {
-          candidates.emplace_back(make_absolute_safely(base / "deps/3rd/cppjieba/dict"));
+        fs::path dir = conf_path.parent_path();
+        while (!dir.empty()) {
+          add_base(dir);
+          fs::path parent = dir.parent_path();
+          if (parent == dir) {
+            break;
+          }
+          dir = parent;
         }
       }
     }
+  }
+
+  if (fs::path exec_dir = locate_executable_dir(); !exec_dir.empty()) {
+    fs::path dir = exec_dir;
+    while (!dir.empty()) {
+      add_base(dir);
+      fs::path parent = dir.parent_path();
+      if (parent == dir) {
+        break;
+      }
+      dir = parent;
+    }
+  }
+
+  fs::path source_dir = make_absolute_safely(fs::path(__FILE__)).parent_path();
+  for (int i = 0; i < 6 && !source_dir.empty(); ++i) {
+    add_base(source_dir);
+    fs::path parent = source_dir.parent_path();
+    if (parent == source_dir) {
+      break;
+    }
+    source_dir = parent;
+  }
+
+  for (fs::path current = fs::current_path(); !current.empty();) {
+    add_base(current);
+    fs::path parent = current.parent_path();
+    if (parent == current) {
+      break;
+    }
+    current = parent;
+  }
+
+  for (const auto &base : base_dirs) {
+    add_candidate(base / "deps/3rd/cppjieba/dict");
   }
 
   static const char *const relative_dirs[] = {
@@ -111,21 +197,12 @@ static fs::path detect_jieba_dict_dir()
       "../../../deps/3rd/cppjieba/dict",
       "../../../../deps/3rd/cppjieba/dict"};
   for (const char *rel : relative_dirs) {
-    candidates.emplace_back(make_absolute_safely(fs::path(rel)));
-  }
-
-  fs::path source_based = fs::path(__FILE__).parent_path();
-  for (int i = 0; i < 4 && !source_based.empty(); ++i) {
-    source_based = source_based.parent_path();
-  }
-  if (!source_based.empty()) {
-    candidates.emplace_back(make_absolute_safely(source_based / "deps/3rd/cppjieba/dict"));
+    add_candidate(fs::path(rel));
   }
 
   for (const auto &dir : candidates) {
-    fs::path target = make_absolute_safely(dir);
-    if (has_jieba_resource(target)) {
-      return target;
+    if (has_jieba_resource(dir)) {
+      return dir;
     }
   }
 
@@ -2003,27 +2080,47 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       rc = child3_->get_value(tuple, arg3);
       if (OB_FAIL(rc)) return rc;
 
-      if (arg.attr_type() != AttrType::VECTORS || arg2.attr_type() != AttrType::VECTORS) {
-        return RC::INVALID_ARGUMENT;
+      Value vec_arg1 = arg;
+      Value vec_arg2 = arg2;
+      if (arg.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
       }
-      if (arg3.attr_type() != AttrType::CHARS) {
-        return RC::INVALID_ARGUMENT;
+      if (arg2.attr_type() != AttrType::VECTORS) {
+        rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
       }
 
-      const int len1 = arg.length();
-      const int len2 = arg2.length();
+      Value dist_literal = arg3;
+      if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
+        rc = Value::cast_to(arg3, AttrType::CHARS, dist_literal);
+        if (OB_FAIL(rc)) {
+          value.set_null();
+          return RC::SUCCESS;
+        }
+      }
+
+      const int len1 = vec_arg1.length();
+      const int len2 = vec_arg2.length();
       if (len1 <= 0 || len2 <= 0) {
         value.set_null();
         return RC::SUCCESS;
       }
-      if (len1 != len2) {
-        return RC::INVALID_ARGUMENT;
+      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       const int dim = len1 / static_cast<int>(sizeof(float));
-      const float *a = reinterpret_cast<const float *>(arg.data());
-      const float *b = reinterpret_cast<const float *>(arg2.data());
-      string dist_type = arg3.get_string();
+      const float *a = reinterpret_cast<const float *>(vec_arg1.data());
+      const float *b = reinterpret_cast<const float *>(vec_arg2.data());
+      string dist_type = dist_literal.get_string();
 
       // 转换为大写
       for (char &c : dist_type) {
@@ -2049,6 +2146,9 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
         if (na <= 0.0 || nb <= 0.0) { value.set_null(); return RC::SUCCESS; }
         double cos = dot / (std::sqrt(na) * std::sqrt(nb));
         acc = 1.0 - cos;
+        if (acc < 0.0 && std::fabs(acc) < 1e-6) {
+          acc = 0.0;
+        }
       } else {
         return RC::INVALID_ARGUMENT;  // 不支持的距离类型
       }
@@ -2324,15 +2424,17 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
         value.set_null();
         return RC::SUCCESS;
       }
-      if (len1 != len2) {
-        return RC::INVALID_ARGUMENT;
+      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
+        value.set_null();
+        return RC::SUCCESS;
       }
 
       Value dist_arg = arg3;
-      if (arg3.attr_type() != AttrType::CHARS) {
+      if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_arg);
         if (OB_FAIL(rc)) {
-          return RC::INVALID_ARGUMENT;
+          value.set_null();
+          return RC::SUCCESS;
         }
       }
       string dist_type = dist_arg.get_string();
@@ -2372,6 +2474,9 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
         }
         double cos = dot / (std::sqrt(na) * std::sqrt(nb));
         acc = 1.0 - cos;
+        if (acc < 0.0 && std::fabs(acc) < 1e-6) {
+          acc = 0.0;
+        }
       } else {
         return RC::INVALID_ARGUMENT;
       }
@@ -3018,33 +3123,68 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     return false;
   };
 
-  if (expr.type() == ExprType::UNBOUND_FIELD) {
-    const auto &u = static_cast<const UnboundFieldExpr &>(expr);
-    const char *t = u.table_name();
-    const char *f = u.field_name();
-    if (t != nullptr && *t != '\0' && !is_inner_table(t)) {
-      // 澶栧眰琛ㄥ瓧娈碉細浠?outer_tuple 鎶藉彇鎴愬父閲?
-Value v;
-      RC rc2 = outer_tuple.find_cell(TupleCellSpec(t, f), v);
+  if (expr.type() == ExprType::FIELD || expr.type() == ExprType::UNBOUND_FIELD) {
+    const char *rel_name = nullptr;
+    const char *field_name = nullptr;
+    if (expr.type() == ExprType::FIELD) {
+      const auto &field_expr = static_cast<const FieldExpr &>(expr);
+      if (!field_expr.relation_name().empty()) {
+        rel_name = field_expr.relation_name().c_str();
+      } else {
+        rel_name = field_expr.table_name();
+      }
+      field_name = field_expr.field_name();
+    } else {
+      const auto &u = static_cast<const UnboundFieldExpr &>(expr);
+      rel_name      = u.table_name();
+      field_name    = u.field_name();
+    }
+
+    auto belongs_to_inner = [&](const char *name) -> bool {
+      if (name == nullptr || *name == '\0') {
+        return false;
+      }
+      return is_inner_table(name);
+    };
+
+    const char *outer_table = nullptr;
+    if (!belongs_to_inner(rel_name) && rel_name != nullptr && *rel_name != '\0') {
+      outer_table = rel_name;
+    } else if (expr.type() == ExprType::FIELD) {
+      const auto &field_expr = static_cast<const FieldExpr &>(expr);
+      const char *physical   = field_expr.table_name();
+      if (!belongs_to_inner(physical) && physical != nullptr && *physical != '\0') {
+        outer_table = physical;
+      }
+    }
+
+    if (outer_table != nullptr && field_name != nullptr && *field_name != '\0') {
+      Value v;
+      RC    rc2 = outer_tuple.find_cell(TupleCellSpec(outer_table, field_name), v);
       if (rc2 != RC::SUCCESS) {
-        string tf = string(t) + "." + string(f);
+        string tf = string(outer_table) + "." + string(field_name);
         rc2       = outer_tuple.find_cell(TupleCellSpec(tf), v);
       }
       if (rc2 != RC::SUCCESS) {
-        rc2 = outer_tuple.find_cell(TupleCellSpec(f), v);
+        rc2 = outer_tuple.find_cell(TupleCellSpec(field_name), v);
       }
       if (rc2 != RC::SUCCESS) {
-        LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", t, f);
+        LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", outer_table, field_name);
         rc = rc2;
         return nullptr;
       }
       did_substitute = true;
       auto ve        = std::make_unique<ValueExpr>(v);
-      ve->set_name(string(t) + "." + string(f));
+      if (expr.alias() != nullptr) {
+        ve->set_alias(expr.alias());
+      }
+      if (expr.name() != nullptr) {
+        ve->set_name(expr.name());
+      }
       return ve;
     }
-    // 鍐呭眰琛ㄥ瓧娈典繚鎸佸師鏍?
-return expr.copy();
+
+    return expr.copy();
   }
 
   if (expr.type() == ExprType::SUBQUERY) {
