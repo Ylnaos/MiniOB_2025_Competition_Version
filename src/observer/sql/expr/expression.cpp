@@ -21,10 +21,12 @@ See the Mulan PSL v2 for more details. */
 #include <cmath>
 #include <limits>
 #include <cstdlib>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <array>
 #include <mutex>
+#include <utility>
 #include <sstream>
 #include <unordered_set>
 #include <sys/stat.h>
@@ -39,7 +41,17 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/physical_plan_generator.h"
 #include "session/session.h"
 #include "storage/db/db.h"
-#include "cppjieba/Jieba.hpp"
+
+#if defined(__has_include)
+#  if __has_include("cppjieba/Jieba.hpp")
+#    define MINIOB_WITH_JIEBA 1
+#    include "cppjieba/Jieba.hpp"
+#  else
+#    define MINIOB_WITH_JIEBA 0
+#  endif
+#else
+#  define MINIOB_WITH_JIEBA 0
+#endif
 
 using namespace std;
 
@@ -47,6 +59,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
+#if MINIOB_WITH_JIEBA
 static fs::path make_absolute_safely(const fs::path &path)
 {
   if (path.empty()) {
@@ -209,6 +222,8 @@ static fs::path detect_jieba_dict_dir()
   return {};
 }
 
+#endif // MINIOB_WITH_JIEBA
+
 class JiebaTokenizer
 {
 public:
@@ -223,6 +238,7 @@ public:
       return RC::UNIMPLEMENTED;
     }
 
+#if MINIOB_WITH_JIEBA
     auto &ctx = context();
     std::call_once(ctx.init_once, [&ctx]() {
       ctx.init_rc = ctx.initialize();
@@ -249,9 +265,15 @@ public:
       tokens.emplace_back(word);
     }
     return RC::SUCCESS;
+#else
+    (void)parser_name;
+    simple_cut(text, tokens);
+    return RC::SUCCESS;
+#endif
   }
 
 private:
+#if MINIOB_WITH_JIEBA
   struct Context
   {
     std::once_flag init_once;
@@ -306,6 +328,43 @@ private:
     static Context ctx;
     return ctx;
   }
+#else
+  static void simple_cut(const string &text, vector<string> &tokens)
+  {
+    tokens.clear();
+    string current;
+    auto flush = [&]() {
+      if (!current.empty()) {
+        tokens.emplace_back(current);
+        current.clear();
+      }
+    };
+
+    const size_t len = text.size();
+    for (size_t i = 0; i < len;) {
+      unsigned char ch = static_cast<unsigned char>(text[i]);
+      if (std::isspace(ch) || std::ispunct(ch)) {
+        flush();
+        ++i;
+        continue;
+      }
+
+      size_t char_len = 1;
+      if ((ch & 0x80) != 0) {
+        if ((ch & 0xE0) == 0xC0 && i + 1 < len) {
+          char_len = 2;
+        } else if ((ch & 0xF0) == 0xE0 && i + 2 < len) {
+          char_len = 3;
+        } else if ((ch & 0xF8) == 0xF0 && i + 3 < len) {
+          char_len = 4;
+        }
+      }
+      current.append(text, i, char_len);
+      i += char_len;
+    }
+    flush();
+  }
+#endif
 };
 
 static string escape_json_string(const string &input)
@@ -2086,18 +2145,24 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
 
       Value vec_arg1 = arg;
       Value vec_arg2 = arg2;
+      if (arg.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      if (arg3.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
       if (arg.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return RC::INVALID_ARGUMENT;
         }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return RC::INVALID_ARGUMENT;
         }
       }
 
@@ -2105,20 +2170,23 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_literal);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return RC::INVALID_ARGUMENT;
         }
       }
 
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
       if (len1 <= 0 || len2 <= 0) {
-        value.set_null();
-        return RC::SUCCESS;
+        LOG_WARN("distance expects non-empty vectors, len1=%d, len2=%d", len1, len2);
+        return RC::INVALID_ARGUMENT;
       }
-      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
-        value.set_null();
-        return RC::SUCCESS;
+      if (len1 != len2) {
+        LOG_WARN("distance expects same dimensions, len1=%d, len2=%d", len1, len2);
+        return RC::INVALID_ARGUMENT;
+      }
+      if ((len1 % static_cast<int>(sizeof(float)) != 0) || (len2 % static_cast<int>(sizeof(float)) != 0)) {
+        LOG_WARN("distance expects vector length aligned to sizeof(float), len1=%d, len2=%d", len1, len2);
+        return RC::INVALID_ARGUMENT;
       }
 
       const int dim = len1 / static_cast<int>(sizeof(float));
@@ -2408,37 +2476,42 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       // 向量参数若不是向量类型,尝试进行类型转换
       Value vec_arg1 = arg1;
       Value vec_arg2 = arg2;
+      if (arg1.attr_type() == AttrType::NULLS || arg2.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      if (arg3.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
       if (arg1.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg1, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return RC::INVALID_ARGUMENT;
         }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return RC::INVALID_ARGUMENT;
         }
       }
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
       if (len1 <= 0 || len2 <= 0) {
-        value.set_null();
-        return RC::SUCCESS;
+        LOG_WARN("distance constant fold expects non-empty vectors, len1=%d, len2=%d", len1, len2);
+        return RC::INVALID_ARGUMENT;
       }
-      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
-        value.set_null();
-        return RC::SUCCESS;
+      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0) || (len2 % static_cast<int>(sizeof(float)) != 0)) {
+        LOG_WARN("distance constant fold dimension mismatch or misaligned length, len1=%d, len2=%d", len1, len2);
+        return RC::INVALID_ARGUMENT;
       }
 
       Value dist_arg = arg3;
       if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_arg);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return RC::INVALID_ARGUMENT;
         }
       }
       string dist_type = dist_arg.get_string();
