@@ -1572,7 +1572,9 @@ condition:
       $$->right_is_attr = -1;
       $$->comp          = EQUAL_TO;
       Value __true; __true.set_boolean(true);
-      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($3)), false);
+      SubqueryExpr *sub_expr = new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($3));
+      sub_expr->set_require_single_column(false);
+      ExistsExpr *exists_expr = new ExistsExpr(sub_expr, false);
       exists_expr->set_name(token_name(sql_string, &@$));
       $$->left_expr.reset(exists_expr);
       $$->right_expr.reset(new ValueExpr(__true));
@@ -1584,7 +1586,9 @@ condition:
       $$->right_is_attr = -1;
       $$->comp          = EQUAL_TO;
       Value __true; __true.set_boolean(true);
-      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($4)), true);
+      SubqueryExpr *sub_expr = new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($4));
+      sub_expr->set_require_single_column(false);
+      ExistsExpr *exists_expr = new ExistsExpr(sub_expr, true);
       exists_expr->set_name(token_name(sql_string, &@$));
       $$->left_expr.reset(exists_expr);
       $$->right_expr.reset(new ValueExpr(__true));
@@ -1666,13 +1670,17 @@ condition_expr:
     }
     | EXISTS LBRACE select_stmt RBRACE
     {
-      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($3)), false);
+      SubqueryExpr *sub_expr = new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($3));
+      sub_expr->set_require_single_column(false);
+      ExistsExpr *exists_expr = new ExistsExpr(sub_expr, false);
       exists_expr->set_name(token_name(sql_string, &@$));
       $$ = exists_expr;
     }
     | NOT EXISTS LBRACE select_stmt RBRACE
     {
-      ExistsExpr *exists_expr = new ExistsExpr(new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($4)), true);
+      SubqueryExpr *sub_expr = new SubqueryExpr(std::unique_ptr<ParsedSqlNode>($4));
+      sub_expr->set_require_single_column(false);
+      ExistsExpr *exists_expr = new ExistsExpr(sub_expr, true);
       exists_expr->set_name(token_name(sql_string, &@$));
       $$ = exists_expr;
     }

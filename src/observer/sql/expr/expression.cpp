@@ -1584,14 +1584,18 @@ SubqueryExpr::SubqueryExpr(const std::vector<Value> &cached_results, AttrType re
 unique_ptr<Expression> SubqueryExpr::copy() const
 {
   if (executed_) {
-    return make_unique<SubqueryExpr>(results_, result_type_, result_len_);
+    auto copied = make_unique<SubqueryExpr>(results_, result_type_, result_len_);
+    copied->set_require_single_column(require_single_column_);
+    return copied;
   }
   // 娣辨嫹璐濊В鏋愯妭鐐?
 std::unique_ptr<ParsedSqlNode> copied;
   if (subquery_node_) {
     copied = deep_copy_parsed_node(*subquery_node_);
   }
-  return make_unique<SubqueryExpr>(std::move(copied));
+  auto new_expr = make_unique<SubqueryExpr>(std::move(copied));
+  new_expr->set_require_single_column(require_single_column_);
+  return new_expr;
 }
 
 RC SubqueryExpr::execute_once() const
@@ -1666,7 +1670,7 @@ TupleSchema schema;
 
   bool schema_checked = false;
   if (rc == RC::SUCCESS && schema.cell_num() > 0) {
-    if (schema.cell_num() != 1) {
+    if (require_single_column_ && schema.cell_num() != 1) {
       physical_oper->close();
       LOG_WARN("subquery must return exactly one column");
       sql_debug("subquery must return exactly one column");
@@ -1684,7 +1688,7 @@ TupleSchema schema;
       LOG_WARN("null tuple from subquery operator");
       break;
     }
-    if (!schema_checked && tuple->cell_num() != 1) {
+    if (require_single_column_ && !schema_checked && tuple->cell_num() != 1) {
       LOG_WARN("subquery must return exactly one column");
       sql_debug("subquery must return exactly one column");
       rc = RC::INVALID_ARGUMENT;
@@ -2869,6 +2873,22 @@ if (!did_substitute) {
     return rc;
   }
 
+  TupleSchema schema;
+  RC schema_rc = physical_oper->tuple_schema(schema);
+  if (OB_FAIL(schema_rc)) {
+    LOG_TRACE("tuple_schema not provided for correlated subquery, will infer from first row");
+  }
+  bool schema_checked = false;
+  if (schema_rc == RC::SUCCESS && schema.cell_num() > 0) {
+    if (require_single_column_ && schema.cell_num() != 1) {
+      physical_oper->close();
+      LOG_WARN("subquery must return exactly one column");
+      sql_debug("subquery must return exactly one column");
+      return RC::INVALID_ARGUMENT;
+    }
+    schema_checked = true;
+  }
+
   // 娓呯┖骞舵敹闆嗙粨鏋?
 results_.clear();
   result_type_ = AttrType::UNDEFINED;
@@ -2879,6 +2899,12 @@ results_.clear();
     tuple = physical_oper->current_tuple();
     if (tuple == nullptr) {
       rc = RC::INTERNAL;
+      break;
+    }
+    if (require_single_column_ && !schema_checked && tuple->cell_num() != 1) {
+      LOG_WARN("subquery must return exactly one column");
+      sql_debug("subquery must return exactly one column");
+      rc = RC::INVALID_ARGUMENT;
       break;
     }
     Value v;
@@ -3204,6 +3230,7 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
       did_substitute = true;
     }
     auto new_sub = std::make_unique<SubqueryExpr>(std::move(copied_node));
+    new_sub->set_require_single_column(sub_e.require_single_column());
     new_sub->set_name(expr.name());
     return new_sub;
   }

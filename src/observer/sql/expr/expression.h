@@ -590,6 +590,9 @@ public:
   // 带外层元组上下文执行子查询；如存在相关引用，每次调用都会重新执行
   RC execute_with_context(const Tuple *outer_tuple) const;
 
+  void set_require_single_column(bool require_single_column) { require_single_column_ = require_single_column; }
+  bool require_single_column() const { return require_single_column_; }
+
   // 获取缓存的所有结果（首列）
   const std::vector<Value> &results() const { return results_; }
 
@@ -614,6 +617,7 @@ private:
   mutable std::vector<Value>           results_;      ///< 首列所有结果
   mutable AttrType                     result_type_ = AttrType::UNDEFINED;
   mutable int                          result_len_  = -1;
+  bool                                 require_single_column_ = true;
   std::unique_ptr<ParsedSqlNode>       subquery_node_;
 };
 
