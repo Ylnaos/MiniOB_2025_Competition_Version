@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/update_stmt.h"
 #include <cctype>
 #include <unordered_map>
+#include <vector>
 #include "common/log/log.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
@@ -24,6 +25,13 @@ See the Mulan PSL v2 for more details. */
 #include "storage/view/view.h"
 
 namespace {
+
+struct ViewColumnMapping
+{
+  Table           *table      = nullptr;
+  const FieldMeta *field_meta = nullptr;
+};
+
 // 返回输入字符串的小写副本
 static std::string to_lower_copy(const std::string &input)
 {
@@ -34,11 +42,10 @@ static std::string to_lower_copy(const std::string &input)
   return result;
 }
 
-static RC analyze_view_for_update(Db *db, View *view, Table *&base_table,
-    std::unordered_map<std::string, const FieldMeta *> &view_columns)
+static RC analyze_view_for_update(Db *db, View *view,
+    std::unordered_map<std::string, ViewColumnMapping> &view_columns)
 {
   view_columns.clear();
-  base_table = nullptr;
 
   if (view == nullptr) {
     return RC::INVALID_ARGUMENT;
@@ -58,26 +65,43 @@ static RC analyze_view_for_update(Db *db, View *view, Table *&base_table,
   }
 
   SelectSqlNode &select_node = node->selection;
-  if (select_node.relations.size() != 1) {
-    LOG_WARN("multi-table view update is unsupported. view=%s", view->name());
-    return RC::UNSUPPORTED;
+
+  struct RelationInfo
+  {
+    Table *table = nullptr;
+    std::string name_lower;
+    std::string alias_lower;
+    std::unordered_map<std::string, const FieldMeta *> field_map;
+  };
+
+  std::vector<RelationInfo> relations;
+  relations.reserve(select_node.relations.size());
+
+  for (const RelationSqlNode &relation : select_node.relations) {
+    Table *table = db->find_table(relation.relation_name.c_str());
+    if (table == nullptr) {
+      LOG_WARN("base table not found when analyzing view update. view=%s table=%s",
+          view->name(), relation.relation_name.c_str());
+      return RC::SCHEMA_TABLE_NOT_EXIST;
+    }
+
+    RelationInfo info;
+    info.table       = table;
+    info.name_lower  = to_lower_copy(relation.relation_name);
+    info.alias_lower = relation.alias.empty() ? info.name_lower : to_lower_copy(relation.alias);
+
+    const TableMeta &meta    = table->table_meta();
+    const int        sys_num = meta.sys_field_num();
+    const int        visible_num = meta.visible_field_num();
+    for (int idx = 0; idx < visible_num; ++idx) {
+      const FieldMeta *field_meta = meta.field(idx + sys_num);
+      if (field_meta != nullptr && field_meta->visible()) {
+        info.field_map.emplace(to_lower_copy(field_meta->name()), field_meta);
+      }
+    }
+
+    relations.emplace_back(std::move(info));
   }
-
-  const RelationSqlNode &relation = select_node.relations[0];
-  Table *table = db->find_table(relation.relation_name.c_str());
-  if (table == nullptr) {
-    LOG_WARN("base table not found when analyzing view update. view=%s table=%s",
-        view->name(), relation.relation_name.c_str());
-    return RC::SCHEMA_TABLE_NOT_EXIST;
-  }
-
-  base_table = table;
-
-  std::string rel_lower   = to_lower_copy(relation.relation_name);
-  std::string alias_lower = relation.alias.empty() ? rel_lower : to_lower_copy(relation.alias);
-
-  const TableMeta &meta    = table->table_meta();
-  const int        sys_num = meta.sys_field_num();
 
   const std::vector<std::string> &view_fields = view->view_fields();
   size_t                           view_field_cursor = 0;
@@ -93,6 +117,15 @@ static RC analyze_view_for_update(Db *db, View *view, Table *&base_table,
     return label;
   };
 
+  auto find_relation_by_name = [&](const std::string &name_lower) -> const RelationInfo * {
+    for (const auto &rel : relations) {
+      if (name_lower == rel.name_lower || name_lower == rel.alias_lower) {
+        return &rel;
+      }
+    }
+    return nullptr;
+  };
+
   for (const auto &expr : select_node.expressions) {
     if (!expr) {
       LOG_WARN("null expression encountered in view definition when analyzing update. view=%s",
@@ -103,64 +136,86 @@ static RC analyze_view_for_update(Db *db, View *view, Table *&base_table,
     if (expr->type() == ExprType::UNBOUND_FIELD) {
       auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
 
-      std::string tbl_lower;
-      if (uf->table_name() != nullptr && uf->table_name()[0] != '\0') {
-        tbl_lower = to_lower_copy(uf->table_name());
-      }
-      if (!tbl_lower.empty() && tbl_lower != rel_lower && tbl_lower != alias_lower) {
-        LOG_WARN("view column references other table when analyzing update. view=%s column=%s",
-            view->name(), uf->field_name());
-        return RC::UNSUPPORTED;
-      }
-
       const char *field_name = uf->field_name();
       if (field_name == nullptr || field_name[0] == '\0') {
         LOG_WARN("invalid field name in view definition for update. view=%s", view->name());
         return RC::INVALID_ARGUMENT;
       }
 
-      const FieldMeta *field_meta = meta.field(field_name);
-      if (field_meta == nullptr || !field_meta->visible()) {
-        LOG_WARN("view references unknown base column when analyzing update. view=%s column=%s",
-            view->name(), field_name);
-        return RC::SCHEMA_FIELD_NOT_EXIST;
+      std::string field_lower = to_lower_copy(field_name);
+      const RelationInfo *owner_rel = nullptr;
+      const FieldMeta    *field_meta = nullptr;
+
+      if (uf->table_name() != nullptr && uf->table_name()[0] != '\0') {
+        std::string tbl_lower = to_lower_copy(uf->table_name());
+        owner_rel = find_relation_by_name(tbl_lower);
+        if (owner_rel == nullptr) {
+          LOG_WARN("referenced relation %s not found in view definition", uf->table_name());
+          return RC::SCHEMA_TABLE_NOT_EXIST;
+        }
+        auto iter = owner_rel->field_map.find(field_lower);
+        if (iter == owner_rel->field_map.end()) {
+          LOG_WARN("field %s not found in relation %s when analyzing view update", field_name,
+              uf->table_name());
+          return RC::SCHEMA_FIELD_NOT_EXIST;
+        }
+        field_meta = iter->second;
+      } else {
+        for (const auto &rel : relations) {
+          auto iter = rel.field_map.find(field_lower);
+          if (iter != rel.field_map.end()) {
+            if (owner_rel != nullptr) {
+              LOG_WARN("ambiguous column %s in multi-table view", field_name);
+              return RC::UNSUPPORTED;
+            }
+            owner_rel = &rel;
+            field_meta = iter->second;
+          }
+        }
+        if (owner_rel == nullptr) {
+          LOG_WARN("field %s not found in any relation when analyzing view update", field_name);
+          return RC::SCHEMA_FIELD_NOT_EXIST;
+        }
       }
 
       std::string default_label;
       if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
         default_label = expr->alias();
-      } else {
+      } else if (field_meta != nullptr) {
         default_label = field_meta->name();
       }
 
       std::string label = consume_label(default_label);
-      if (label.empty()) {
+      if (label.empty() && field_meta != nullptr) {
         label = field_meta->name();
       }
-      view_columns.emplace(to_lower_copy(label), field_meta);
+      view_columns.emplace(to_lower_copy(label), ViewColumnMapping {owner_rel->table, field_meta});
     } else if (expr->type() == ExprType::STAR) {
       auto *star = static_cast<const StarExpr *>(expr.get());
-      std::string tbl_lower;
+      const RelationInfo *target_rel = nullptr;
       if (star->table_name() != nullptr && star->table_name()[0] != '\0') {
-        tbl_lower = to_lower_copy(star->table_name());
-      }
-      if (!tbl_lower.empty() && tbl_lower != rel_lower && tbl_lower != alias_lower) {
-        LOG_WARN("view star references other table when analyzing update. view=%s", view->name());
-        return RC::UNSUPPORTED;
+        std::string tbl_lower = to_lower_copy(star->table_name());
+        target_rel = find_relation_by_name(tbl_lower);
+        if (target_rel == nullptr) {
+          LOG_WARN("star references unknown relation %s in view update", star->table_name());
+          return RC::SCHEMA_TABLE_NOT_EXIST;
+        }
+      } else {
+        if (relations.size() != 1) {
+          LOG_WARN("ambiguous star expression in multi-table view for update. view=%s", view->name());
+          return RC::UNSUPPORTED;
+        }
+        target_rel = &relations[0];
       }
 
-      const int visible_num = meta.visible_field_num();
-      for (int idx = 0; idx < visible_num; ++idx) {
-        const FieldMeta *field_meta = meta.field(idx + sys_num);
-        if (field_meta == nullptr || !field_meta->visible()) {
-          continue;
-        }
-        std::string default_label = field_meta->name();
-        std::string label         = consume_label(default_label);
+      for (const auto &entry : target_rel->field_map) {
+        const FieldMeta *field_meta = entry.second;
+        std::string default_label   = field_meta->name();
+        std::string label           = consume_label(default_label);
         if (label.empty()) {
           label = field_meta->name();
         }
-        view_columns.emplace(to_lower_copy(label), field_meta);
+        view_columns.emplace(to_lower_copy(label), ViewColumnMapping {target_rel->table, field_meta});
       }
     } else {
       LOG_WARN("view expression unsupported for update. view=%s expr_type=%d",
@@ -207,24 +262,22 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
   // find table
   Table *table = db->find_table(table_name);
   std::string view_alias; // 当从视图改写时，保存视图名用于别名映射
-  std::unordered_map<std::string, const FieldMeta *> view_updatable_columns;
+  std::unordered_map<std::string, ViewColumnMapping> view_updatable_columns;
   bool updating_view = false;
   if (table == nullptr) {
-    // 支持：UPDATE <view> ... 其中 <view> = CREATE VIEW v AS SELECT * FROM base;
+    // 支持：UPDATE <view> ...
     View *view = db->find_view(table_name);
     if (view != nullptr) {
-      Table *base_table = nullptr;
-      RC view_rc = analyze_view_for_update(db, view, base_table, view_updatable_columns);
+      RC view_rc = analyze_view_for_update(db, view, view_updatable_columns);
       if (OB_FAIL(view_rc)) {
         LOG_WARN("view not updatable for update statement. view=%s rc=%s", table_name, strrc(view_rc));
         return view_rc;
       }
-      table        = base_table;
       updating_view = true;
       view_alias    = table_name;
-      LOG_INFO("rewrite update on view(%s) to base table(%s)", table_name, table->name());
+      LOG_INFO("rewrite update on view(%s) to base table via view mapping", table_name);
     }
-    if (table == nullptr) {
+    if (!updating_view) {
       LOG_WARN("no such table or unsupported view update. db=%s, target=%s", db->name(), table_name);
       return RC::SCHEMA_TABLE_NOT_EXIST;
     }
@@ -234,6 +287,35 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
   if (update.attribute_names.empty()) {
     LOG_WARN("no fields to update");
     return RC::INVALID_ARGUMENT;
+  }
+
+  if (updating_view) {
+    Table *target_table = nullptr;
+    for (const std::string &attr_name : update.attribute_names) {
+      std::string lower = to_lower_copy(attr_name);
+      auto        iter  = view_updatable_columns.find(lower);
+      if (iter == view_updatable_columns.end()) {
+        LOG_WARN("field not found in view for update. view=%s field=%s", table_name, attr_name.c_str());
+        return RC::UNSUPPORTED;
+      }
+      Table *col_table = iter->second.table;
+      if (col_table == nullptr) {
+        LOG_WARN("column mapping without base table when updating view %s", table_name);
+        return RC::INTERNAL;
+      }
+      if (target_table == nullptr) {
+        target_table = col_table;
+      } else if (target_table != col_table) {
+        LOG_WARN("update touches multiple base tables via view. view=%s", table_name);
+        return RC::UNSUPPORTED;
+      }
+    }
+    if (target_table == nullptr) {
+      LOG_WARN("no base table resolved for view update. view=%s", table_name);
+      return RC::UNSUPPORTED;
+    }
+    table = target_table;
+    LOG_INFO("rewrite update on view(%s) to base table(%s)", table_name, table->name());
   }
 
   vector<const FieldMeta *> field_metas;
@@ -251,7 +333,7 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
         LOG_WARN("field not updatable via view. view=%s field=%s", table_name, update.attribute_names[i].c_str());
         return RC::UNSUPPORTED;
       }
-      field_meta = iter->second;
+      field_meta = iter->second.field_meta;
     } else {
       field_meta = table->table_meta().field(update.attribute_names[i].c_str());
     }

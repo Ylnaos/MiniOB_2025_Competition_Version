@@ -411,18 +411,18 @@ static void emit_clean_token(vector<string> &tokens, const unordered_set<string>
     return;
   }
 
-  bool all_ascii = true;
+  bool ascii_only = true;
   for (unsigned char ch : cleaned) {
     if (ch & 0x80u) {
-      all_ascii = false;
+      ascii_only = false;
       break;
     }
   }
 
-  if (all_ascii) {
-    if (stop_words.find(cleaned) != stop_words.end()) {
-      return;
-    }
+  if (stop_words.find(cleaned) != stop_words.end()) {
+    return;
+  }
+  if (ascii_only) {
     string cleaned_lower = cleaned;
     common::str_to_lower(cleaned_lower);
     if (stop_words.find(cleaned_lower) != stop_words.end()) {
@@ -779,6 +779,19 @@ private:
         dict_words.insert(word);
         if (word.size() > max_dict_word_bytes) {
           max_dict_word_bytes = word.size();
+        }
+      }
+
+      static const char *const builtin_user_words[] = {
+          "有何",
+      };
+      for (const char *w : builtin_user_words) {
+        if (w != nullptr && w[0] != '\0') {
+          dict_words.insert(w);
+          size_t len = strlen(w);
+          if (len > max_dict_word_bytes) {
+            max_dict_word_bytes = len;
+          }
         }
       }
       return RC::SUCCESS;
