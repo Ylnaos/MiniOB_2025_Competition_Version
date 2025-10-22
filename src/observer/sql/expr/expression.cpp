@@ -55,17 +55,17 @@ static fs::path make_absolute_safely(const fs::path &path)
   if (path.empty()) {
     return {};
   }
-  fs::path normalized = path.lexically_normal();
-  if (normalized.is_absolute()) {
-    return normalized;
+
+  if (path.is_absolute()) {
+    return path;
   }
-  std::error_code ec;
-  fs::path cwd = fs::current_path(ec);
-  if (ec) {
-    LOG_WARN("make_absolute_safely: failed to get current path, keeping relative path '%s'", normalized.string().c_str());
-    return normalized;
+
+  const char *pwd = std::getenv("PWD");
+  if (pwd != nullptr && pwd[0] != '\0') {
+    return fs::path(pwd) / path;
   }
-  return (cwd / normalized).lexically_normal();
+
+  return path;
 }
 
 static bool has_jieba_resource(const fs::path &dir)
@@ -74,8 +74,7 @@ static bool has_jieba_resource(const fs::path &dir)
     return false;
   }
 
-  const fs::path normalized = dir.lexically_normal();
-  const std::string dir_str = normalized.string();
+  const std::string dir_str = dir.string();
 
   struct stat dir_stat {};
   if (::stat(dir_str.c_str(), &dir_stat) != 0 || !S_ISDIR(dir_stat.st_mode)) {
@@ -84,21 +83,21 @@ static bool has_jieba_resource(const fs::path &dir)
 
   auto ensure_file_exists = [](const fs::path &candidate) -> bool {
     struct stat file_stat {};
-    std::string file_path = candidate.lexically_normal().string();
+    std::string file_path = candidate.string();
     return ::stat(file_path.c_str(), &file_stat) == 0;
   };
 
-  bool has_dict = ensure_file_exists(normalized / "jieba.dict.utf8");
-  bool has_hmm = ensure_file_exists(normalized / "hmm_model.utf8");
-  bool has_user = ensure_file_exists(normalized / "user.dict.utf8");
-  bool has_idf = ensure_file_exists(normalized / "idf.utf8");
-  bool has_stop = ensure_file_exists(normalized / "stop_words.utf8");
+  bool has_dict = ensure_file_exists(dir / "jieba.dict.utf8");
+  bool has_hmm = ensure_file_exists(dir / "hmm_model.utf8");
+  bool has_user = ensure_file_exists(dir / "user.dict.utf8");
+  bool has_idf = ensure_file_exists(dir / "idf.utf8");
+  bool has_stop = ensure_file_exists(dir / "stop_words.utf8");
 
-  if (!has_dict) LOG_WARN("Missing jieba.dict.utf8 in %s", normalized.string().c_str());
-  if (!has_hmm) LOG_WARN("Missing hmm_model.utf8 in %s", normalized.string().c_str());
-  if (!has_user) LOG_WARN("Missing user.dict.utf8 in %s", normalized.string().c_str());
-  if (!has_idf) LOG_WARN("Missing idf.utf8 in %s", normalized.string().c_str());
-  if (!has_stop) LOG_WARN("Missing stop_words.utf8 in %s", normalized.string().c_str());
+  if (!has_dict) LOG_WARN("Missing jieba.dict.utf8 in %s", dir.string().c_str());
+  if (!has_hmm) LOG_WARN("Missing hmm_model.utf8 in %s", dir.string().c_str());
+  if (!has_user) LOG_WARN("Missing user.dict.utf8 in %s", dir.string().c_str());
+  if (!has_idf) LOG_WARN("Missing idf.utf8 in %s", dir.string().c_str());
+  if (!has_stop) LOG_WARN("Missing stop_words.utf8 in %s", dir.string().c_str());
 
   return has_dict && has_hmm && has_user && has_idf && has_stop;
 }
@@ -109,7 +108,10 @@ static void push_unique_path(vector<fs::path> &paths, unordered_set<string> &see
   if (normalized.empty()) {
     return;
   }
-  string key = normalized.string();
+  string key = normalized.generic_string();
+  while (!key.empty() && key.back() == '/') {
+    key.pop_back();
+  }
   if (seen.insert(key).second) {
     paths.emplace_back(std::move(normalized));
   }

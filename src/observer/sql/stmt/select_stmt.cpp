@@ -163,7 +163,6 @@ static void build_view_output_mapping(
         common::str_to_lower(key);
         // 复制表达式用于后续重写
         name_to_expr[key] = expr->copy();
-        LOG_DEBUG("Added computed column '%s' to name_to_expr mapping", key.c_str());
       }
     }
   }
@@ -196,7 +195,6 @@ static RC rewrite_unqualified_fields(
         // 优先查找表达式映射(计算列)
         auto expr_it = name_to_expr.find(key);
         if (expr_it != name_to_expr.end()) {
-          LOG_DEBUG("Found computed column '%s' in name_to_expr mapping", key.c_str());
           // 用视图中的计算表达式替换
           unique_ptr<Expression> replaced = expr_it->second->copy();
           if (expr->alias() != nullptr) {
@@ -239,7 +237,6 @@ static RC rewrite_unqualified_fields(
 
     case ExprType::ARITHMETIC: {
       auto *arith = static_cast<ArithmeticExpr *>(expr.get());
-      LOG_DEBUG("Rewriting arithmetic expression");
       RC rc = rewrite_unqualified_fields(arith->left(), name_to_relattr, name_to_expr);
       if (OB_FAIL(rc)) {
         LOG_WARN("Failed to rewrite left expression of arithmetic");
@@ -326,7 +323,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       View *view = db->find_view(rel_name);
       if (view != nullptr && rel.alias.empty()) {
         ParsedSqlResult parsed;
-        LOG_DEBUG("Parsing view SELECT SQL: %s", view->select_sql());
         RC parse_rc = parse(view->select_sql(), &parsed);
         if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
           LOG_WARN("parse view select failed. view=%s, sql=%s", view->name(), view->select_sql());
@@ -337,12 +333,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           LOG_WARN("view definition is not a SELECT. view=%s", view->name());
           return RC::SQL_SYNTAX;
         }
-
-        // [DEBUG] 检查解析后的WHERE条件 - 使用ERROR级别确保输出
-        LOG_ERROR("[TRACE] Parsed node: conditions.size()=%zu, where_expr=%s, relations.size()=%zu",
-            node->selection.conditions.size(),
-            node->selection.where_expr ? "EXISTS" : "NULL",
-            node->selection.relations.size());
 
         // 检查视图定义中是否包含聚合函数或GROUP BY
         bool view_has_aggregation = false;
@@ -360,16 +350,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         // 对于这种情况,需要将外层查询转换为对视图结果的查询
         // 使用通用的子查询机制处理
         if (view_has_aggregation) {
-          LOG_DEBUG("View '%s' contains aggregation, using subquery mechanism", view->name());
-          LOG_DEBUG("[DEBUG] View SQL: %s", view->select_sql());
-          LOG_DEBUG("Outer SELECT expression count: %d", static_cast<int>(select_sql.expressions.size()));
-          for (size_t idx = 0; idx < select_sql.expressions.size(); idx++) {
-            Expression *expr_ptr = select_sql.expressions[idx].get();
-            LOG_DEBUG("Outer SELECT expression[%d] initial type=%d",
-                static_cast<int>(idx),
-                expr_ptr ? static_cast<int>(expr_ptr->type()) : -1);
-          }
-
           // 1. 创建视图的SelectStmt作为内层子查询
           Stmt *inner_stmt = nullptr;
           RC rc = SelectStmt::create(db, node->selection, inner_stmt);
@@ -379,45 +359,17 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           }
           SelectStmt *inner_select = static_cast<SelectStmt *>(inner_stmt);
 
-          // [TRACE] 检查内层SelectStmt的query_expressions和WHERE条件 - 使用ERROR确保输出
-          LOG_ERROR("[TRACE] Inner SelectStmt created, query_expressions=%zu, filter_stmt=%s, where_expr=%s, tables=%zu",
-              inner_select->query_expressions().size(),
-              inner_select->filter_stmt() ? "EXISTS" : "NULL",
-              inner_select->where_expr() ? "EXISTS" : "NULL",
-              inner_select->tables().size());
-          if (inner_select->filter_stmt()) {
-            LOG_ERROR("[TRACE]   filter_stmt has %zu filter units",
-                inner_select->filter_stmt()->filter_units().size());
-          }
-
-          // [CRITICAL FIX] 检查内层查询的WHERE条件是否丢失
-          if (!inner_select->filter_stmt() && !inner_select->where_expr()) {
-            LOG_ERROR("[CRITICAL] Inner SelectStmt has NO WHERE conditions!");
-            LOG_ERROR("[CRITICAL] This will cause Cartesian product in aggregation!");
-            LOG_ERROR("[CRITICAL] View SQL was: %s", view->select_sql());
-            LOG_ERROR("[CRITICAL] View has %zu tables", inner_select->tables().size());
-            // 这是一个严重错误，说明WHERE条件在解析时丢失了
-            // 暂时返回错误，避免返回错误结果
-            delete inner_select;
-            return RC::INTERNAL;
-          }
-
           // 2. 创建外层SelectStmt,将内层查询设置为子查询数据源
           SelectStmt *outer_select = new SelectStmt();
           outer_select->set_inner_view_stmt(inner_select);
-          LOG_DEBUG("Created outer SelectStmt %p with inner view stmt %p",
-              static_cast<void *>(outer_select),
-              static_cast<void *>(inner_select));
 
           // 3. 处理外层的表达式：将UNBOUND_AGGREGATION转换为AggregateExpr
           // 这是必需的，因为执行器需要明确的AggregateExpr类型
           vector<unique_ptr<Expression>> bound_exprs;
-          int expr_idx = 0;
           for (auto &expr : select_sql.expressions) {
             unique_ptr<Expression> copied = expr->copy();
             if (copied->type() == ExprType::STAR) {
               const auto &inner_exprs = inner_select->query_expressions();
-              LOG_DEBUG("Expanding STAR for aggregate view: inner column size=%zu", inner_exprs.size());
               for (size_t inner_idx = 0; inner_idx < inner_exprs.size(); inner_idx++) {
                 const auto &inner_expr = inner_exprs[inner_idx];
                 if (!inner_expr) {
@@ -436,7 +388,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 common::str_to_upper(column_name);
                 auto expanded = make_unique<UnboundFieldExpr>("", column_name);
                 expanded->set_name(column_name);
-                LOG_DEBUG("  STAR expands to column '%s' (index=%zu)", column_name.c_str(), inner_idx);
                 bound_exprs.emplace_back(std::move(expanded));
               }
             } else if (copied->type() == ExprType::UNBOUND_AGGREGATION) {
@@ -449,10 +400,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 return rc2;
               }
               // 将 count(*) 的子表达式从 STAR 改写为常量 1
-              LOG_DEBUG("Converting outer expression[%d] UNBOUND_AGG '%s' to AggregateExpr type=%d",
-                  expr_idx,
-                  uagg->aggregate_name(),
-                  static_cast<int>(agg_type));
               unique_ptr<Expression> child;
               if (agg_type == AggregateExpr::Type::COUNT && uagg->child()->type() == ExprType::STAR) {
                 child.reset(new ValueExpr(Value(1)));
@@ -467,7 +414,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 // 生成默认名字，格式: "AGGREGATE_NAME(*)"
                 string default_name = string(uagg->aggregate_name()) + "(*)";
                 agg_expr->set_name(default_name);  // set_name 接受 string，会自动复制
-                LOG_DEBUG("  Generated default name '%s' for aggregate expression", default_name.c_str());
               } else {
                 agg_expr->set_name(string(name));
               }
@@ -476,7 +422,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             } else {
               bound_exprs.push_back(std::move(copied));
             }
-            expr_idx++;
+
           }
           vector<unique_ptr<Expression>> final_exprs;
           if (!bound_exprs.empty()) {
@@ -510,7 +456,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 }
                 // 用绑定后的表达式替换聚合函数的子表达式
                 agg->child().reset(tmp[0].release());
-                LOG_DEBUG("Successfully bound aggregate expression child for view");
                 final_exprs.emplace_back(std::move(candidate));
               } else {
                 final_exprs.emplace_back(std::move(candidate));
@@ -518,18 +463,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             }
           }
           outer_select->query_expressions().swap(final_exprs);
-
-          // 验证外层SelectStmt设置正确
-          LOG_DEBUG("Outer SelectStmt configured: query_exprs=%d, has_aggregation=%s",
-              static_cast<int>(outer_select->query_expressions().size()),
-              outer_select->query_expressions().empty() ? "NO" : "YES");
-          for (size_t i = 0; i < outer_select->query_expressions().size(); i++) {
-            const auto &expr = outer_select->query_expressions()[i];
-            LOG_DEBUG("  expr[%d]: type=%d name=%s",
-                static_cast<int>(i),
-                static_cast<int>(expr->type()),
-                expr->name() ? expr->name() : "(null)");
-          }
 
           stmt = outer_select;
           return RC::SUCCESS;
