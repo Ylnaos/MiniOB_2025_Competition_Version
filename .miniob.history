@@ -24,3 +24,7 @@ select 1;
 SELECT TOKENIZE('如何理解STATUS字段的不同状态及其含义？', 'jieba') as text_tokens;
 ### 2025-10-22 01:45:35.769
 SELECT TOKENIZE('通过哪些方式可以查看集群配置项？', 'jieba') as text_tokens;
+### 2025-10-22 02:09:43.664
+CREATE TABLE test_t1(id int, age int);
+### 2025-10-22 02:12:07.960
+CREATE DATABASE IF NOT EXISTS testdb;
