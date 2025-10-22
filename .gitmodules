@@ -13,3 +13,6 @@
 [submodule "deps/3rd/replxx"]
 	path = deps/3rd/replxx
 	url = https://github.com/AmokHuginnsson/replxx
+[submodule "cppjieba"]
+	path = cppjieba
+	url = https://github.com/yanyiwu/cppjieba.git
