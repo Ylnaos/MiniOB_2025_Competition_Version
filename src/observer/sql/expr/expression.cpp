@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/expr/expression.h"
 #include "common/type/attr_type.h"
+#include "common/type/vector_type.h"
 #include "common/lang/string.h"
 #include "common/os/process_param.h"
 #include "sql/expr/tuple.h"
@@ -24,6 +25,7 @@ See the Mulan PSL v2 for more details. */
 #include <filesystem>
 #include <fstream>
 #include <array>
+#include <vector>
 #include <mutex>
 #include <sstream>
 #include <unordered_set>
@@ -49,6 +51,39 @@ using namespace std;
 namespace {
 
 namespace fs = std::filesystem;
+constexpr size_t VECTOR_MAX_DIM = 16383;
+
+static RC parse_string_like_to_vector(const Value &input, Value &output)
+{
+  if (input.attr_type() == AttrType::VECTORS) {
+    output = input;
+    return RC::SUCCESS;
+  }
+  if (input.attr_type() != AttrType::CHARS && input.attr_type() != AttrType::TEXTS) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  std::string literal = input.get_string();
+  std::vector<float>  elems;
+  if (!VectorType::parse_literal(literal, elems)) {
+    LOG_WARN("failed to parse vector literal: %s", literal.c_str());
+    return RC::INVALID_ARGUMENT;
+  }
+  if (elems.size() > VECTOR_MAX_DIM) {
+    LOG_WARN("vector literal dimension overflow: %zu", elems.size());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Value vec;
+  vec.set_type(AttrType::VECTORS);
+  if (!elems.empty()) {
+    vec.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
+  } else {
+    vec.set_data(static_cast<const char *>(nullptr), 0);
+  }
+  output = std::move(vec);
+  return RC::SUCCESS;
+}
 
 static fs::path make_absolute_safely(const fs::path &path)
 {
@@ -2058,39 +2093,12 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       return RC::SUCCESS;
     }
     case FuncType::STRING_TO_VECTOR: {
-      // STRING_TO_VECTOR: 将字符串 "[1,2,3]" 转换为向量，若参数已是向量则原样返回
-      if (arg.attr_type() == AttrType::VECTORS) {
-        value = arg;  // 向量输入直接透传
-        return RC::SUCCESS;
+      Value vec_value;
+      rc = parse_string_like_to_vector(arg, vec_value);
+      if (OB_FAIL(rc)) {
+        return rc;
       }
-      if (arg.attr_type() != AttrType::CHARS && arg.attr_type() != AttrType::TEXTS) {
-        return RC::INVALID_ARGUMENT;
-      }
-      const string literal = arg.get_string();
-      const char *str = literal.c_str();
-      std::vector<float> elems;
-      if (str != nullptr && str[0] == '[') {
-        const char *p = str + 1;
-        while (*p && *p != ']') {
-          char *end = nullptr;
-          float val = strtof(p, &end);
-          if (end == p) {
-            elems.clear();
-            break;
-          }
-          elems.push_back(val);
-          p = end;
-          while (*p == ' ' || *p == '\t') p++;
-          if (*p == ',') p++;
-          while (*p == ' ' || *p == '\t') p++;
-        }
-      }
-      value.set_type(AttrType::VECTORS);
-      if (!elems.empty()) {
-        value.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
-      } else {
-        value.set_data(static_cast<const char *>(nullptr), 0);
-      }
+      value = std::move(vec_value);
       return RC::SUCCESS;
     }
     case FuncType::TOKENIZE: {
@@ -2363,23 +2371,25 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       if (arg1.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg1, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
 
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+      if (len1 <= 0 || len2 <= 0) {
         value.set_null();
         return RC::SUCCESS;
+      }
+      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0) ||
+          (len2 % static_cast<int>(sizeof(float)) != 0)) {
+        return RC::INVALID_ARGUMENT;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -2463,15 +2473,13 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       if (arg1.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg1, AttrType::VECTORS, vec_arg1);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
       if (arg2.attr_type() != AttrType::VECTORS) {
         rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
       const int len1 = vec_arg1.length();
@@ -2480,17 +2488,16 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
         value.set_null();
         return RC::SUCCESS;
       }
-      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
-        value.set_null();
-        return RC::SUCCESS;
+      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0) ||
+          (len2 % static_cast<int>(sizeof(float)) != 0)) {
+        return RC::INVALID_ARGUMENT;
       }
 
       Value dist_arg = arg3;
       if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_arg);
         if (OB_FAIL(rc)) {
-          value.set_null();
-          return RC::SUCCESS;
+          return rc;
         }
       }
       string dist_type = dist_arg.get_string();
@@ -2706,17 +2713,13 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         if (arg.attr_type() != AttrType::VECTORS) {
           RC rc_cast = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
           if (OB_FAIL(rc_cast)) {
-            // 转换失败（例如 NULL 值或格式错误），返回 NULL
-            out.set_null();
-            break;
+            return rc_cast;
           }
         }
         if (argb.attr_type() != AttrType::VECTORS) {
           RC rc_cast = Value::cast_to(argb, AttrType::VECTORS, vec_arg2);
           if (OB_FAIL(rc_cast)) {
-            // 转换失败，返回 NULL
-            out.set_null();
-            break;
+            return rc_cast;
           }
         }
 
@@ -2744,33 +2747,16 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         out.set_float(static_cast<float>(rf));
       } break;
       case FuncType::STRING_TO_VECTOR: {
-        if (arg.attr_type() == AttrType::VECTORS) {
-          out = arg;
+        if (arg.attr_type() == AttrType::NULLS) {
+          out.set_null();
           break;
         }
-        if (arg.attr_type() != AttrType::CHARS && arg.attr_type() != AttrType::TEXTS) return RC::INVALID_ARGUMENT;
-        const string literal = arg.get_string();
-        const char *str = literal.c_str();
-        std::vector<float> elems;
-        if (str && str[0] == '[') {
-          const char *p = str + 1;
-          while (*p && *p != ']') {
-            char *end = nullptr;
-            float val = strtof(p, &end);
-            if (end == p) { elems.clear(); break; }
-            elems.push_back(val);
-            p = end;
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == ',') p++;
-            while (*p == ' ' || *p == '\t') p++;
-          }
+        Value vec_value;
+        RC rc_vec = parse_string_like_to_vector(arg, vec_value);
+        if (OB_FAIL(rc_vec)) {
+          return rc_vec;
         }
-        out.set_type(AttrType::VECTORS);
-        if (!elems.empty()) {
-          out.set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
-        } else {
-          out.set_data((const char *)nullptr, 0);
-        }
+        out = std::move(vec_value);
       } break;
       case FuncType::TOKENIZE: {
         if (arg.attr_type() == AttrType::NULLS) {
