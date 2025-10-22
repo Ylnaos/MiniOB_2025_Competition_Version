@@ -10,6 +10,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/type/text_type.h"
 #include "common/type/char_type.h"
+#include "common/type/vector_type.h"
 #include <cstdlib>
 #include "common/lang/comparator.h"
 #include "common/log/log.h"
@@ -70,6 +71,21 @@ RC TextType::cast_to(const Value &val, AttrType type, Value &result) const
     {
       // 同上，按前缀数字解析为浮点数
       result.set_float(val.get_float());
+      return RC::SUCCESS;
+    }
+    case AttrType::VECTORS: {
+      std::vector<float> elems;
+      if (!VectorType::parse_literal(val.get_string(), elems)) {
+        LOG_WARN("Failed to parse vector literal from TEXT: '%s'", val.get_string().c_str());
+        return RC::INVALID_ARGUMENT;
+      }
+      result.set_type(AttrType::VECTORS);
+      if (!elems.empty()) {
+        result.set_data(reinterpret_cast<const char *>(elems.data()),
+                        static_cast<int>(elems.size() * sizeof(float)));
+      } else {
+        result.set_data(static_cast<const char *>(nullptr), 0);
+      }
       return RC::SUCCESS;
     }
     default: return RC::UNIMPLEMENTED;

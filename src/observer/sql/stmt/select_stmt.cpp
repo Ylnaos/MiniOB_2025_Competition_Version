@@ -649,6 +649,30 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   for (auto &item : select_sql.order_by) {
     vector<unique_ptr<Expression>> bound;
     RC rc = expression_binder.bind_expression(item.expression, bound);
+    if (rc == RC::SCHEMA_FIELD_NOT_EXIST || rc == RC::SCHEMA_FIELD_MISSING) {
+      bool matched_alias = false;
+      if (item.expression != nullptr && item.expression->type() == ExprType::UNBOUND_FIELD) {
+        auto *unbound = static_cast<UnboundFieldExpr *>(item.expression.get());
+        const char *alias_name = unbound->field_name();
+        if (alias_name != nullptr && alias_name[0] != '\0') {
+          for (const auto &expr : bound_expressions) {
+            const char *expr_alias = expr->alias();
+            const char *expr_name  = expr->name();
+            if ((expr_alias != nullptr && 0 == strcasecmp(expr_alias, alias_name)) ||
+                (expr_name != nullptr && 0 == strcasecmp(expr_name, alias_name))) {
+              order_by_items.emplace_back(expr->copy(), item.asc);
+              matched_alias = true;
+              break;
+            }
+          }
+        }
+      }
+      if (matched_alias) {
+        continue;
+      }
+      LOG_INFO("bind order by expression failed. rc=%s", strrc(rc));
+      return rc;
+    }
     if (OB_FAIL(rc)) {
       LOG_INFO("bind order by expression failed. rc=%s", strrc(rc));
       return rc;

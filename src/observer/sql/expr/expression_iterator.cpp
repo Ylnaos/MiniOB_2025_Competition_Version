@@ -98,6 +98,19 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       }
     } break;
 
+    case ExprType::MATCH_AGAINST: {
+      auto &match_expr = static_cast<MatchAgainstExpr &>(expr);
+      for (auto &field : match_expr.fields()) {
+        rc = callback(field);
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      }
+      if (OB_SUCC(rc)) {
+        rc = callback(match_expr.query_expression());
+      }
+    } break;
+
     case ExprType::NONE:
     case ExprType::STAR:
     case ExprType::UNBOUND_FIELD:

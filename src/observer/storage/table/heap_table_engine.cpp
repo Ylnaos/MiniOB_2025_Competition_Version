@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/heap_record_scanner.h"
 #include "common/log/log.h"
 #include "storage/index/bplus_tree_index.h"
+#include "storage/index/full_text_index.h"
 #include "storage/index/ivfflat_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
@@ -338,11 +339,12 @@ RC HeapTableEngine::create_index(Trx *trx,
   string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
 
   if (is_vector_index) {
-    // 创建向量索引
     index = new IvfflatIndex();
     LOG_INFO("Creating IVF-Flat vector index: %s", index_name);
+  } else if (is_full_text_index) {
+    index = new FullTextIndex();
+    LOG_INFO("Creating Full-Text index: %s (parser=%s)", index_name, fulltext_parser.c_str());
   } else {
-    // 创建B+树索引
     index = new BplusTreeIndex();
     LOG_INFO("Creating B+Tree index: %s", index_name);
   }
@@ -354,9 +356,9 @@ RC HeapTableEngine::create_index(Trx *trx,
     return rc;
   }
 
-  // 向量索引在create()时已经扫描并建立了索引，无需额外插入数据
+  // 向量索引和全文索引在 create() 时已经构建完成，无需额外补充
   // B+树索引需要遍历数据逐条插入
-  if (!is_vector_index) {
+  if (!is_vector_index && !is_full_text_index) {
     RecordScanner *scanner = nullptr;
     rc = get_record_scanner(scanner, trx, ReadWriteMode::READ_ONLY);
     if (rc != RC::SUCCESS) {
@@ -602,15 +604,17 @@ RC HeapTableEngine::open()
       field_metas.push_back(*fm);
     }
 
-    // 判断是否为向量索引
-    bool is_vector_index = (field_metas.size() == 1 && field_metas[0].type() == AttrType::VECTORS);
-
-    Index *index = nullptr;
-    string index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
+    bool   is_vector_index    = index_meta->is_vector_index();
+    bool   is_full_text_index = index_meta->is_full_text_index();
+    Index *index              = nullptr;
+    string index_file         = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
 
     if (is_vector_index) {
       index = new IvfflatIndex();
       LOG_INFO("Opening IVF-Flat vector index: %s", index_meta->name());
+    } else if (is_full_text_index) {
+      index = new FullTextIndex();
+      LOG_INFO("Opening Full-Text index: %s (parser=%s)", index_meta->name(), index_meta->full_text_parser().c_str());
     } else {
       index = new BplusTreeIndex();
       LOG_INFO("Opening B+Tree index: %s", index_meta->name());

@@ -1352,6 +1352,16 @@ function_expression:
         $$ = new ScalarFunctionExpr(ScalarFunctionExpr::FuncType::DISTANCE, $3, $5, $7);
         $$->set_name(token_name(sql_string, &@$));
       }
+    | MATCH LBRACE rel_attr RBRACE AGAINST LBRACE expression RBRACE
+      {
+        std::vector<Expression *> fields;
+        RelAttrSqlNode *node = $3;
+        fields.push_back(new UnboundFieldExpr(node->relation_name, node->attribute_name));
+        delete node;
+        MatchAgainstExpr *match = new MatchAgainstExpr(std::move(fields), $7);
+        match->set_name(token_name(sql_string, &@$));
+        $$ = match;
+      }
     ;
 
 aggregate_expression:

@@ -18,6 +18,9 @@ See the Mulan PSL v2 for more details. */
 #include "sql/parser/expression_binder.h"
 #include "sql/expr/expression_iterator.h"
 #include "sql/stmt/select_stmt.h"
+#include "storage/index/full_text_index.h"
+#include "storage/table/table.h"
+#include "storage/index/index.h"
 
 using namespace common;
 
@@ -52,6 +55,102 @@ static void wildcard_fields(
         table->name(), relation_name.c_str(), field.field_name());
     expressions.emplace_back(field_expr);
   }
+}
+
+static RC bind_match_against_expression(MatchAgainstExpr *match_expr,
+                                        ExpressionBinder &binder,
+                                        vector<unique_ptr<Expression>> &bound_expressions)
+{
+  auto &query_expr = match_expr->query_expression();
+  if (!query_expr) {
+    LOG_WARN("match against requires query expression");
+    return RC::INVALID_ARGUMENT;
+  }
+  vector<unique_ptr<Expression>> query_bound;
+  RC rc = binder.bind_expression(query_expr, query_bound);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  if (!query_bound.empty() && query_bound[0].get() != query_expr.get()) {
+    query_expr.reset(query_bound[0].release());
+  }
+  AttrType query_type = query_expr->value_type();
+  if (query_type != AttrType::CHARS && query_type != AttrType::TEXTS && query_type != AttrType::UNDEFINED) {
+    LOG_WARN("match against expects query to be string/text, got %d", static_cast<int>(query_type));
+    return RC::INVALID_ARGUMENT;
+  }
+
+  auto &fields = match_expr->fields();
+  if (fields.empty()) {
+    LOG_WARN("match against requires at least one field");
+    return RC::INVALID_ARGUMENT;
+  }
+  if (fields.size() != 1) {
+    LOG_WARN("match against currently supports single column only");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Table          *target_table     = nullptr;
+  FullTextIndex  *full_text_index  = nullptr;
+  FieldExpr      *first_field_expr = nullptr;
+
+  for (auto &field_expr : fields) {
+    vector<unique_ptr<Expression>> field_bound;
+    rc = binder.bind_expression(field_expr, field_bound);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    if (!field_bound.empty() && field_bound[0].get() != field_expr.get()) {
+      field_expr.reset(field_bound[0].release());
+    }
+
+    if (field_expr->type() != ExprType::FIELD) {
+      LOG_WARN("match against field is not a column reference");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    auto *field = static_cast<FieldExpr *>(field_expr.get());
+    Table *table = const_cast<Table *>(field->field().table());
+    if (target_table == nullptr) {
+      target_table = table;
+      first_field_expr = field;
+    } else if (target_table != table) {
+      LOG_WARN("match against does not support multi-table fields");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    AttrType field_type = field->field().meta()->type();
+    if (field_type != AttrType::CHARS && field_type != AttrType::TEXTS) {
+      LOG_WARN("match against field must be CHAR/TEXT, got %d", static_cast<int>(field_type));
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+  }
+
+  if (target_table == nullptr || first_field_expr == nullptr) {
+    LOG_WARN("match against failed to resolve target table");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  const FieldMeta *field_meta = first_field_expr->field().meta();
+  if (field_meta == nullptr) {
+    return RC::SCHEMA_FIELD_NOT_EXIST;
+  }
+
+  Index *index = target_table->find_index_by_field(field_meta->name());
+  if (index != nullptr) {
+    full_text_index = dynamic_cast<FullTextIndex *>(index);
+  }
+
+  if (index == nullptr || full_text_index == nullptr || !index->index_meta().is_full_text_index()) {
+    LOG_WARN("field %s lacks full-text index", field_meta->name());
+    return RC::NOT_EXIST;
+  }
+
+  match_expr->set_full_text_index(full_text_index);
+  match_expr->set_target_table(target_table);
+  match_expr->set_parser_name(full_text_index->index_meta().full_text_parser());
+
+  return RC::SUCCESS;
 }
 
 RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique_ptr<Expression>> &bound_expressions)
@@ -274,6 +373,16 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
 
     case ExprType::ARITHMETIC: {
       return bind_arithmetic_expression(expr, bound_expressions);
+    } break;
+
+    case ExprType::MATCH_AGAINST: {
+      auto *match = static_cast<MatchAgainstExpr *>(expr.get());
+      RC rc = bind_match_against_expression(match, *this, bound_expressions);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      bound_expressions.emplace_back(std::move(expr));
+      return RC::SUCCESS;
     } break;
 
     case ExprType::AGGREGATION: {

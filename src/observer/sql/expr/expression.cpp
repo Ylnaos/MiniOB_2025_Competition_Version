@@ -15,24 +15,14 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "common/type/attr_type.h"
 #include "common/lang/string.h"
-#include "common/os/process_param.h"
+#include "sql/expr/jieba_tokenizer.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/expression_iterator.h"
 #include <cmath>
 #include <limits>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <array>
-#include <mutex>
 #include <sstream>
-#include <unordered_set>
-#include <sys/stat.h>
-#include <system_error>
-#include <unistd.h>
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include <unordered_map>
 #include "sql/expr/arithmetic_operator.hpp"
 #include "event/sql_debug.h"
 #include "sql/parser/parse_defs.h"
@@ -42,301 +32,13 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/physical_plan_generator.h"
 #include "session/session.h"
 #include "storage/db/db.h"
-#include "cppjieba/Jieba.hpp"
+#include "storage/index/full_text_index.h"
+#include "common/type/vector_type.h"
 
 using namespace std;
 
 namespace {
 
-namespace fs = std::filesystem;
-
-static fs::path make_absolute_safely(const fs::path &path)
-{
-  if (path.empty()) {
-    return {};
-  }
-  fs::path normalized = path.lexically_normal();
-  if (normalized.is_absolute()) {
-    return normalized;
-  }
-  std::error_code ec;
-  fs::path cwd = fs::current_path(ec);
-  if (ec) {
-    LOG_WARN("make_absolute_safely: failed to get current path, keeping relative path '%s'", normalized.string().c_str());
-    return normalized;
-  }
-  return (cwd / normalized).lexically_normal();
-}
-
-static bool has_jieba_resource(const fs::path &dir)
-{
-  if (dir.empty()) {
-    return false;
-  }
-
-  const fs::path normalized = dir.lexically_normal();
-  const std::string dir_str = normalized.string();
-
-  struct stat dir_stat {};
-  if (::stat(dir_str.c_str(), &dir_stat) != 0 || !S_ISDIR(dir_stat.st_mode)) {
-    return false;
-  }
-
-  auto ensure_file_exists = [](const fs::path &candidate) -> bool {
-    struct stat file_stat {};
-    std::string file_path = candidate.lexically_normal().string();
-    return ::stat(file_path.c_str(), &file_stat) == 0;
-  };
-
-  bool has_dict = ensure_file_exists(normalized / "jieba.dict.utf8");
-  bool has_hmm = ensure_file_exists(normalized / "hmm_model.utf8");
-  bool has_user = ensure_file_exists(normalized / "user.dict.utf8");
-  bool has_idf = ensure_file_exists(normalized / "idf.utf8");
-  bool has_stop = ensure_file_exists(normalized / "stop_words.utf8");
-
-  if (!has_dict) LOG_WARN("Missing jieba.dict.utf8 in %s", normalized.string().c_str());
-  if (!has_hmm) LOG_WARN("Missing hmm_model.utf8 in %s", normalized.string().c_str());
-  if (!has_user) LOG_WARN("Missing user.dict.utf8 in %s", normalized.string().c_str());
-  if (!has_idf) LOG_WARN("Missing idf.utf8 in %s", normalized.string().c_str());
-  if (!has_stop) LOG_WARN("Missing stop_words.utf8 in %s", normalized.string().c_str());
-
-  return has_dict && has_hmm && has_user && has_idf && has_stop;
-}
-
-static void push_unique_path(vector<fs::path> &paths, unordered_set<string> &seen, const fs::path &candidate)
-{
-  fs::path normalized = make_absolute_safely(candidate);
-  if (normalized.empty()) {
-    return;
-  }
-  string key = normalized.string();
-  if (seen.insert(key).second) {
-    paths.emplace_back(std::move(normalized));
-  }
-}
-
-static fs::path locate_executable_dir()
-{
-#ifdef _WIN32
-  // Windows implementation
-  std::array<char, 4096> buffer {};
-  DWORD result = GetModuleFileNameA(NULL, buffer.data(), static_cast<DWORD>(buffer.size()));
-  if (result == 0 || result >= buffer.size()) {
-    return {};
-  }
-  buffer[static_cast<size_t>(result)] = '\0';
-  fs::path exec_path(buffer.data());
-  return make_absolute_safely(exec_path).parent_path();
-#else
-  // Linux/Unix implementation
-  std::array<char, 4096> buffer {};
-  ssize_t captured = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-  if (captured <= 0) {
-    return {};
-  }
-  buffer[static_cast<size_t>(captured)] = '\0';
-  fs::path exec_path(buffer.data());
-  return make_absolute_safely(exec_path).parent_path();
-#endif
-}
-
-static fs::path detect_jieba_dict_dir()
-{
-  vector<fs::path> candidates;
-  unordered_set<string> candidate_seen;
-  auto add_candidate = [&](const fs::path &path) { push_unique_path(candidates, candidate_seen, path); };
-
-  if (const char *env_dir = std::getenv("MINIOB_JIEBA_DICT_DIR"); env_dir != nullptr && env_dir[0] != '\0') {
-    add_candidate(fs::path(env_dir));
-  }
-
-  vector<fs::path> base_dirs;
-  unordered_set<string> base_seen;
-  auto add_base = [&](const fs::path &path) { push_unique_path(base_dirs, base_seen, path); };
-
-  if (const char *miniob_home = std::getenv("MINIOB_HOME"); miniob_home != nullptr && miniob_home[0] != '\0') {
-    add_base(fs::path(miniob_home));
-  }
-
-  if (auto *proc = common::the_process_param(); proc != nullptr) {
-    const string &conf = proc->get_conf();
-    if (!conf.empty()) {
-      fs::path conf_path = make_absolute_safely(fs::path(conf));
-      if (!conf_path.empty()) {
-        fs::path dir = conf_path.parent_path();
-        while (!dir.empty()) {
-          add_base(dir);
-          fs::path parent = dir.parent_path();
-          if (parent == dir) {
-            break;
-          }
-          dir = parent;
-        }
-      }
-    }
-  }
-
-  if (fs::path exec_dir = locate_executable_dir(); !exec_dir.empty()) {
-    fs::path dir = exec_dir;
-    while (!dir.empty()) {
-      add_base(dir);
-      fs::path parent = dir.parent_path();
-      if (parent == dir) {
-        break;
-      }
-      dir = parent;
-    }
-  }
-
-  fs::path source_dir = make_absolute_safely(fs::path(__FILE__)).parent_path();
-  for (int i = 0; i < 6 && !source_dir.empty(); ++i) {
-    add_base(source_dir);
-    fs::path parent = source_dir.parent_path();
-    if (parent == source_dir) {
-      break;
-    }
-    source_dir = parent;
-  }
-
-  for (fs::path current = fs::current_path(); !current.empty();) {
-    add_base(current);
-    fs::path parent = current.parent_path();
-    if (parent == current) {
-      break;
-    }
-    current = parent;
-  }
-
-  for (const auto &base : base_dirs) {
-    add_candidate(base / "deps/3rd/cppjieba/dict");
-  }
-
-  static const char *const relative_dirs[] = {
-      "deps/3rd/cppjieba/dict",
-      "../deps/3rd/cppjieba/dict",
-      "../../deps/3rd/cppjieba/dict",
-      "../../../deps/3rd/cppjieba/dict",
-      "../../../../deps/3rd/cppjieba/dict"};
-  for (const char *rel : relative_dirs) {
-    add_candidate(fs::path(rel));
-  }
-
-  for (const auto &dir : candidates) {
-    LOG_INFO("Checking jieba dict directory: %s", dir.string().c_str());
-    if (has_jieba_resource(dir)) {
-      LOG_INFO("Found valid jieba dict directory: %s", dir.string().c_str());
-      return dir;
-    }
-  }
-
-  LOG_WARN("Failed to locate jieba dictionary directory. Checked %zu candidates.", candidates.size());
-  return {};
-}
-
-class JiebaTokenizer
-{
-public:
-  static RC tokenize(const string &text, const string &parser, vector<string> &tokens)
-  {
-    LOG_INFO("JiebaTokenizer::tokenize called with text='%s', parser='%s'", text.c_str(), parser.c_str());
-
-    string parser_name = parser;
-    if (!parser_name.empty()) {
-      common::str_to_lower(parser_name);
-    }
-    if (!parser_name.empty() && parser_name != "jieba") {
-      LOG_WARN("Unsupported full-text parser: %s", parser.c_str());
-      return RC::UNIMPLEMENTED;
-    }
-
-    LOG_INFO("JiebaTokenizer::tokenize getting context");
-    auto &ctx = context();
-    std::call_once(ctx.init_once, [&ctx]() {
-      LOG_INFO("JiebaTokenizer::tokenize initializing jieba");
-      ctx.init_rc = ctx.initialize();
-      LOG_INFO("JiebaTokenizer::tokenize initialization completed with rc=%d", static_cast<int>(ctx.init_rc));
-    });
-    if (ctx.init_rc != RC::SUCCESS) {
-      LOG_ERROR("JiebaTokenizer::tokenize initialization failed with rc=%d", static_cast<int>(ctx.init_rc));
-      return ctx.init_rc;
-    }
-
-    vector<string> raw;
-    ctx.jieba->Cut(text, raw, true);
-
-    tokens.clear();
-    tokens.reserve(raw.size());
-    for (auto &word : raw) {
-      if (word.empty()) {
-        continue;
-      }
-      if (common::is_blank(word.c_str())) {
-        continue;
-      }
-      if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
-        continue;
-      }
-      tokens.emplace_back(word);
-    }
-    return RC::SUCCESS;
-  }
-
-private:
-  struct Context
-  {
-    std::once_flag init_once;
-    RC init_rc = RC::SUCCESS;
-    unique_ptr<cppjieba::Jieba> jieba;
-    unordered_set<string> stop_words;
-    fs::path dict_dir;
-
-    RC initialize()
-    {
-      dict_dir = detect_jieba_dict_dir();
-      if (dict_dir.empty()) {
-        LOG_WARN("Failed to locate jieba dictionary directory");
-        return RC::NOTFOUND;
-      }
-
-      const string dict_path     = (dict_dir / "jieba.dict.utf8").string();
-      const string hmm_path      = (dict_dir / "hmm_model.utf8").string();
-      const string user_path     = (dict_dir / "user.dict.utf8").string();
-      const string idf_path      = (dict_dir / "idf.utf8").string();
-      const string stop_path     = (dict_dir / "stop_words.utf8").string();
-
-      try {
-        jieba = make_unique<cppjieba::Jieba>(dict_path, hmm_path, user_path, idf_path, stop_path);
-      } catch (const std::exception &e) {
-        LOG_WARN("Failed to initialize jieba tokenizer: %s", e.what());
-        return RC::INTERNAL;
-      }
-
-      ifstream input(stop_path);
-      if (!input.is_open()) {
-        LOG_WARN("Failed to open stop_words file: %s", stop_path.c_str());
-        return RC::IOERR_OPEN;
-      }
-      string line;
-      while (getline(input, line)) {
-        if (!line.empty() && static_cast<unsigned char>(line[0]) == 0xEF && line.size() >= 3 &&
-            static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
-          line.erase(0, 3);
-        }
-        if (line.empty() || common::is_blank(line.c_str())) {
-          continue;
-        }
-        stop_words.insert(line);
-      }
-      return RC::SUCCESS;
-    }
-  };
-
-  static Context &context()
-  {
-    static Context ctx;
-    return ctx;
-  }
-};
 
 static string escape_json_string(const string &input)
 {
@@ -367,6 +69,136 @@ static string tokens_to_json(const vector<string> &tokens)
   }
   oss << "]";
   return oss.str();
+}
+
+static string abbreviate_literal(const string &literal, size_t max_len = 64)
+{
+  if (literal.size() <= max_len) {
+    return literal;
+  }
+  return literal.substr(0, max_len) + "...";
+}
+
+static void trim_inplace(string &s)
+{
+  const char *whitespaces = " \t\n\r\f\v";
+  size_t start = s.find_first_not_of(whitespaces);
+  if (start == string::npos) {
+    s.clear();
+    return;
+  }
+  size_t end = s.find_last_not_of(whitespaces);
+  s = s.substr(start, end - start + 1);
+}
+
+static RC materialize_vector_value(const Value &input, Value &output)
+{
+  if (input.attr_type() == AttrType::NULLS) {
+    output.set_null();
+    return RC::SUCCESS;
+  }
+  if (input.attr_type() == AttrType::VECTORS) {
+    output = input;
+    return RC::SUCCESS;
+  }
+  if (input.attr_type() == AttrType::CHARS || input.attr_type() == AttrType::TEXTS) {
+    const string literal = input.get_string();
+    std::vector<float> elems;
+    if (!VectorType::parse_literal(literal, elems)) {
+      LOG_WARN("Failed to parse vector literal: '%s'", abbreviate_literal(literal).c_str());
+      return RC::INVALID_ARGUMENT;
+    }
+    output.set_type(AttrType::VECTORS);
+    if (!elems.empty()) {
+      output.set_data(reinterpret_cast<const char *>(elems.data()),
+                      static_cast<int>(elems.size() * sizeof(float)));
+    } else {
+      output.set_data(static_cast<const char *>(nullptr), 0);
+    }
+    return RC::SUCCESS;
+  }
+  LOG_WARN("Unsupported argument type for vector conversion: %d", static_cast<int>(input.attr_type()));
+  return RC::INVALID_ARGUMENT;
+}
+
+static RC eval_distance_value(const Value &vec1, const Value &vec2, string dist_type, Value &out)
+{
+  if (vec1.attr_type() == AttrType::NULLS || vec2.attr_type() == AttrType::NULLS) {
+    out.set_null();
+    return RC::SUCCESS;
+  }
+  if (vec1.attr_type() != AttrType::VECTORS || vec2.attr_type() != AttrType::VECTORS) {
+    LOG_WARN("Distance function expects vector types, got %d and %d",
+             static_cast<int>(vec1.attr_type()), static_cast<int>(vec2.attr_type()));
+    return RC::INVALID_ARGUMENT;
+  }
+
+  const int len1 = vec1.length();
+  const int len2 = vec2.length();
+  if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
+      (len1 % static_cast<int>(sizeof(float)) != 0) ||
+      (len2 % static_cast<int>(sizeof(float)) != 0)) {
+    out.set_null();
+    return RC::SUCCESS;
+  }
+
+  const int dim = len1 / static_cast<int>(sizeof(float));
+  const float *a = reinterpret_cast<const float *>(vec1.data());
+  const float *b = reinterpret_cast<const float *>(vec2.data());
+
+  trim_inplace(dist_type);
+  for (char &c : dist_type) {
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  }
+
+  double acc = 0.0;
+  if (dist_type == "EUCLIDEAN") {
+    for (int i = 0; i < dim; ++i) {
+      double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
+      acc += d * d;
+    }
+    acc = std::sqrt(acc);
+  } else if (dist_type == "DOT") {
+    for (int i = 0; i < dim; ++i) {
+      acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+    }
+  } else if (dist_type == "COSINE") {
+    double dot = 0.0;
+    double na  = 0.0;
+    double nb  = 0.0;
+    for (int i = 0; i < dim; ++i) {
+      double va = static_cast<double>(a[i]);
+      double vb = static_cast<double>(b[i]);
+      dot += va * vb;
+      na  += va * va;
+      nb  += vb * vb;
+    }
+    if (na <= 0.0 || nb <= 0.0) {
+      out.set_null();
+      return RC::SUCCESS;
+    }
+    double cos = dot / (std::sqrt(na) * std::sqrt(nb));
+    acc = 1.0 - cos;
+    if (!std::isfinite(acc)) {
+      out.set_null();
+      return RC::SUCCESS;
+    }
+    if (acc < 0.0 && std::fabs(acc) < 1e-8) {
+      acc = 0.0;
+    }
+    if (acc < 0.0) {
+      acc = 0.0;
+    }
+    if (acc > 2.0) {
+      acc = 2.0;
+    }
+  } else {
+    LOG_WARN("Unsupported distance metric: %s", dist_type.c_str());
+    return RC::INVALID_ARGUMENT;
+  }
+
+  out.set_float(static_cast<float>(acc));
+  return RC::SUCCESS;
 }
 
 static RC eval_tokenize_value(const Value &text_value, const Value *parser_value, Value &output)
@@ -2006,12 +1838,11 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       // 现在使用转换后的向量值
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0) {
+      if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
+          (len1 % static_cast<int>(sizeof(float)) != 0) ||
+          (len2 % static_cast<int>(sizeof(float)) != 0)) {
         value.set_null();
         return RC::SUCCESS;
-      }
-      if (len1 != len2) {
-        return RC::INVALID_ARGUMENT;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -2056,40 +1887,11 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       return RC::SUCCESS;
     }
     case FuncType::STRING_TO_VECTOR: {
-      // STRING_TO_VECTOR: 将字符串 "[1,2,3]" 转换为向量，若参数已是向量则原样返回
-      if (arg.attr_type() == AttrType::VECTORS) {
-        value = arg;  // 向量输入直接透传
+      RC conv_rc = materialize_vector_value(arg, value);
+      if (conv_rc == RC::SUCCESS) {
         return RC::SUCCESS;
       }
-      if (arg.attr_type() != AttrType::CHARS && arg.attr_type() != AttrType::TEXTS) {
-        return RC::INVALID_ARGUMENT;
-      }
-      const string literal = arg.get_string();
-      const char *str = literal.c_str();
-      std::vector<float> elems;
-      if (str != nullptr && str[0] == '[') {
-        const char *p = str + 1;
-        while (*p && *p != ']') {
-          char *end = nullptr;
-          float val = strtof(p, &end);
-          if (end == p) {
-            elems.clear();
-            break;
-          }
-          elems.push_back(val);
-          p = end;
-          while (*p == ' ' || *p == '\t') p++;
-          if (*p == ',') p++;
-          while (*p == ' ' || *p == '\t') p++;
-        }
-      }
-      value.set_type(AttrType::VECTORS);
-      if (!elems.empty()) {
-        value.set_data(reinterpret_cast<const char *>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
-      } else {
-        value.set_data(static_cast<const char *>(nullptr), 0);
-      }
-      return RC::SUCCESS;
+      return conv_rc;
     }
     case FuncType::TOKENIZE: {
       Value *parser_ptr = nullptr;
@@ -2133,82 +1935,35 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       rc = child3_->get_value(tuple, arg3);
       if (OB_FAIL(rc)) return rc;
 
-      Value vec_arg1 = arg;
-      Value vec_arg2 = arg2;
-      if (arg.attr_type() != AttrType::VECTORS) {
-        rc = Value::cast_to(arg, AttrType::VECTORS, vec_arg1);
-        if (OB_FAIL(rc)) {
-          return rc;
-        }
+      Value vec_arg1;
+      rc = materialize_vector_value(arg, vec_arg1);
+      if (OB_FAIL(rc)) {
+        return rc;
       }
-      if (arg2.attr_type() != AttrType::VECTORS) {
-        rc = Value::cast_to(arg2, AttrType::VECTORS, vec_arg2);
-        if (OB_FAIL(rc)) {
-          return rc;
-        }
+      Value vec_arg2;
+      rc = materialize_vector_value(arg2, vec_arg2);
+      if (OB_FAIL(rc)) {
+        return rc;
       }
 
-      Value dist_literal = arg3;
-      if (arg3.attr_type() != AttrType::CHARS && arg3.attr_type() != AttrType::TEXTS) {
+      if (vec_arg1.attr_type() == AttrType::NULLS ||
+          vec_arg2.attr_type() == AttrType::NULLS ||
+          arg3.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+
+      Value dist_literal;
+      if (arg3.attr_type() == AttrType::CHARS || arg3.attr_type() == AttrType::TEXTS) {
+        dist_literal = arg3;
+      } else {
         rc = Value::cast_to(arg3, AttrType::CHARS, dist_literal);
         if (OB_FAIL(rc)) {
           return rc;
         }
       }
 
-      const int len1 = vec_arg1.length();
-      const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0) {
-        value.set_null();
-        return RC::SUCCESS;
-      }
-      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
-        return RC::INVALID_ARGUMENT;
-      }
-
-      const int dim = len1 / static_cast<int>(sizeof(float));
-      const float *a = reinterpret_cast<const float *>(vec_arg1.data());
-      const float *b = reinterpret_cast<const float *>(vec_arg2.data());
-      string dist_type = dist_literal.get_string();
-
-      // 转换为大写
-      for (char &c : dist_type) {
-        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-      }
-
-      double acc = 0.0;
-      if (dist_type == "EUCLIDEAN") {
-        for (int i = 0; i < dim; ++i) {
-          double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
-          acc += d * d;
-        }
-        acc = std::sqrt(acc);
-      } else if (dist_type == "DOT") {
-        for (int i = 0; i < dim; ++i) acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
-      } else if (dist_type == "COSINE") {
-        double dot = 0.0, na = 0.0, nb = 0.0;
-        for (int i = 0; i < dim; ++i) {
-          double va = static_cast<double>(a[i]);
-          double vb = static_cast<double>(b[i]);
-          dot += va * vb; na += va * va; nb += vb * vb;
-        }
-        if (na <= 0.0 || nb <= 0.0) {
-        // 零向量或无效向量，无法计算余弦距离
-        LOG_WARN("Cannot compute cosine distance with zero vector (na=%.10f, nb=%.10f)", na, nb);
-        value.set_null();
-        return RC::SUCCESS;
-      }
-        double cos = dot / (std::sqrt(na) * std::sqrt(nb));
-        acc = 1.0 - cos;
-        if (acc < 0.0 && std::fabs(acc) < 1e-6) {
-          acc = 0.0;
-        }
-      } else {
-        return RC::INVALID_ARGUMENT;  // 不支持的距离类型
-      }
-
-      value.set_float(static_cast<float>(acc));
-      return RC::SUCCESS;
+      return eval_distance_value(vec_arg1, vec_arg2, dist_literal.get_string(), value);
     }
   }
   return RC::UNIMPLEMENTED;
@@ -2375,7 +2130,9 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
 
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0 || len1 != len2) {
+      if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
+          (len1 % static_cast<int>(sizeof(float)) != 0) ||
+          (len2 % static_cast<int>(sizeof(float)) != 0)) {
         value.set_null();
         return RC::SUCCESS;
       }
@@ -2410,6 +2167,12 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
         acc = 1.0 - cos;
         if (acc < 0.0 && std::fabs(acc) < 1e-6) {
           acc = 0.0;
+        }
+        if (acc < 0.0) {
+          acc = 0.0;
+        }
+        if (acc > 2.0) {
+          acc = 2.0;
         }
       }
       // 保留两位小数
@@ -2472,13 +2235,12 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
           return RC::SUCCESS;
         }
       }
-      const int len1 = vec_arg1.length();
-      const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0) {
+      if (vec_arg1.attr_type() == AttrType::NULLS || vec_arg2.attr_type() == AttrType::NULLS) {
         value.set_null();
         return RC::SUCCESS;
       }
-      if (len1 != len2 || (len1 % static_cast<int>(sizeof(float)) != 0)) {
+
+      if (arg3.attr_type() == AttrType::NULLS) {
         value.set_null();
         return RC::SUCCESS;
       }
@@ -2491,51 +2253,11 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
           return RC::SUCCESS;
         }
       }
-      string dist_type = dist_arg.get_string();
-      for (char &c : dist_type) {
-        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+      RC rc_eval = eval_distance_value(vec_arg1, vec_arg2, dist_arg.get_string(), value);
+      if (OB_FAIL(rc_eval)) {
+        return rc_eval;
       }
-
-      const int dim = len1 / static_cast<int>(sizeof(float));
-      const float *a = reinterpret_cast<const float *>(vec_arg1.data());
-      const float *b = reinterpret_cast<const float *>(vec_arg2.data());
-
-      double acc = 0.0;
-      if (dist_type == "EUCLIDEAN") {
-        for (int i = 0; i < dim; i++) {
-          double d = static_cast<double>(a[i]) - static_cast<double>(b[i]);
-          acc += d * d;
-        }
-        acc = std::sqrt(acc);
-      } else if (dist_type == "DOT") {
-        for (int i = 0; i < dim; i++) {
-          acc += static_cast<double>(a[i]) * static_cast<double>(b[i]);
-        }
-      } else if (dist_type == "COSINE") {
-        double dot = 0.0;
-        double na  = 0.0;
-        double nb  = 0.0;
-        for (int i = 0; i < dim; i++) {
-          double va = static_cast<double>(a[i]);
-          double vb = static_cast<double>(b[i]);
-          dot += va * vb;
-          na += va * va;
-          nb += vb * vb;
-        }
-        if (na <= 0.0 || nb <= 0.0) {
-          value.set_null();
-          return RC::SUCCESS;
-        }
-        double cos = dot / (std::sqrt(na) * std::sqrt(nb));
-        acc = 1.0 - cos;
-        if (acc < 0.0 && std::fabs(acc) < 1e-6) {
-          acc = 0.0;
-        }
-      } else {
-        return RC::INVALID_ARGUMENT;
-      }
-
-      value.set_float(static_cast<float>(acc));
       return RC::SUCCESS;
     }
   }
@@ -2721,7 +2443,12 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         // 现在使用转换后的向量值进行计算
         const int len1 = vec_arg1.length();
         const int len2 = vec_arg2.length();
-        if (len1 <= 0 || len2 <= 0 || len1 != len2) { return RC::INVALID_ARGUMENT; }
+        if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
+            (len1 % static_cast<int>(sizeof(float)) != 0) ||
+            (len2 % static_cast<int>(sizeof(float)) != 0)) {
+          out.set_null();
+          break;
+        }
         const int dim = len1 / static_cast<int>(sizeof(float));
         const float *a = reinterpret_cast<const float *>(vec_arg1.data());
         const float *b = reinterpret_cast<const float *>(vec_arg2.data());
@@ -2737,38 +2464,25 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
           if (na <= 0.0 || nb <= 0.0) { out.set_null(); break; }
           double cos = dot / (std::sqrt(na) * std::sqrt(nb));
           acc = 1.0 - cos;
+          if (acc < 0.0 && std::fabs(acc) < 1e-8) {
+            acc = 0.0;
+          }
+          if (acc < 0.0) {
+            acc = 0.0;
+          }
+          if (acc > 2.0) {
+            acc = 2.0;
+          }
         }
         double p = std::pow(10.0, 2.0); double rf = round_half_to_even(acc * p) / p;
         out.set_float(static_cast<float>(rf));
       } break;
       case FuncType::STRING_TO_VECTOR: {
-        if (arg.attr_type() == AttrType::VECTORS) {
-          out = arg;
+        RC conv_rc = materialize_vector_value(arg, out);
+        if (conv_rc == RC::SUCCESS) {
           break;
         }
-        if (arg.attr_type() != AttrType::CHARS && arg.attr_type() != AttrType::TEXTS) return RC::INVALID_ARGUMENT;
-        const string literal = arg.get_string();
-        const char *str = literal.c_str();
-        std::vector<float> elems;
-        if (str && str[0] == '[') {
-          const char *p = str + 1;
-          while (*p && *p != ']') {
-            char *end = nullptr;
-            float val = strtof(p, &end);
-            if (end == p) { elems.clear(); break; }
-            elems.push_back(val);
-            p = end;
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == ',') p++;
-            while (*p == ' ' || *p == '\t') p++;
-          }
-        }
-        out.set_type(AttrType::VECTORS);
-        if (!elems.empty()) {
-          out.set_data(reinterpret_cast<const char*>(elems.data()), static_cast<int>(elems.size() * sizeof(float)));
-        } else {
-          out.set_data((const char *)nullptr, 0);
-        }
+        return conv_rc;
       } break;
       case FuncType::TOKENIZE: {
         if (arg.attr_type() == AttrType::NULLS) {
@@ -2809,38 +2523,37 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
       case FuncType::DISTANCE: {
         Value argb = has_arg2 ? arg2_col.get_value(i) : Value();
         Value argc = has_arg3 ? arg3_col.get_value(i) : Value();
-        if (arg.attr_type() != AttrType::VECTORS || argb.attr_type() != AttrType::VECTORS) return RC::INVALID_ARGUMENT;
-        if (argc.attr_type() != AttrType::CHARS) return RC::INVALID_ARGUMENT;
-
-        const int len1 = arg.length();
-        const int len2 = argb.length();
-        if (len1 <= 0 || len2 <= 0) { out.set_null(); break; }
-        if (len1 != len2) { return RC::INVALID_ARGUMENT; }
-
-        const int dim = len1 / static_cast<int>(sizeof(float));
-        const float *a = reinterpret_cast<const float *>(arg.data());
-        const float *b = reinterpret_cast<const float *>(argb.data());
-        string dist_type = argc.get_string();
-        for (char &c : dist_type) {
-          c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        Value vec_arg1;
+        RC rc_vec1 = materialize_vector_value(arg, vec_arg1);
+        if (OB_FAIL(rc_vec1)) {
+          return rc_vec1;
+        }
+        Value vec_arg2;
+        RC rc_vec2 = materialize_vector_value(argb, vec_arg2);
+        if (OB_FAIL(rc_vec2)) {
+          return rc_vec2;
+        }
+        if (vec_arg1.attr_type() == AttrType::NULLS ||
+            vec_arg2.attr_type() == AttrType::NULLS ||
+            argc.attr_type() == AttrType::NULLS) {
+          out.set_null();
+          break;
         }
 
-        double acc = 0.0;
-        if (dist_type == "EUCLIDEAN") {
-          for (int j = 0; j < dim; ++j) { double d = (double)a[j] - (double)b[j]; acc += d*d; }
-          acc = std::sqrt(acc);
-        } else if (dist_type == "DOT") {
-          for (int j = 0; j < dim; ++j) acc += (double)a[j] * (double)b[j];
-        } else if (dist_type == "COSINE") {
-          double dot = 0.0, na = 0.0, nb = 0.0;
-          for (int j = 0; j < dim; ++j) { double va = (double)a[j], vb = (double)b[j]; dot += va*vb; na += va*va; nb += vb*vb; }
-          if (na <= 0.0 || nb <= 0.0) { out.set_null(); break; }
-          double cos = dot / (std::sqrt(na) * std::sqrt(nb));
-          acc = 1.0 - cos;
+        Value dist_literal;
+        if (argc.attr_type() == AttrType::CHARS || argc.attr_type() == AttrType::TEXTS) {
+          dist_literal = argc;
         } else {
-          return RC::INVALID_ARGUMENT;
+          RC rc_cast = Value::cast_to(argc, AttrType::CHARS, dist_literal);
+          if (OB_FAIL(rc_cast)) {
+            return rc_cast;
+          }
         }
-        out.set_float(static_cast<float>(acc));
+
+        RC rc_eval = eval_distance_value(vec_arg1, vec_arg2, dist_literal.get_string(), out);
+        if (OB_FAIL(rc_eval)) {
+          return rc_eval;
+        }
       } break;
     }
     column.append_value(out);
@@ -3349,4 +3062,156 @@ if (set_expr_->type() != ExprType::SUBQUERY) {
   bool result = not_in_ ? !found : found;
   value.set_boolean(result);
   return RC::SUCCESS;
+}
+
+
+MatchAgainstExpr::MatchAgainstExpr(std::vector<Expression *> fields, Expression *query_expr, string parser)
+    : parser_name_(parser.empty() ? "jieba" : std::move(parser))
+{
+  fields_.reserve(fields.size());
+  for (Expression *expr : fields) {
+    fields_.emplace_back(expr);
+  }
+  query_expr_.reset(query_expr);
+}
+
+MatchAgainstExpr::MatchAgainstExpr(std::vector<std::unique_ptr<Expression>> &&fields,
+                                   std::unique_ptr<Expression> query_expr,
+                                   string parser)
+    : fields_(std::move(fields)),
+      query_expr_(std::move(query_expr)),
+      parser_name_(parser.empty() ? "jieba" : std::move(parser))
+{}
+
+unique_ptr<Expression> MatchAgainstExpr::copy() const
+{
+  std::vector<std::unique_ptr<Expression>> field_copies;
+  field_copies.reserve(fields_.size());
+  for (const auto &expr : fields_) {
+    field_copies.emplace_back(expr ? expr->copy() : nullptr);
+  }
+  std::unique_ptr<Expression> query_copy = query_expr_ ? query_expr_->copy() : nullptr;
+
+  auto result = make_unique<MatchAgainstExpr>(std::move(field_copies), std::move(query_copy), parser_name_);
+  result->set_full_text_index(full_text_index_);
+  result->set_target_table(table_);
+  result->set_name(name());
+  if (alias() != nullptr) {
+    result->set_alias(alias());
+  }
+  return result;
+}
+
+RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  if (query_expr_ == nullptr) {
+    LOG_WARN("match against expression missing query");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  if (full_text_index_ == nullptr && table_ != nullptr && !fields_.empty() && fields_[0]) {
+    const Expression *field_expr = fields_[0].get();
+    const FieldExpr   *field     = dynamic_cast<const FieldExpr *>(field_expr);
+    if (field != nullptr) {
+      Index *index = table_->find_index_by_field(field->field_name());
+      full_text_index_ = dynamic_cast<FullTextIndex *>(index);
+      if (full_text_index_ != nullptr) {
+        parser_name_ = full_text_index_->index_meta().full_text_parser();
+      }
+    }
+  }
+
+  if (full_text_index_ == nullptr) {
+    LOG_WARN("match against expression not properly initialized");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Value query_value;
+  RC rc = query_expr_->get_value(tuple, query_value);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  if (query_value.attr_type() == AttrType::NULLS) {
+    value.set_float(0.0f);
+    return RC::SUCCESS;
+  }
+  if (query_value.attr_type() != AttrType::CHARS && query_value.attr_type() != AttrType::TEXTS) {
+    LOG_WARN("match against query must be string/text, got %d", static_cast<int>(query_value.attr_type()));
+    return RC::INVALID_ARGUMENT;
+  }
+
+  const std::string query_str = query_value.get_string();
+  if (cached_query_raw_ != query_str) {
+    std::vector<std::string> tokens;
+    rc = JiebaTokenizer::tokenize(query_str, parser_name_, tokens);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    cached_query_raw_    = query_str;
+    cached_query_tokens_ = std::move(tokens);
+  }
+
+  if (cached_query_tokens_.empty()) {
+    value.set_float(0.0f);
+    return RC::SUCCESS;
+  }
+
+  std::unordered_map<std::string, int> term_freq;
+  int doc_length = 0;
+
+  for (const auto &field_expr : fields_) {
+    if (!field_expr) {
+      continue;
+    }
+    Value field_value;
+    rc = field_expr->get_value(tuple, field_value);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    if (field_value.attr_type() == AttrType::NULLS) {
+      continue;
+    }
+
+    Value text_value;
+    if (field_value.attr_type() == AttrType::CHARS || field_value.attr_type() == AttrType::TEXTS) {
+      text_value = field_value;
+    } else {
+      rc = Value::cast_to(field_value, AttrType::TEXTS, text_value);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
+
+    const std::string doc_text = text_value.get_string();
+    if (doc_text.empty()) {
+      continue;
+    }
+
+    std::vector<std::string> tokens;
+    rc = JiebaTokenizer::tokenize(doc_text, parser_name_, tokens);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    doc_length += static_cast<int>(tokens.size());
+    for (const std::string &token : tokens) {
+      if (!token.empty()) {
+        ++term_freq[token];
+      }
+    }
+  }
+
+  if (doc_length <= 0) {
+    value.set_float(0.0f);
+    return RC::SUCCESS;
+  }
+
+  const double score = full_text_index_->score_tokens(term_freq, doc_length, cached_query_tokens_);
+  value.set_float(static_cast<float>(score));
+  return RC::SUCCESS;
+}
+
+RC MatchAgainstExpr::get_column(Chunk & /*chunk*/, Column & /*column*/)
+{
+  return RC::UNIMPLEMENTED;
 }

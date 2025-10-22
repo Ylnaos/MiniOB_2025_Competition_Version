@@ -21,9 +21,12 @@ See the Mulan PSL v2 for more details. */
 #include "storage/field/field.h"
 #include "sql/expr/aggregator.h"
 #include "storage/common/chunk.h"
+#include <vector>
 
 class Tuple;
 class ParsedSqlNode;
+class Table;
+class FullTextIndex;
 
 /**
  * @defgroup Expression
@@ -49,6 +52,7 @@ enum class ExprType
   ARITHMETIC,   ///< 算术运算
   AGGREGATION,  ///< 聚合运算
   FUNCTION,     ///< 标量函数表达式（如 LENGTH/ROUND/DATE_FORMAT）
+  MATCH_AGAINST,///< 全文检索 MATCH ... AGAINST() 表达式
   SUBQUERY,     ///< 子查询表达式（返回单列结果）
   EXISTS,       ///< EXISTS / NOT EXISTS 子查询判定表达式
   IN_LIST,      ///< IN/NOT IN 表达式（右侧可以为子查询）
@@ -789,4 +793,48 @@ private:
   unique_ptr<Expression>   child_;
   unique_ptr<Expression>   child2_;
   unique_ptr<Expression>   child3_;
+};
+
+/**
+ * @brief MATCH ... AGAINST(...) 全文检索表达式
+ */
+class MatchAgainstExpr : public Expression
+{
+public:
+  MatchAgainstExpr(std::vector<Expression *> fields, Expression *query_expr, string parser = "jieba");
+  MatchAgainstExpr(std::vector<std::unique_ptr<Expression>> &&fields, std::unique_ptr<Expression> query_expr, string parser = "jieba");
+  virtual ~MatchAgainstExpr() = default;
+
+  unique_ptr<Expression> copy() const override;
+
+  ExprType type() const override { return ExprType::MATCH_AGAINST; }
+  AttrType value_type() const override { return AttrType::FLOATS; }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+  RC get_column(Chunk &chunk, Column &column) override;
+
+  std::vector<std::unique_ptr<Expression>> &fields() { return fields_; }
+  const std::vector<std::unique_ptr<Expression>> &fields() const { return fields_; }
+
+  unique_ptr<Expression> &query_expression() { return query_expr_; }
+  const unique_ptr<Expression> &query_expression() const { return query_expr_; }
+
+  void set_full_text_index(FullTextIndex *index) { full_text_index_ = index; }
+  FullTextIndex *full_text_index() const { return full_text_index_; }
+
+  void set_target_table(Table *table) { table_ = table; }
+  Table *target_table() const { return table_; }
+
+  void set_parser_name(string parser) { parser_name_ = std::move(parser); }
+  const string &parser_name() const { return parser_name_; }
+
+private:
+  mutable string cached_query_raw_;
+  mutable vector<string> cached_query_tokens_;
+
+  std::vector<std::unique_ptr<Expression>> fields_;
+  std::unique_ptr<Expression>              query_expr_;
+  mutable string                           parser_name_;
+  mutable FullTextIndex                   *full_text_index_ = nullptr;
+  Table                                   *table_           = nullptr;
 };

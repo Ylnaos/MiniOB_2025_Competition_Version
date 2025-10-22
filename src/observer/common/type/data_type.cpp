@@ -9,6 +9,7 @@ MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
 #include "common/type/char_type.h"
+#include "common/type/boolean_type.h"
 #include "common/type/text_type.h"
 #include "common/type/float_type.h"
 #include "common/type/integer_type.h"
@@ -28,6 +29,6 @@ array<unique_ptr<DataType>, static_cast<int>(AttrType::MAXTYPE)> DataType::type_
     make_unique<FloatType>(),
     make_unique<DateType>(),
     make_unique<VectorType>(),
-    make_unique<DataType>(AttrType::BOOLEANS),
+    make_unique<BooleanType>(),
     make_unique<NullType>(),
 };

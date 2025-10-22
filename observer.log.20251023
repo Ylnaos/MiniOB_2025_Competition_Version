@@ -1,0 +1,85 @@
+[2025-10-23 01:04:04.545019 pid:8181 tid:713ea8f36740 ctx:0 INFO: init@init.cpp:201] >> Output configuration 
+Begin dump configuration
+[]
+
+[LOG]
+LOG_CONSOLE_LEVEL=1
+LOG_FILE_LEVEL=5
+LOG_FILE_NAME=observer.log
+
+Finish dump configuration 
+
+[2025-10-23 01:04:04.549106 pid:8181 tid:713ea8f36740 ctx:0 WARN: create_db@default_handler.cpp:91] >> Db already exists: sys
+[2025-10-23 01:04:04.555961 pid:8181 tid:713ea87ff6c0 ctx:0 INFO: thread_func@thread_pool_executor.cpp:118] >> [ObLsmBackground] thread started
+[2025-10-23 01:04:04.562694 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:128, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.563066 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:256, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.563538 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:384, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.563817 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:512, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.564097 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:640, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.564424 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:768, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.564765 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:896, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.565033 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1024, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.565292 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1152, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.565537 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1280, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.565785 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1408, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.566028 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1536, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.566281 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1664, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.566527 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1792, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.566770 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:1920, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.567112 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:2048, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.567402 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:2176, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.567670 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:2304, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.567930 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:2432, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.568182 pid:8181 tid:713ea8f36740 ctx:0 INFO: extend@mem_pool.h:251] >> Extend one pool, this->size:2560, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.568312 pid:8181 tid:713ea8f36740 ctx:0 INFO: init@mem_pool.h:197] >> Extend one pool, this->size:2560, item_num_per_pool:128, this->name:BufPool.
+[2025-10-23 01:04:04.568448 pid:8181 tid:713ea8f36740 ctx:0 INFO: BufferPoolManager@disk_buffer_pool.cpp:775] >> buffer pool manager init with memory size 20971520, page num: 2560, pool num: 20
+[2025-10-23 01:04:04.667151 pid:8181 tid:713ea8f36740 ctx:0 INFO: load_pages@double_write_buffer.cpp:293] >> double write buffer load pages done. page num=16
+[2025-10-23 01:04:04.668694 pid:8181 tid:713ea8f36740 ctx:0 INFO: init_meta@db.cpp:396] >> Successfully read db meta file. db=sys, file=miniob/db/sys/sys.db, check_point_lsn=0
+[2025-10-23 01:04:04.674951 pid:8181 tid:713ea8f36740 ctx:0 INFO: init@field_meta.cpp:65] >> Init a field with name=id
+[2025-10-23 01:04:04.675180 pid:8181 tid:713ea8f36740 ctx:0 INFO: init@field_meta.cpp:65] >> Init a field with name=embedding
+[2025-10-23 01:04:04.675348 pid:8181 tid:713ea8f36740 ctx:0 DEBUG: sys_field_num@table_meta.cpp:187] >> TableMeta::sys_field_num table=items total_fields=2 invisible_fields=0
+[2025-10-23 01:04:04.676827 pid:8181 tid:713ea8f36740 ctx:0 WARN: open@table.cpp:186] >> LOB file open failed or missing. file=miniob/db/sys/items.lob, rc=FILE_NOT_EXIST
+[2025-10-23 01:04:04.677743 pid:8181 tid:713ea8f36740 ctx:0 ERROR: open_file@disk_buffer_pool.cpp:233] >> Failed to open file miniob/db/sys/items.data, because Permission denied.
+[2025-10-23 01:04:04.678054 pid:8181 tid:713ea8f36740 ctx:0 WARN: open_file@disk_buffer_pool.cpp:854] >> failed to open file name
+[2025-10-23 01:04:04.678456 pid:8181 tid:713ea8f36740 ctx:0 INFO: ~DiskBufferPool@disk_buffer_pool.cpp:226] >> disk buffer pool exit
+[2025-10-23 01:04:04.678555 pid:8181 tid:713ea8f36740 ctx:0 ERROR: init@heap_table_engine.cpp:493] >> Failed to open disk buffer pool for file:miniob/db/sys/items.data. rc=33:IOERR_ACCESS
+[2025-10-23 01:04:04.678683 pid:8181 tid:713ea8f36740 ctx:0 INFO: open@heap_table_engine.cpp:536] >> Opening IVF-Flat vector index: items_ivfflat_idx
+[2025-10-23 01:04:04.679010 pid:8181 tid:713ea8f36740 ctx:0 INFO: apply_meta_config@ivfflat_index.cpp:608] >> IVF-Flat meta config: index_type=IVFFLAT distance=L2_DISTANCE lists=245 probes=5
+[2025-10-23 01:04:23.440370 pid:8181 tid:713ea8f36740 ctx:0 INFO: load_from_file@ivfflat_index.cpp:1227] >> Index loaded from file: miniob/db/sys/items-items_ivfflat_idx.index, centroids=245, dimension=784
+[2025-10-23 01:04:23.440603 pid:8181 tid:713ea8f36740 ctx:0 INFO: open@ivfflat_index.cpp:849] >> Open IVF-Flat index success: lists=245 probes=5
+[2025-10-23 01:04:23.440750 pid:8181 tid:713ea8f36740 ctx:0 INFO: open@ivfflat_index.cpp:852] >> Successfully opened IVF-Flat index, file=miniob/db/sys/items-items_ivfflat_idx.index
+[2025-10-23 01:04:23.440870 pid:8181 tid:713ea8f36740 ctx:0 INFO: open_all_tables@db.cpp:270] >> Open table: items, file: items.table
+[2025-10-23 01:04:23.440961 pid:8181 tid:713ea8f36740 ctx:0 INFO: open_all_tables@db.cpp:273] >> All table have been opened. num=1
+[2025-10-23 01:04:23.444670 pid:8181 tid:713ea8f36740 ctx:0 INFO: open_all_tables@db.cpp:279] >> All view have been opened. num=0
+[2025-10-23 01:04:23.448928 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:0,lsn=0
+[2025-10-23 01:04:23.449389 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27442,lsn=0
+[2025-10-23 01:04:23.449575 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27443,lsn=0
+[2025-10-23 01:04:23.449748 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27456,lsn=0
+[2025-10-23 01:04:23.449920 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27445,lsn=0
+[2025-10-23 01:04:23.450102 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27455,lsn=0
+[2025-10-23 01:04:23.450273 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27454,lsn=0
+[2025-10-23 01:04:23.450445 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27453,lsn=0
+[2025-10-23 01:04:23.450640 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27452,lsn=0
+[2025-10-23 01:04:23.450823 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27451,lsn=0
+[2025-10-23 01:04:23.451057 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27450,lsn=0
+[2025-10-23 01:04:23.451284 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27449,lsn=0
+[2025-10-23 01:04:23.451487 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27448,lsn=0
+[2025-10-23 01:04:23.451722 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27447,lsn=0
+[2025-10-23 01:04:23.451957 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27446,lsn=0
+[2025-10-23 01:04:23.452160 pid:8181 tid:713ea8f36740 ctx:0 TRACE: write_page@double_write_buffer.cpp:167] >> double write buffer write page invalid. buffer_pool_id:3,page_num:27444,lsn=0
+[2025-10-23 01:04:23.452706 pid:8181 tid:713ea8f36740 ctx:0 TRACE: recover@db.cpp:333] >> db recover begin. check_point_lsn=0
+[2025-10-23 01:04:23.452942 pid:8181 tid:713ea8f36740 ctx:0 INFO: recover@db.cpp:360] >> Successfully recover db. db=sys checkpoint_lsn=0
+[2025-10-23 01:04:23.453110 pid:8181 tid:713ea8f36740 ctx:0 TRACE: set_current_db@session.cpp:56] >> change db to sys
+[2025-10-23 01:04:23.453245 pid:8181 tid:713ea8f36740 ctx:0 INFO: init@default_handler.cpp:67] >> Default handler init with miniob success
+[2025-10-23 01:04:23.453397 pid:8181 tid:713ea8f36740 ctx:0 INFO: init@init.cpp:216] >> Successfully init utility
+[2025-10-23 01:04:23.484902 pid:8181 tid:713ea8f36740 ctx:635c44844680 INFO: handle_request@parse_stage.cpp:36] >> parse stage receive sql: select 1;
+[2025-10-23 01:04:23.486228 pid:8181 tid:713ea8f36740 ctx:635c44844680 DEBUG: yylex@lex_sql.l:104] >> SELECT
+[2025-10-23 01:04:23.486368 pid:8181 tid:713ea8f36740 ctx:635c44844680 DEBUG: yylex@lex_sql.l:84] >> NUMBER
+[2025-10-23 01:04:23.486483 pid:8181 tid:713ea8f36740 ctx:635c44844680 DEBUG: yylex@lex_sql.l:87] >> SEMICOLON
+[2025-10-23 01:04:23.487658 pid:8181 tid:713ea8f36740 ctx:635c44844680 ERROR: create_plan@logical_plan_generator.cpp:187] >> [TRACE] Creating logical plan for SelectStmt: filter_stmt=EXISTS, where_expr=NULL, tables=0
+[2025-10-23 01:04:23.487807 pid:8181 tid:713ea8f36740 ctx:635c44844680 ERROR: create_plan@logical_plan_generator.cpp:198] >> [TRACE] After create_plan(filter_stmt): predicate_oper=NULL
+[2025-10-23 01:04:23.487943 pid:8181 tid:713ea8f36740 ctx:635c44844680 ERROR: create_plan@logical_plan_generator.cpp:203] >> [TRACE] filter_stmt details: filter_units=0
+[2025-10-23 01:04:23.488052 pid:8181 tid:713ea8f36740 ctx:635c44844680 ERROR: create_plan@logical_plan_generator.cpp:246] >> [TRACE] Before connecting predicate: predicate_oper=NULL, table_oper=NULL
+[2025-10-23 01:04:23.488160 pid:8181 tid:713ea8f36740 ctx:635c44844680 INFO: rewrite@vector_rewrite_rule.cpp:141] >> vector rewrite skip: oper type is not PROJECTION (type=0)
+[2025-10-23 01:04:23.488731 pid:8181 tid:713ea8f36740 ctx:635c44844680 TRACE: generate_physical_plan@optimize_stage.cpp:175] >> use tuple iterator
+[2025-10-23 01:04:23.489111 pid:8181 tid:713ea8f36740 ctx:635c44844680 INFO: handle_event@sql_task_handler.cpp:46] >> write result return SUCCESS

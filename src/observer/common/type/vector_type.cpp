@@ -23,6 +23,8 @@ See the Mulan PSL v2 for more details. */
 namespace {
 inline int dim_from_len(int len) { return len <= 0 ? 0 : (len / static_cast<int>(sizeof(float))); }
 
+constexpr int kMaxVectorDimension = 16383;
+
 RC vector_elementwise(const Value &left, const Value &right, Value &result,
                       const std::function<float(float, float)> &op)
 {
@@ -159,6 +161,10 @@ bool VectorType::parse_literal(const std::string &text, std::vector<float> &resu
       return false;
     }
     result.push_back(value);
+    if (result.size() > static_cast<size_t>(kMaxVectorDimension)) {
+      result.clear();
+      return false;
+    }
     pos = static_cast<size_t>(endptr - text.c_str());
 
     skip_spaces(pos);
