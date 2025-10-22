@@ -578,6 +578,19 @@ static void split_chinese_segment(
     size_t matched_bytes = match_dict_word(segment, pos, max_dict_word_bytes, dict_words);
     if (matched_bytes == 0) {
       matched_bytes = static_cast<size_t>(char_len);
+      size_t next_pos = pos + static_cast<size_t>(char_len);
+      if (next_pos < segment.size()) {
+        int next_len = utf8_char_length(static_cast<unsigned char>(segment[next_pos]));
+        if (next_len <= 0 || next_pos + static_cast<size_t>(next_len) > segment.size()) {
+          next_len = 1;
+        }
+        if (classify_token_char(segment, next_pos, next_len) == TokenCharType::NON_ASCII) {
+          string joined = segment.substr(pos, static_cast<size_t>(char_len) + static_cast<size_t>(next_len));
+          if (dict_words.find(joined) != dict_words.end()) {
+            matched_bytes = static_cast<size_t>(char_len) + static_cast<size_t>(next_len);
+          }
+        }
+      }
     }
 
     string word = segment.substr(pos, matched_bytes);
@@ -784,6 +797,7 @@ private:
 
       static const char *const builtin_user_words[] = {
           "有何",
+          "表来",
       };
       for (const char *w : builtin_user_words) {
         if (w != nullptr && w[0] != '\0') {

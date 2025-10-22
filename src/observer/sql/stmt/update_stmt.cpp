@@ -218,9 +218,14 @@ static RC analyze_view_for_update(Db *db, View *view,
         view_columns.emplace(to_lower_copy(label), ViewColumnMapping {target_rel->table, field_meta});
       }
     } else {
-      LOG_WARN("view expression unsupported for update. view=%s expr_type=%d",
-          view->name(), static_cast<int>(expr->type()));
-      return RC::UNSUPPORTED;
+      std::string default_label;
+      if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+        default_label = expr->alias();
+      }
+      std::string label = consume_label(default_label);
+      if (!label.empty()) {
+        view_columns.emplace(to_lower_copy(label), ViewColumnMapping {nullptr, nullptr});
+      }
     }
   }
 
@@ -300,8 +305,8 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
       }
       Table *col_table = iter->second.table;
       if (col_table == nullptr) {
-        LOG_WARN("column mapping without base table when updating view %s", table_name);
-        return RC::INTERNAL;
+        LOG_WARN("field %s is not updatable (expression column). view=%s", attr_name.c_str(), table_name);
+        return RC::UNSUPPORTED;
       }
       if (target_table == nullptr) {
         target_table = col_table;
@@ -334,6 +339,11 @@ RC UpdateStmt::create(Db *db, const UpdateSqlNode &update, Stmt *&stmt)
         return RC::UNSUPPORTED;
       }
       field_meta = iter->second.field_meta;
+      if (field_meta == nullptr) {
+        LOG_WARN("field %s is an expression column and cannot be updated via view %s",
+            update.attribute_names[i].c_str(), table_name);
+        return RC::UNSUPPORTED;
+      }
     } else {
       field_meta = table->table_meta().field(update.attribute_names[i].c_str());
     }
