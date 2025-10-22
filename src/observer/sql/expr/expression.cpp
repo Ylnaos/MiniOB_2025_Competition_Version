@@ -411,13 +411,23 @@ static void emit_clean_token(vector<string> &tokens, const unordered_set<string>
     return;
   }
 
-  if (stop_words.find(cleaned) != stop_words.end()) {
-    return;
+  bool all_ascii = true;
+  for (unsigned char ch : cleaned) {
+    if (ch & 0x80u) {
+      all_ascii = false;
+      break;
+    }
   }
-  string cleaned_lower = cleaned;
-  common::str_to_lower(cleaned_lower);
-  if (stop_words.find(cleaned_lower) != stop_words.end()) {
-    return;
+
+  if (all_ascii) {
+    if (stop_words.find(cleaned) != stop_words.end()) {
+      return;
+    }
+    string cleaned_lower = cleaned;
+    common::str_to_lower(cleaned_lower);
+    if (stop_words.find(cleaned_lower) != stop_words.end()) {
+      return;
+    }
   }
   tokens.emplace_back(std::move(cleaned));
 }
