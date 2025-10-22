@@ -32,6 +32,11 @@ See the Mulan PSL v2 for more details. */
 #include <sys/stat.h>
 #include <system_error>
 #include <unistd.h>
+#include <cctype>
+#include <cstring>
+#include <algorithm>
+#include <utility>
+#include <type_traits>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -52,6 +57,19 @@ namespace {
 
 namespace fs = std::filesystem;
 constexpr size_t VECTOR_MAX_DIM = 16383;
+
+template <typename JiebaType>
+auto invoke_cut(const JiebaType &jieba, const string &text, vector<string> &out, bool hmm, int)
+    -> decltype(jieba.Cut(text, out, hmm), void())
+{
+  jieba.Cut(text, out, hmm);
+}
+
+template <typename JiebaType>
+void invoke_cut(const JiebaType &jieba, const string &text, vector<string> &out, bool, long)
+{
+  jieba.Cut(text, out);
+}
 
 static RC parse_string_like_to_vector(const Value &input, Value &output)
 {
@@ -244,8 +262,14 @@ static fs::path detect_jieba_dict_dir()
     current = parent;
   }
 
+  static const char *const possible_suffixes[] = {
+      "deps/3rd/cppjieba/dict",
+      "cppjieba/dict"};
+
   for (const auto &base : base_dirs) {
-    add_candidate(base / "deps/3rd/cppjieba/dict");
+    for (const char *suffix : possible_suffixes) {
+      add_candidate(base / suffix);
+    }
   }
 
   static const char *const relative_dirs[] = {
@@ -253,7 +277,12 @@ static fs::path detect_jieba_dict_dir()
       "../deps/3rd/cppjieba/dict",
       "../../deps/3rd/cppjieba/dict",
       "../../../deps/3rd/cppjieba/dict",
-      "../../../../deps/3rd/cppjieba/dict"};
+      "../../../../deps/3rd/cppjieba/dict",
+      "cppjieba/dict",
+      "../cppjieba/dict",
+      "../../cppjieba/dict",
+      "../../../cppjieba/dict",
+      "../../../../cppjieba/dict"};
   for (const char *rel : relative_dirs) {
     add_candidate(fs::path(rel));
   }
@@ -268,6 +297,328 @@ static fs::path detect_jieba_dict_dir()
 
   LOG_WARN("Failed to locate jieba dictionary directory. Checked %zu candidates.", candidates.size());
   return {};
+}
+
+static bool is_ascii_split_char(char ch)
+{
+  switch (ch) {
+    case '_':
+    case '.':
+    case ',':
+    case ';':
+    case ':':
+    case '!':
+    case '?':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case '<':
+    case '>':
+    case '\'':
+    case '"':
+    case '\\':
+    case '/':
+    case '|':
+    case '+':
+    case '-':
+    case '=':
+    case '@':
+    case '#':
+    case '$':
+    case '%':
+    case '^':
+    case '&':
+    case '*':
+      return true;
+    default: break;
+  }
+  return false;
+}
+
+static const char *const kUnicodePunctuations[] = {"？", "。", "，", "！", "、", "；", "：", "“", "”", "‘", "’", "（", "）",
+    "【", "】", "《", "》", "——", "……"};
+static const size_t kUnicodePunctuationCount = sizeof(kUnicodePunctuations) / sizeof(kUnicodePunctuations[0]);
+
+static void remove_unicode_punctuation(string &token)
+{
+  for (size_t i = 0; i < kUnicodePunctuationCount; ++i) {
+    const char *punct = kUnicodePunctuations[i];
+    size_t pos = 0;
+    const size_t len = std::strlen(punct);
+    while (len > 0 && (pos = token.find(punct, pos)) != string::npos) {
+      token.erase(pos, len);
+    }
+  }
+}
+
+static bool is_unicode_punctuation(const string &text, size_t offset, int char_len)
+{
+  for (size_t i = 0; i < kUnicodePunctuationCount; ++i) {
+    const char *punct = kUnicodePunctuations[i];
+    size_t len = std::strlen(punct);
+    if (len == static_cast<size_t>(char_len) && text.compare(offset, len, punct) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void emit_clean_token(vector<string> &tokens, const unordered_set<string> &stop_words, string token)
+{
+  if (token.empty()) {
+    return;
+  }
+
+  remove_unicode_punctuation(token);
+
+  size_t begin = 0;
+  while (begin < token.size() &&
+         (std::isspace(static_cast<unsigned char>(token[begin])) || std::ispunct(static_cast<unsigned char>(token[begin])))) {
+    ++begin;
+  }
+  size_t end = token.size();
+  while (end > begin &&
+         (std::isspace(static_cast<unsigned char>(token[end - 1])) || std::ispunct(static_cast<unsigned char>(token[end - 1])))) {
+    --end;
+  }
+
+  if (end <= begin) {
+    return;
+  }
+
+  string cleaned = token.substr(begin, end - begin);
+  remove_unicode_punctuation(cleaned);
+  common::strip(cleaned);
+  if (cleaned.empty()) {
+    return;
+  }
+
+  if (stop_words.find(cleaned) != stop_words.end()) {
+    return;
+  }
+  string cleaned_lower = cleaned;
+  common::str_to_lower(cleaned_lower);
+  if (stop_words.find(cleaned_lower) != stop_words.end()) {
+    return;
+  }
+  tokens.emplace_back(std::move(cleaned));
+}
+
+enum class TokenCharType
+{
+  ASCII_ALNUM,
+  NON_ASCII,
+  ASCII_OTHER
+};
+
+static int utf8_char_length(unsigned char lead)
+{
+  if ((lead & 0x80u) == 0) {
+    return 1;
+  }
+  if ((lead & 0xE0u) == 0xC0u) {
+    return 2;
+  }
+  if ((lead & 0xF0u) == 0xE0u) {
+    return 3;
+  }
+  if ((lead & 0xF8u) == 0xF0u) {
+    return 4;
+  }
+  return 1;
+}
+
+static TokenCharType classify_token_char(const string &token, size_t offset, int char_len)
+{
+  if (char_len > 1 && is_unicode_punctuation(token, offset, char_len)) {
+    return TokenCharType::ASCII_OTHER;
+  }
+  if (char_len == 1) {
+    unsigned char ch = static_cast<unsigned char>(token[offset]);
+    if (std::isalnum(ch)) {
+      return TokenCharType::ASCII_ALNUM;
+    }
+    return TokenCharType::ASCII_OTHER;
+  }
+  return TokenCharType::NON_ASCII;
+}
+
+static void split_chinese_segment(
+    const string &segment,
+    const unordered_set<string> &stop_words,
+    const unordered_set<string> &dict_words,
+    size_t max_dict_word_bytes,
+    vector<string> &tokens);
+
+static void split_mixed_token(const string &piece,
+    const unordered_set<string> &stop_words,
+    const unordered_set<string> &dict_words,
+    size_t max_dict_word_bytes,
+    vector<string> &tokens)
+{
+  size_t i = 0;
+  while (i < piece.size()) {
+    unsigned char lead = static_cast<unsigned char>(piece[i]);
+    int char_len = utf8_char_length(lead);
+    if (char_len <= 0 || i + char_len > piece.size()) {
+      char_len = 1;
+    }
+    TokenCharType current_type = classify_token_char(piece, i, char_len);
+    if (current_type == TokenCharType::ASCII_OTHER) {
+      i += char_len;
+      continue;
+    }
+    if (current_type == TokenCharType::ASCII_ALNUM) {
+      size_t j = i + char_len;
+      while (j < piece.size()) {
+        unsigned char lead2 = static_cast<unsigned char>(piece[j]);
+        int len2 = utf8_char_length(lead2);
+        if (len2 <= 0 || j + len2 > piece.size()) {
+          len2 = 1;
+        }
+        TokenCharType type2 = classify_token_char(piece, j, len2);
+        if (type2 != TokenCharType::ASCII_ALNUM) {
+          break;
+        }
+        j += len2;
+      }
+      emit_clean_token(tokens, stop_words, piece.substr(i, j - i));
+      i = j;
+      continue;
+    }
+
+    size_t j = i + char_len;
+    while (j < piece.size()) {
+      unsigned char lead2 = static_cast<unsigned char>(piece[j]);
+      int len2 = utf8_char_length(lead2);
+      if (len2 <= 0 || j + len2 > piece.size()) {
+        len2 = 1;
+      }
+      TokenCharType type2 = classify_token_char(piece, j, len2);
+      if (type2 != TokenCharType::NON_ASCII) {
+        break;
+      }
+      j += len2;
+    }
+    split_chinese_segment(piece.substr(i, j - i), stop_words, dict_words, max_dict_word_bytes, tokens);
+    i = j;
+  }
+}
+
+static size_t match_dict_word(const string &text,
+    size_t offset,
+    size_t max_dict_word_bytes,
+    const unordered_set<string> &dict_words)
+{
+  size_t matched = 0;
+  size_t consumed = 0;
+  size_t pos = offset;
+  const size_t limit = std::min(max_dict_word_bytes, text.size() - offset);
+  while (pos < text.size() && consumed < limit) {
+    int len = utf8_char_length(static_cast<unsigned char>(text[pos]));
+    if (len <= 0 || pos + len > text.size()) {
+      len = 1;
+    }
+    consumed += static_cast<size_t>(len);
+    string candidate = text.substr(offset, consumed);
+    if (dict_words.find(candidate) != dict_words.end()) {
+      matched = consumed;
+    }
+    pos += static_cast<size_t>(len);
+  }
+  return matched;
+}
+
+static void split_chinese_segment(
+    const string &segment,
+    const unordered_set<string> &stop_words,
+    const unordered_set<string> &dict_words,
+    size_t max_dict_word_bytes,
+    vector<string> &tokens)
+{
+  size_t pos = 0;
+  while (pos < segment.size()) {
+    int char_len = utf8_char_length(static_cast<unsigned char>(segment[pos]));
+    if (char_len <= 0 || pos + char_len > segment.size()) {
+      char_len = 1;
+    }
+    if (is_unicode_punctuation(segment, pos, char_len)) {
+      pos += static_cast<size_t>(char_len);
+      continue;
+    }
+
+    size_t matched_bytes = match_dict_word(segment, pos, max_dict_word_bytes, dict_words);
+    if (matched_bytes == 0) {
+      matched_bytes = static_cast<size_t>(char_len);
+    }
+
+    string word = segment.substr(pos, matched_bytes);
+    emit_clean_token(tokens, stop_words, std::move(word));
+    pos += matched_bytes;
+  }
+}
+
+static string normalize_text_for_segmentation(const string &input)
+{
+  string output;
+  output.reserve(input.size() * 2);
+
+  TokenCharType prev_type = TokenCharType::ASCII_OTHER;
+
+  size_t i = 0;
+  while (i < input.size()) {
+    unsigned char lead = static_cast<unsigned char>(input[i]);
+    int char_len = utf8_char_length(lead);
+    if (char_len <= 0 || i + char_len > input.size()) {
+      char_len = 1;
+    }
+    TokenCharType type = classify_token_char(input, i, char_len);
+    if (type == TokenCharType::ASCII_OTHER) {
+      if (!output.empty() && output.back() != ' ') {
+        output.push_back(' ');
+      }
+      i += char_len;
+      prev_type = TokenCharType::ASCII_OTHER;
+      continue;
+    }
+    if (!output.empty()) {
+      if (output.back() != ' ' && (prev_type == TokenCharType::ASCII_OTHER || prev_type != type)) {
+        output.push_back(' ');
+      }
+    }
+    output.append(input, i, char_len);
+    prev_type = type;
+    i += char_len;
+  }
+  return output;
+}
+
+static void process_word_into_tokens(const string &word,
+    const unordered_set<string> &stop_words,
+    const unordered_set<string> &dict_words,
+    size_t max_dict_word_bytes,
+    vector<string> &tokens)
+{
+  if (word.empty()) {
+    return;
+  }
+
+  size_t start = 0;
+  const size_t len = word.size();
+
+  for (size_t i = 0; i <= len; ++i) {
+    bool at_end = (i == len);
+    char ch = at_end ? '\0' : word[i];
+    if (at_end || is_ascii_split_char(ch)) {
+      if (i > start) {
+        split_mixed_token(word.substr(start, i - start), stop_words, dict_words, max_dict_word_bytes, tokens);
+      }
+      start = i + 1;
+    }
+  }
 }
 
 class JiebaTokenizer
@@ -298,22 +649,21 @@ public:
       return ctx.init_rc;
     }
 
+    const string normalized = normalize_text_for_segmentation(text);
+
     vector<string> raw;
-    ctx.jieba->Cut(text, raw, true);
+    invoke_cut(*ctx.jieba, normalized, raw, true, 0);
 
     tokens.clear();
-    tokens.reserve(raw.size());
-    for (auto &word : raw) {
+    tokens.reserve(raw.size() * 4);
+    for (const auto &word : raw) {
       if (word.empty()) {
         continue;
       }
       if (common::is_blank(word.c_str())) {
         continue;
       }
-      if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
-        continue;
-      }
-      tokens.emplace_back(word);
+      process_word_into_tokens(word, ctx.stop_words, ctx.dict_words, ctx.max_dict_word_bytes, tokens);
     }
     return RC::SUCCESS;
   }
@@ -325,6 +675,8 @@ private:
     RC init_rc = RC::SUCCESS;
     unique_ptr<cppjieba::Jieba> jieba;
     unordered_set<string> stop_words;
+    unordered_set<string> dict_words;
+    size_t max_dict_word_bytes = 0;
     fs::path dict_dir;
 
     RC initialize()
@@ -363,6 +715,26 @@ private:
           continue;
         }
         stop_words.insert(line);
+      }
+
+      ifstream dict_input(dict_path);
+      if (!dict_input.is_open()) {
+        LOG_WARN("Failed to open jieba dict file: %s", dict_path.c_str());
+        return RC::IOERR_OPEN;
+      }
+      while (getline(dict_input, line)) {
+        if (line.empty()) {
+          continue;
+        }
+        size_t pos = line.find(' ');
+        string word = (pos == string::npos) ? line : line.substr(0, pos);
+        if (word.empty()) {
+          continue;
+        }
+        dict_words.insert(word);
+        if (word.size() > max_dict_word_bytes) {
+          max_dict_word_bytes = word.size();
+        }
       }
       return RC::SUCCESS;
     }
