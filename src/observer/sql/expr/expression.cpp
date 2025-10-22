@@ -205,6 +205,9 @@ static fs::path detect_jieba_dict_dir()
   if (const char *env_dir = std::getenv("MINIOB_JIEBA_DICT_DIR"); env_dir != nullptr && env_dir[0] != '\0') {
     add_candidate(fs::path(env_dir));
   }
+  if (const char *cppjieba_dir = std::getenv("CPPJIEBA_DICT_DIR"); cppjieba_dir != nullptr && cppjieba_dir[0] != '\0') {
+    add_candidate(fs::path(cppjieba_dir));
+  }
 
   vector<fs::path> base_dirs;
   unordered_set<string> base_seen;
@@ -271,6 +274,17 @@ static fs::path detect_jieba_dict_dir()
     for (const char *suffix : possible_suffixes) {
       add_candidate(base / suffix);
     }
+  }
+
+  static const char *const absolute_candidates[] = {
+      "/usr/share/cppjieba/dict",
+      "/usr/local/share/cppjieba/dict",
+      "/opt/homebrew/share/cppjieba/dict",
+      "/opt/homebrew/opt/cppjieba/share/cppjieba/dict",
+      "/usr/share/jieba/dict",
+      "/usr/local/share/jieba/dict"};
+  for (const char *abs_path : absolute_candidates) {
+    add_candidate(fs::path(abs_path));
   }
 
   static const char *const relative_dirs[] = {

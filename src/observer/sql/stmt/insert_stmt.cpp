@@ -67,6 +67,12 @@ struct ViewColumnInfo
   std::string column_name;
 };
 
+struct NormalizedViewRow
+{
+  std::vector<Value> values;
+  std::vector<bool>  specified;
+};
+
 static RC build_default_row(const TableMeta &table_meta, std::vector<Value> &defaults)
 {
   const int sys_num    = table_meta.sys_field_num();
@@ -354,7 +360,7 @@ static RC rewrite_insert_for_view(
   }
 
   const size_t view_column_count = view_columns.size();
-  std::vector<std::vector<Value>> normalized_view_rows;
+  std::vector<NormalizedViewRow> normalized_view_rows;
   normalized_view_rows.reserve(inserts.rows.size());
 
   std::vector<Value> view_defaults(view_column_count);
@@ -370,7 +376,10 @@ static RC rewrite_insert_for_view(
             view->name(), row_idx, src_row.size(), view_column_count);
         return RC::SCHEMA_FIELD_MISSING;
       }
-      normalized_view_rows.push_back(src_row);
+      NormalizedViewRow norm_row;
+      norm_row.values     = src_row;
+      norm_row.specified.assign(view_column_count, true);
+      normalized_view_rows.emplace_back(std::move(norm_row));
     }
   } else {
     std::vector<int> attr_to_index;
@@ -395,11 +404,15 @@ static RC rewrite_insert_for_view(
         return RC::SCHEMA_FIELD_MISSING;
       }
 
-      std::vector<Value> view_row = view_defaults;
+      NormalizedViewRow norm_row;
+      norm_row.values     = view_defaults;
+      norm_row.specified.assign(view_column_count, false);
       for (size_t i = 0; i < attr_to_index.size(); ++i) {
-        view_row[attr_to_index[i]] = src_row[i];
+        int col_idx = attr_to_index[i];
+        norm_row.values[col_idx]    = src_row[i];
+        norm_row.specified[col_idx] = true;
       }
-      normalized_view_rows.emplace_back(std::move(view_row));
+      normalized_view_rows.emplace_back(std::move(norm_row));
     }
   }
 
@@ -423,14 +436,29 @@ static RC rewrite_insert_for_view(
     rows.reserve(normalized_view_rows.size());
   }
 
+  int global_target_relation = -1;
+
   for (size_t row_idx = 0; row_idx < normalized_view_rows.size(); ++row_idx) {
-    const std::vector<Value> &view_row = normalized_view_rows[row_idx];
+    const NormalizedViewRow &view_row = normalized_view_rows[row_idx];
     std::unordered_map<FieldKey, Value, FieldKeyHash> assignments;
     assignments.reserve(view_columns.size());
 
+    int row_target_relation = -1;
+
     for (size_t col_idx = 0; col_idx < view_columns.size(); ++col_idx) {
+      if (!view_row.specified[col_idx]) {
+        continue;
+      }
       const ViewColumnInfo &col = view_columns[col_idx];
-      const Value          &val = view_row[col_idx];
+      const Value          &val = view_row.values[col_idx];
+
+      if (row_target_relation == -1) {
+        row_target_relation = static_cast<int>(col.field.relation_index);
+      } else if (row_target_relation != static_cast<int>(col.field.relation_index)) {
+        LOG_WARN("insert row touches multiple base tables via view. view=%s row=%zu",
+            view->name(), row_idx);
+        return RC::UNSUPPORTED;
+      }
 
       auto result = assignments.emplace(col.field, val);
       if (!result.second) {
@@ -442,6 +470,19 @@ static RC rewrite_insert_for_view(
           return RC::INVALID_ARGUMENT;
         }
       }
+    }
+
+    if (row_target_relation == -1) {
+      LOG_WARN("no base field specified for view insert row. view=%s row=%zu", view->name(), row_idx);
+      return RC::INVALID_ARGUMENT;
+    }
+
+    if (global_target_relation == -1) {
+      global_target_relation = row_target_relation;
+    } else if (global_target_relation != row_target_relation) {
+      LOG_WARN("insert statement touches multiple base tables via view. view=%s first=%d current=%d row=%zu",
+          view->name(), global_target_relation, row_target_relation, row_idx);
+      return RC::UNSUPPORTED;
     }
 
     bool updated = true;
@@ -457,12 +498,14 @@ static RC rewrite_insert_for_view(
             return RC::INVALID_ARGUMENT;
           }
         } else if (it_left != assignments.end()) {
-          if (assignments.find(eq.second) == assignments.end()) {
+          if (eq.second.relation_index == static_cast<size_t>(global_target_relation) &&
+              assignments.find(eq.second) == assignments.end()) {
             assignments.emplace(eq.second, it_left->second);
             updated = true;
           }
         } else if (it_right != assignments.end()) {
-          if (assignments.find(eq.first) == assignments.end()) {
+          if (eq.first.relation_index == static_cast<size_t>(global_target_relation) &&
+              assignments.find(eq.first) == assignments.end()) {
             assignments.emplace(eq.first, it_right->second);
             updated = true;
           }
@@ -470,24 +513,25 @@ static RC rewrite_insert_for_view(
       }
     }
 
-    for (size_t rel_idx = 0; rel_idx < relations.size(); ++rel_idx) {
-      std::vector<Value> row_values = table_defaults[rel_idx];
-      bool               has_value  = false;
+    std::vector<Value> row_values = table_defaults[static_cast<size_t>(row_target_relation)];
+    bool               has_value  = false;
 
-      for (size_t field_idx = 0; field_idx < row_values.size(); ++field_idx) {
-        FieldKey key {rel_idx, static_cast<int>(field_idx)};
-        auto     it = assignments.find(key);
-        if (it != assignments.end()) {
-          row_values[field_idx] = it->second;
-          has_value = true;
-        }
-      }
-
-      // 只有当该基础表有实际数据需要插入时，才添加到per_table_rows中
-      if (has_value) {
-        per_table_rows[rel_idx].emplace_back(std::move(row_values));
+    for (size_t field_idx = 0; field_idx < row_values.size(); ++field_idx) {
+      FieldKey key {static_cast<size_t>(row_target_relation), static_cast<int>(field_idx)};
+      auto     it = assignments.find(key);
+      if (it != assignments.end()) {
+        row_values[field_idx] = it->second;
+        has_value = true;
       }
     }
+
+    if (!has_value) {
+      LOG_WARN("no effective assignment generated for view insert row. view=%s row=%zu",
+          view->name(), row_idx);
+      return RC::INVALID_ARGUMENT;
+    }
+
+    per_table_rows[static_cast<size_t>(row_target_relation)].emplace_back(std::move(row_values));
   }
 
   // 只为有数据需要插入的基础表生成InsertTask
