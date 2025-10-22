@@ -24,3 +24,5 @@ select 1;
 select * from csq_2;
 ### 2025-10-22 11:58:54.948
 exit;
+### 2025-10-22 15:02:26.481
+SELECT VECTOR_TO_STRING(STRING_TO_VECTOR('[6.51,-9.57,-7.62,5.05,1.91,-2.29,5.63,8.85,-8.15,-0.39]')) AS VEC_STR;

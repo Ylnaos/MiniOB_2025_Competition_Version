@@ -148,11 +148,12 @@ static bool has_jieba_resource(const fs::path &dir)
 
   if (!has_dict) LOG_WARN("Missing jieba.dict.utf8 in %s", dir.string().c_str());
   if (!has_hmm) LOG_WARN("Missing hmm_model.utf8 in %s", dir.string().c_str());
-  if (!has_user) LOG_WARN("Missing user.dict.utf8 in %s", dir.string().c_str());
-  if (!has_idf) LOG_WARN("Missing idf.utf8 in %s", dir.string().c_str());
-  if (!has_stop) LOG_WARN("Missing stop_words.utf8 in %s", dir.string().c_str());
+  if (!has_user) LOG_INFO("Optional user.dict.utf8 not found in %s", dir.string().c_str());
+  if (!has_idf) LOG_INFO("Optional idf.utf8 not found in %s", dir.string().c_str());
+  if (!has_stop) LOG_INFO("Optional stop_words.utf8 not found in %s", dir.string().c_str());
 
-  return has_dict && has_hmm && has_user && has_idf && has_stop;
+  // 仅 jieba 主词典与 HMM 模型为硬性依赖，其他资源缺失时继续运行
+  return has_dict && has_hmm;
 }
 
 static void push_unique_path(vector<fs::path> &paths, unordered_set<string> &seen, const fs::path &candidate)
@@ -689,9 +690,24 @@ private:
 
       const string dict_path     = (dict_dir / "jieba.dict.utf8").string();
       const string hmm_path      = (dict_dir / "hmm_model.utf8").string();
-      const string user_path     = (dict_dir / "user.dict.utf8").string();
-      const string idf_path      = (dict_dir / "idf.utf8").string();
-      const string stop_path     = (dict_dir / "stop_words.utf8").string();
+      const fs::path user_path_fs = dict_dir / "user.dict.utf8";
+      const fs::path idf_path_fs  = dict_dir / "idf.utf8";
+      const fs::path stop_path_fs = dict_dir / "stop_words.utf8";
+
+      auto optional_path = [](const fs::path &candidate) -> string {
+        if (candidate.empty()) {
+          return {};
+        }
+        struct stat st {};
+        if (::stat(candidate.string().c_str(), &st) == 0) {
+          return candidate.string();
+        }
+        return {};
+      };
+
+      const string user_path = optional_path(user_path_fs);
+      const string idf_path  = optional_path(idf_path_fs);
+      const string stop_path = optional_path(stop_path_fs);
 
       try {
         jieba = make_unique<cppjieba::Jieba>(dict_path, hmm_path, user_path, idf_path, stop_path);
@@ -700,21 +716,26 @@ private:
         return RC::INTERNAL;
       }
 
-      ifstream input(stop_path);
-      if (!input.is_open()) {
-        LOG_WARN("Failed to open stop_words file: %s", stop_path.c_str());
-        return RC::IOERR_OPEN;
-      }
       string line;
-      while (getline(input, line)) {
-        if (!line.empty() && static_cast<unsigned char>(line[0]) == 0xEF && line.size() >= 3 &&
-            static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
-          line.erase(0, 3);
+
+      if (!stop_path.empty()) {
+        ifstream input(stop_path);
+        if (!input.is_open()) {
+          LOG_WARN("Failed to open stop_words file: %s (using empty stop-word list)", stop_path.c_str());
+        } else {
+          while (getline(input, line)) {
+            if (!line.empty() && static_cast<unsigned char>(line[0]) == 0xEF && line.size() >= 3 &&
+                static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
+              line.erase(0, 3);
+            }
+            if (line.empty() || common::is_blank(line.c_str())) {
+              continue;
+            }
+            stop_words.insert(line);
+          }
         }
-        if (line.empty() || common::is_blank(line.c_str())) {
-          continue;
-        }
-        stop_words.insert(line);
+      } else {
+        LOG_INFO("No stop_words.utf8 provided, using empty stop-word list");
       }
 
       ifstream dict_input(dict_path);

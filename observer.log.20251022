@@ -169,3 +169,49 @@ Finish dump configuration
 [2025-10-22 11:58:54.952526 pid:14349 tid:7ee2be2696c0 ctx:0 ERROR: operator()@one_thread_per_connection_thread_handler.cpp:98] >> handle error. rc = IOERR_CLOSE
 [2025-10-22 11:58:54.952745 pid:14349 tid:7ee2be2696c0 ctx:0 INFO: operator()@one_thread_per_connection_thread_handler.cpp:103] >> worker thread stop. communicator = 0x50b0000007d0
 [2025-10-22 11:58:54.953028 pid:14349 tid:7ee2be2696c0 ctx:0 INFO: close_connection@one_thread_per_connection_thread_handler.cpp:154] >> close connection. communicator = 0x50b0000007d0
+[2025-10-22 14:37:08.852341 pid:14349 tid:7ee2c49227c0 ctx:0 INFO: accept@server.cpp:127] >> Accepted connection from 127.0.0.1:58572
+
+[2025-10-22 14:37:08.852739 pid:14349 tid:7ee2be2696c0 ctx:0 INFO: operator()@one_thread_per_connection_thread_handler.cpp:70] >> worker thread start. communicator = 0x50b000000930
+[2025-10-22 14:37:08.863502 pid:14349 tid:7ee2be2696c0 ctx:0 INFO: read_event@plain_communicator.cpp:94] >> receive command(size=114): SELECT VECTOR_TO_STRING(STRING_TO_VECTOR('[6.51,-9.57,-7.62,5.05,1.91,-2.29,5.63,8.85,-8.15,-0.39]')) AS VEC_STR;
+[2025-10-22 14:37:08.863789 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 INFO: handle_request@parse_stage.cpp:36] >> parse stage receive sql: SELECT VECTOR_TO_STRING(STRING_TO_VECTOR('[6.51,-9.57,-7.62,5.05,1.91,-2.29,5.63,8.85,-8.15,-0.39]')) AS VEC_STR;
+[2025-10-22 14:37:08.864020 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:110] >> SELECT
+[2025-10-22 14:37:08.864500 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:171] >> VECTOR_TO_STRING_F
+[2025-10-22 14:37:08.864650 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:182] >> LBRACE
+[2025-10-22 14:37:08.864804 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:169] >> STRING_TO_VECTOR_F
+[2025-10-22 14:37:08.864961 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:182] >> LBRACE
+[2025-10-22 14:37:08.865131 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:201] >> SSS
+[2025-10-22 14:37:08.865284 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:183] >> RBRACE
+[2025-10-22 14:37:08.866428 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:183] >> RBRACE
+[2025-10-22 14:37:08.866857 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:128] >> AS
+[2025-10-22 14:37:08.867022 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:181] >> ID
+[2025-10-22 14:37:08.867179 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 DEBUG: yylex@lex_sql.l:87] >> SEMICOLON
+[2025-10-22 14:37:08.868895 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 ERROR: create_single_select_plan@logical_plan_generator.cpp:223] >> [TRACE] Creating logical plan for SelectStmt: filter_stmt=EXISTS, where_expr=NULL, tables=0
+[2025-10-22 14:37:08.869415 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 ERROR: create_single_select_plan@logical_plan_generator.cpp:234] >> [TRACE] After create_plan(filter_stmt): predicate_oper=NULL
+[2025-10-22 14:37:08.869574 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 ERROR: create_single_select_plan@logical_plan_generator.cpp:238] >> [TRACE] filter_stmt details: filter_units=0
+[2025-10-22 14:37:08.869727 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 ERROR: create_single_select_plan@logical_plan_generator.cpp:276] >> [TRACE] Before connecting predicate: predicate_oper=NULL, table_oper=NULL
+[2025-10-22 14:37:08.870098 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 INFO: rewrite@vector_rewrite_rule.cpp:141] >> vector rewrite skip: oper type is not PROJECTION (type=0)
+[2025-10-22 14:37:08.871840 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 TRACE: generate_physical_plan@optimize_stage.cpp:175] >> use tuple iterator
+[2025-10-22 14:37:08.873682 pid:14349 tid:7ee2be2696c0 ctx:5040000004d0 INFO: handle_event@sql_task_handler.cpp:46] >> write result return SUCCESS
+[2025-10-22 14:50:47.563908 pid:14349 tid:7ee2c49227c0 ctx:0 INFO: accept@server.cpp:127] >> Accepted connection from 127.0.0.1:144
+
+[2025-10-22 14:50:47.564285 pid:14349 tid:7ee2bc3596c0 ctx:0 INFO: operator()@one_thread_per_connection_thread_handler.cpp:70] >> worker thread start. communicator = 0x50b0000009e0
+[2025-10-22 14:50:47.574281 pid:14349 tid:7ee2bc3596c0 ctx:0 INFO: read_event@plain_communicator.cpp:94] >> receive command(size=114): SELECT VECTOR_TO_STRING(STRING_TO_VECTOR('[6.51,-9.57,-7.62,5.05,1.91,-2.29,5.63,8.85,-8.15,-0.39]')) AS VEC_STR;
+[2025-10-22 14:50:47.574547 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 INFO: handle_request@parse_stage.cpp:36] >> parse stage receive sql: SELECT VECTOR_TO_STRING(STRING_TO_VECTOR('[6.51,-9.57,-7.62,5.05,1.91,-2.29,5.63,8.85,-8.15,-0.39]')) AS VEC_STR;
+[2025-10-22 14:50:47.574730 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:110] >> SELECT
+[2025-10-22 14:50:47.574842 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:171] >> VECTOR_TO_STRING_F
+[2025-10-22 14:50:47.574984 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:182] >> LBRACE
+[2025-10-22 14:50:47.575102 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:169] >> STRING_TO_VECTOR_F
+[2025-10-22 14:50:47.575215 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:182] >> LBRACE
+[2025-10-22 14:50:47.575321 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:201] >> SSS
+[2025-10-22 14:50:47.575424 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:183] >> RBRACE
+[2025-10-22 14:50:47.575575 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:183] >> RBRACE
+[2025-10-22 14:50:47.575685 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:128] >> AS
+[2025-10-22 14:50:47.575790 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:181] >> ID
+[2025-10-22 14:50:47.575926 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 DEBUG: yylex@lex_sql.l:87] >> SEMICOLON
+[2025-10-22 14:50:47.576139 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 ERROR: create_single_select_plan@logical_plan_generator.cpp:223] >> [TRACE] Creating logical plan for SelectStmt: filter_stmt=EXISTS, where_expr=NULL, tables=0
+[2025-10-22 14:50:47.576282 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 ERROR: create_single_select_plan@logical_plan_generator.cpp:234] >> [TRACE] After create_plan(filter_stmt): predicate_oper=NULL
+[2025-10-22 14:50:47.576386 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 ERROR: create_single_select_plan@logical_plan_generator.cpp:238] >> [TRACE] filter_stmt details: filter_units=0
+[2025-10-22 14:50:47.576492 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 ERROR: create_single_select_plan@logical_plan_generator.cpp:276] >> [TRACE] Before connecting predicate: predicate_oper=NULL, table_oper=NULL
+[2025-10-22 14:50:47.576621 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 INFO: rewrite@vector_rewrite_rule.cpp:141] >> vector rewrite skip: oper type is not PROJECTION (type=0)
+[2025-10-22 14:50:47.576779 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 TRACE: generate_physical_plan@optimize_stage.cpp:175] >> use tuple iterator
+[2025-10-22 14:50:47.577075 pid:14349 tid:7ee2bc3596c0 ctx:504000000550 INFO: handle_event@sql_task_handler.cpp:46] >> write result return SUCCESS
