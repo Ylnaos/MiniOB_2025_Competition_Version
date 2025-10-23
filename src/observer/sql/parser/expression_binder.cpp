@@ -661,16 +661,23 @@ RC ExpressionBinder::bind_conjunction_expression(
   vector<unique_ptr<Expression>>  child_bound_expressions;
   vector<unique_ptr<Expression>> &children = conjunction_expr->children();
 
+  LOG_INFO("[BIND_CONJUNCTION] BEFORE binding: num_children=%zu, type=%s",
+            children.size(),
+            conjunction_expr->conjunction_type() == ConjunctionExpr::Type::AND ? "AND" : "OR");
+
+  int child_idx = 0;
   for (unique_ptr<Expression> &child_expr : children) {
+    LOG_INFO("[BIND_CONJUNCTION] binding child[%d], expr_type=%d", child_idx, static_cast<int>(child_expr->type()));
     child_bound_expressions.clear();
 
     RC rc = bind_expression(child_expr, child_bound_expressions);
     if (rc != RC::SUCCESS) {
+      LOG_WARN("[BIND_CONJUNCTION] bind child[%d] FAILED: rc=%s", child_idx, strrc(rc));
       return rc;
     }
 
     if (child_bound_expressions.size() != 1) {
-      LOG_WARN("invalid children number of conjunction expression: %d", child_bound_expressions.size());
+      LOG_WARN("[BIND_CONJUNCTION] invalid children number of conjunction expression: %d", child_bound_expressions.size());
       return RC::INVALID_ARGUMENT;
     }
 
@@ -678,8 +685,11 @@ RC ExpressionBinder::bind_conjunction_expression(
     if (child.get() != child_expr.get()) {
       child_expr.reset(child.release());
     }
+    LOG_INFO("[BIND_CONJUNCTION] child[%d] bound successfully", child_idx);
+    child_idx++;
   }
 
+  LOG_INFO("[BIND_CONJUNCTION] AFTER binding: num_children=%zu", children.size());
   bound_expressions.emplace_back(std::move(expr));
 
   return RC::SUCCESS;
