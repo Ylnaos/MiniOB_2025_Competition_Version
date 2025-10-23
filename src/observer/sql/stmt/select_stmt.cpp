@@ -773,6 +773,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
   // 绑定 ORDER BY
   vector<pair<unique_ptr<Expression>, bool>> order_by_items;
+  // 设置绑定上下文为ORDER BY，聚合函数使用需要检查
+  binder_context.set_binding_context(BinderContext::BindingContext::ORDER_BY);
   for (auto &item : select_sql.order_by) {
     vector<unique_ptr<Expression>> bound;
     RC rc = expression_binder.bind_expression(item.expression, bound);
@@ -786,6 +788,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
     order_by_items.emplace_back(std::move(bound[0]), item.asc);
   }
+  // 恢复为默认的SELECT上下文
+  binder_context.set_binding_context(BinderContext::BindingContext::SELECT);
 
   // WHERE 过滤：支持两种来源
   // 1) 传统 AND 链（conditions）
@@ -835,8 +839,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       LOG_INFO("[SELECT_STMT] BEFORE bind: WHERE expr_type=%d", static_cast<int>(select_sql.where_expr->type()));
     }
 
+    // 设置绑定上下文为WHERE，以便检查聚合函数使用
+    binder_context.set_binding_context(BinderContext::BindingContext::WHERE);
     vector<unique_ptr<Expression>> bound;
     RC rc2 = expression_binder.bind_expression(select_sql.where_expr, bound);
+    // 恢复为默认的SELECT上下文
+    binder_context.set_binding_context(BinderContext::BindingContext::SELECT);
     if (OB_FAIL(rc2) || bound.size() != 1) {
       LOG_WARN("bind where boolean expression failed. rc=%s", strrc(rc2));
       return rc2 == RC::SUCCESS ? RC::INVALID_ARGUMENT : rc2;
@@ -860,6 +868,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   
   // 绑定 HAVING（将 AND 串联的条件转为一个布尔表达式树）
   if (!select_sql.having.empty()) {
+    // 设置绑定上下文为HAVING，允许使用聚合函数
+    binder_context.set_binding_context(BinderContext::BindingContext::HAVING);
     vector<unique_ptr<Expression>> cmp_exprs;
     for (auto &cond : select_sql.having) {
       unique_ptr<Expression> left_expr;
@@ -908,6 +918,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       unique_ptr<Expression> having_expr(new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(cmp_exprs)));
       select_stmt->having_expr_.swap(having_expr);
     }
+    // 恢复为默认的SELECT上下文
+    binder_context.set_binding_context(BinderContext::BindingContext::SELECT);
   }
 
   if (!select_sql.set_operations.empty()) {

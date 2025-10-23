@@ -987,6 +987,18 @@ RC ExpressionBinder::bind_aggregate_expression(
     return RC::SUCCESS;
   }
 
+  // 检查聚合函数使用的上下文：WHERE子句中不能使用聚合函数
+  if (context_.binding_context() == BinderContext::BindingContext::WHERE) {
+    LOG_WARN("aggregate functions are not allowed in WHERE clause");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // ORDER BY子句中对聚合函数使用进行限制（标准SQL要求ORDER BY中的聚合函数必须在SELECT子句中定义）
+  if (context_.binding_context() == BinderContext::BindingContext::ORDER_BY) {
+    LOG_WARN("aggregate functions in ORDER BY must be defined in SELECT clause");
+    return RC::INVALID_ARGUMENT;
+  }
+
   auto unbound_aggregate_expr = static_cast<UnboundAggregateExpr *>(expr.get());
   // 多参数聚合（如 count(*, num)）在语义阶段报错为 INVALID_ARGUMENT，而非语法错误
   if (unbound_aggregate_expr->arg_count() != 1) {

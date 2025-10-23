@@ -22,11 +22,23 @@ class SelectStmt;
 class BinderContext
 {
 public:
+  // 绑定上下文类型，用于检查聚合函数的使用是否合法
+  enum class BindingContext {
+    SELECT,  // SELECT子句
+    WHERE,   // WHERE子句
+    HAVING,  // HAVING子句
+    ORDER_BY // ORDER BY子句
+  };
+
+public:
   BinderContext()          = default;
   virtual ~BinderContext() = default;
 
   void add_table(Table *table) { query_tables_.push_back(table); }
   void add_alias(const string &alias, Table *table) { if (!alias.empty()) alias_map_[alias] = table; }
+
+  BindingContext binding_context() const { return binding_context_; }
+  void set_binding_context(BindingContext context) { binding_context_ = context; }
 
   Table *find_table(const char *table_name) const;
 
@@ -51,6 +63,7 @@ private:
   unordered_map<string, Table *> alias_map_;
   SelectStmt *inner_view_stmt_ = nullptr;
   unordered_map<string, SelectStmt *> derived_tables_;  // 别名 -> 派生表SelectStmt
+  BindingContext binding_context_ = BindingContext::SELECT;  // 默认为SELECT上下文
 };
 
 /**
