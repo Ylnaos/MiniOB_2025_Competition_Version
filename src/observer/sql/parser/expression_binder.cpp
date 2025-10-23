@@ -399,21 +399,37 @@ RC ExpressionBinder::bind_star_expression(
   }
 
   vector<Table *> tables_to_wildcard;
+  vector<pair<string, SelectStmt *>> derived_tables_to_wildcard;
 
   const char *table_name = star_expr->table_name();
   if (!is_blank(table_name) && 0 != strcmp(table_name, "*")) {
     Table *table = context_.find_table(table_name);
     if (nullptr == table) {
-      LOG_INFO("no such table in from list: %s", table_name);
-      return RC::SCHEMA_TABLE_NOT_EXIST;
+      // 尝试查找派生表
+      string alias_upper = table_name;
+      common::str_to_upper(alias_upper);
+      SelectStmt *derived_stmt = context_.find_derived_table(alias_upper);
+      if (derived_stmt != nullptr) {
+        derived_tables_to_wildcard.push_back({alias_upper, derived_stmt});
+      } else {
+        LOG_INFO("no such table in from list: %s", table_name);
+        return RC::SCHEMA_TABLE_NOT_EXIST;
+      }
+    } else {
+      tables_to_wildcard.push_back(table);
     }
-
-    tables_to_wildcard.push_back(table);
   } else {
+    // SELECT * - 展开所有表和派生表
     const vector<Table *> &all_tables = context_.query_tables();
     tables_to_wildcard.insert(tables_to_wildcard.end(), all_tables.begin(), all_tables.end());
+
+    // 也包含派生表
+    for (const auto &entry : context_.derived_tables()) {
+      derived_tables_to_wildcard.push_back({entry.first, entry.second});
+    }
   }
 
+  // 展开物理表的字段
   for (Table *table : tables_to_wildcard) {
     std::string qualifier;
     if (!is_blank(table_name) && 0 != strcmp(table_name, "*")) {
@@ -423,6 +439,39 @@ RC ExpressionBinder::bind_star_expression(
     }
     common::str_to_upper(qualifier);
     wildcard_fields(table, qualifier, bound_expressions);
+  }
+
+  // 展开派生表的字段
+  for (const auto &entry : derived_tables_to_wildcard) {
+    const string &alias = entry.first;
+    SelectStmt *derived_stmt = entry.second;
+
+    const auto &output_exprs = derived_stmt->query_expressions();
+    for (size_t idx = 0; idx < output_exprs.size(); idx++) {
+      const auto &output_expr = output_exprs[idx];
+      if (!output_expr) {
+        continue;
+      }
+
+      const char *col_name = output_expr->alias();
+      if (is_blank(col_name)) {
+        col_name = output_expr->name();
+      }
+      string candidate_name;
+      if (!is_blank(col_name)) {
+        candidate_name = col_name;
+      } else {
+        candidate_name = string("COLUMN_") + std::to_string(idx + 1);
+      }
+      common::str_to_upper(candidate_name);
+
+      auto *field_expr = new FieldExpr();
+      field_expr->set_pos(static_cast<int>(idx));
+      field_expr->set_name(alias + "." + candidate_name);
+      LOG_DEBUG("Wildcard bind field from derived table: %s.%s at position %zu",
+                alias.c_str(), candidate_name.c_str(), idx);
+      bound_expressions.emplace_back(field_expr);
+    }
   }
 
   return RC::SUCCESS;
@@ -490,15 +539,155 @@ RC ExpressionBinder::bind_unbound_field_expression(
 
   Table *table = nullptr;
   if (is_blank(table_name)) {
-    if (context_.query_tables().size() != 1) {
-      LOG_INFO("cannot determine table for field: %s", field_name);
+    size_t total_tables = context_.query_tables().size() + context_.derived_tables().size();
+    if (total_tables != 1) {
+      LOG_INFO("cannot determine table for field: %s (total tables: %zu)", field_name, total_tables);
       return RC::SCHEMA_TABLE_NOT_EXIST;
     }
 
-    table = context_.query_tables()[0];
+    if (!context_.query_tables().empty()) {
+      table = context_.query_tables()[0];
+    } else {
+      // 只有一个派生表，从派生表中查找字段
+      auto &derived_tables = context_.derived_tables();
+      auto it = derived_tables.begin();
+      SelectStmt *derived_stmt = it->second;
+      string derived_alias = it->first;
+
+      if (0 == strcmp(field_name, "*")) {
+        LOG_WARN("SELECT * from single derived table without qualification is not supported in this context");
+        return RC::INVALID_ARGUMENT;
+      }
+
+      // 查找字段
+      string target_name = field_name;
+      common::str_to_upper(target_name);
+
+      const auto &output_exprs = derived_stmt->query_expressions();
+      for (size_t idx = 0; idx < output_exprs.size(); idx++) {
+        const auto &output_expr = output_exprs[idx];
+        if (!output_expr) {
+          continue;
+        }
+
+        const char *col_name = output_expr->alias();
+        if (is_blank(col_name)) {
+          col_name = output_expr->name();
+        }
+        string candidate_name;
+        if (!is_blank(col_name)) {
+          candidate_name = col_name;
+        } else {
+          candidate_name = string("COLUMN_") + std::to_string(idx + 1);
+        }
+        common::str_to_upper(candidate_name);
+
+        if (candidate_name == target_name) {
+          auto *field_expr = new FieldExpr();
+          field_expr->set_pos(static_cast<int>(idx));
+          field_expr->set_name(target_name);
+          if (expr->alias() != nullptr) {
+            field_expr->set_alias(expr->alias());
+          }
+          LOG_DEBUG("Bind unqualified field '%s' from single derived table '%s' at position %zu",
+                    target_name.c_str(), derived_alias.c_str(), idx);
+          bound_expressions.emplace_back(field_expr);
+          return RC::SUCCESS;
+        }
+      }
+
+      LOG_INFO("no such field in single derived table: %s", field_name);
+      return RC::SCHEMA_FIELD_MISSING;
+    }
   } else {
     table = context_.find_table(table_name);
     if (nullptr == table) {
+      // 尝试查找派生表（视图作为表使用）
+      string alias_upper = table_name;
+      common::str_to_upper(alias_upper);
+      SelectStmt *derived_stmt = context_.find_derived_table(alias_upper);
+      if (derived_stmt != nullptr) {
+        // 找到派生表，从其输出列中查找字段
+        LOG_DEBUG("Found derived table '%s', looking for field '%s'", alias_upper.c_str(), field_name);
+
+        if (0 == strcmp(field_name, "*")) {
+          // 处理 t.* 的情况
+          if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
+            LOG_WARN("wildcard 't.*' cannot have alias");
+            return RC::INVALID_ARGUMENT;
+          }
+
+          // 从派生表的输出列生成 FieldExpr
+          const auto &output_exprs = derived_stmt->query_expressions();
+          for (size_t idx = 0; idx < output_exprs.size(); idx++) {
+            const auto &output_expr = output_exprs[idx];
+            if (!output_expr) {
+              continue;
+            }
+
+            const char *col_name = output_expr->alias();
+            if (is_blank(col_name)) {
+              col_name = output_expr->name();
+            }
+            string candidate_name;
+            if (!is_blank(col_name)) {
+              candidate_name = col_name;
+            } else {
+              candidate_name = string("COLUMN_") + std::to_string(idx + 1);
+            }
+            common::str_to_upper(candidate_name);
+
+            auto *field_expr = new FieldExpr();
+            field_expr->set_pos(static_cast<int>(idx));
+            field_expr->set_name(alias_upper + "." + candidate_name);
+            LOG_DEBUG("Bind field from derived table: %s.%s at position %zu",
+                      alias_upper.c_str(), candidate_name.c_str(), idx);
+            bound_expressions.emplace_back(field_expr);
+          }
+          return RC::SUCCESS;
+        } else {
+          // 查找指定字段
+          string target_name = field_name;
+          common::str_to_upper(target_name);
+
+          const auto &output_exprs = derived_stmt->query_expressions();
+          for (size_t idx = 0; idx < output_exprs.size(); idx++) {
+            const auto &output_expr = output_exprs[idx];
+            if (!output_expr) {
+              continue;
+            }
+
+            const char *col_name = output_expr->alias();
+            if (is_blank(col_name)) {
+              col_name = output_expr->name();
+            }
+            string candidate_name;
+            if (!is_blank(col_name)) {
+              candidate_name = col_name;
+            } else {
+              candidate_name = string("COLUMN_") + std::to_string(idx + 1);
+            }
+            common::str_to_upper(candidate_name);
+
+            if (candidate_name == target_name) {
+              auto *field_expr = new FieldExpr();
+              field_expr->set_pos(static_cast<int>(idx));
+              field_expr->set_name(alias_upper + "." + target_name);
+              if (expr->alias() != nullptr) {
+                field_expr->set_alias(expr->alias());
+              }
+              LOG_DEBUG("Bind field '%s' from derived table '%s' at position %zu",
+                        target_name.c_str(), alias_upper.c_str(), idx);
+              bound_expressions.emplace_back(field_expr);
+              return RC::SUCCESS;
+            }
+          }
+
+          LOG_INFO("no such field in derived table: %s.%s", alias_upper.c_str(), field_name);
+          return RC::SCHEMA_FIELD_MISSING;
+        }
+      }
+
       LOG_INFO("no such table in from list: %s", table_name);
       return RC::SCHEMA_TABLE_NOT_EXIST;
     }
