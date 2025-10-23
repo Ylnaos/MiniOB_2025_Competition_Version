@@ -661,7 +661,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   // 绑定阶段
   BinderContext binder_context;
 
-  // 收集 FROM 表
+  // 收集 FROM 表（包括物理表和视图）
   vector<Table *>                tables;
   vector<string>                 table_aliases;
   table_aliases.reserve(select_sql.relations.size());
@@ -673,11 +673,61 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       LOG_WARN("invalid argument. relation name is null. index=%d", i);
       return RC::INVALID_ARGUMENT;
     }
+
     Table *table = db->find_table(table_name);
     if (nullptr == table) {
-      LOG_WARN("no such table. db=%s, table_name=%s", db->name(), table_name);
+      // 尝试查找视图
+      View *view = db->find_view(table_name);
+      if (view != nullptr) {
+        // 找到视图，将其作为派生表处理
+        LOG_INFO("Found view '%s' in FROM clause, treating as derived table with alias '%s'",
+                 table_name, r.alias.empty() ? table_name : r.alias.c_str());
+
+        // 解析视图的SQL
+        ParsedSqlResult parsed;
+        RC parse_rc = parse(view->select_sql(), &parsed);
+        if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+          LOG_WARN("parse view select failed. view=%s, sql=%s", view->name(), view->select_sql());
+          return RC::SQL_SYNTAX;
+        }
+        ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+        if (node->flag != SCF_SELECT) {
+          LOG_WARN("view definition is not a SELECT. view=%s", view->name());
+          return RC::SQL_SYNTAX;
+        }
+
+        // 递归创建视图的SelectStmt
+        Stmt *view_stmt = nullptr;
+        RC rc = SelectStmt::create(db, node->selection, view_stmt);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("Failed to create SelectStmt for view '%s'", view->name());
+          return rc;
+        }
+
+        SelectStmt *view_select_stmt = static_cast<SelectStmt *>(view_stmt);
+
+        // 确定别名（如果没有指定别名，使用视图名）
+        string alias_token = r.alias.empty() ? string(table_name) : r.alias;
+        common::str_to_upper(alias_token);
+
+        // 注册派生表到BinderContext
+        binder_context.add_derived_table(alias_token, view_select_stmt);
+
+        // 将派生表的别名添加到table_aliases（用于后续处理）
+        table_aliases.push_back(alias_token);
+
+        // 注意：由于这是派生表，不添加到tables和table_map中
+        // （tables只包含物理表，派生表通过binder_context.derived_tables()访问）
+
+        continue;  // 处理下一个relation
+      }
+
+      // 既不是表也不是视图，报错
+      LOG_WARN("no such table or view. db=%s, name=%s", db->name(), table_name);
       return RC::SCHEMA_TABLE_NOT_EXIST;
     }
+
+    // 找到物理表，正常处理
     binder_context.add_table(table);
     tables.push_back(table);
     table_map.insert({table_name, table});
@@ -772,12 +822,39 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   select_stmt->order_by_.swap(order_by_items);
   select_stmt->limit_ = select_sql.limit;
   if (select_sql.where_expr) {
+    // 诊断：打印解析后的WHERE表达式结构
+    if (select_sql.where_expr->type() == ExprType::CONJUNCTION) {
+      auto *conj = static_cast<ConjunctionExpr *>(select_sql.where_expr.get());
+      LOG_INFO("[SELECT_STMT] BEFORE bind: WHERE is ConjunctionExpr, type=%s, num_children=%zu",
+                conj->conjunction_type() == ConjunctionExpr::Type::AND ? "AND" : "OR",
+                conj->children().size());
+      for (size_t i = 0; i < conj->children().size(); i++) {
+        LOG_INFO("[SELECT_STMT]   child[%zu]: expr_type=%d", i, static_cast<int>(conj->children()[i]->type()));
+      }
+    } else {
+      LOG_INFO("[SELECT_STMT] BEFORE bind: WHERE expr_type=%d", static_cast<int>(select_sql.where_expr->type()));
+    }
+
     vector<unique_ptr<Expression>> bound;
     RC rc2 = expression_binder.bind_expression(select_sql.where_expr, bound);
     if (OB_FAIL(rc2) || bound.size() != 1) {
       LOG_WARN("bind where boolean expression failed. rc=%s", strrc(rc2));
       return rc2 == RC::SUCCESS ? RC::INVALID_ARGUMENT : rc2;
     }
+
+    // 诊断：打印绑定后的WHERE表达式结构
+    if (bound[0]->type() == ExprType::CONJUNCTION) {
+      auto *conj = static_cast<ConjunctionExpr *>(bound[0].get());
+      LOG_INFO("[SELECT_STMT] AFTER bind: WHERE is ConjunctionExpr, type=%s, num_children=%zu",
+                conj->conjunction_type() == ConjunctionExpr::Type::AND ? "AND" : "OR",
+                conj->children().size());
+      for (size_t i = 0; i < conj->children().size(); i++) {
+        LOG_INFO("[SELECT_STMT]   child[%zu]: expr_type=%d", i, static_cast<int>(conj->children()[i]->type()));
+      }
+    } else {
+      LOG_INFO("[SELECT_STMT] AFTER bind: WHERE expr_type=%d", static_cast<int>(bound[0]->type()));
+    }
+
     select_stmt->where_expr_.reset(bound[0].release());
   }
   
@@ -858,6 +935,11 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       op.stmt = std::move(child_select);
       select_stmt->set_operations_.emplace_back(std::move(op));
     }
+  }
+
+  // 保存派生表（视图）的SelectStmt到当前SelectStmt中，避免被释放
+  for (const auto &entry : binder_context.derived_tables()) {
+    select_stmt->add_derived_table_stmt(entry.first, entry.second);
   }
 
   stmt = select_stmt_guard.release();

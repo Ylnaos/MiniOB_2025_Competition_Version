@@ -1,0 +1,29 @@
+-- 测试 IN 查询功能
+
+-- 清理环境
+DROP TABLE IF EXISTS test_in_table;
+
+-- 创建测试表
+CREATE TABLE test_in_table(id int, name char(20), score float);
+
+-- 插入测试数据
+INSERT INTO test_in_table VALUES (35, 'Alice', 36.49);
+INSERT INTO test_in_table VALUES (35, 'Bob', 81.63);
+INSERT INTO test_in_table VALUES (8, 'Charlie', 27.62);
+INSERT INTO test_in_table VALUES (97, 'David', 56.94);
+INSERT INTO test_in_table VALUES (100, 'Eve', 100.0);
+
+-- 测试1: 基本 IN 查询
+select * from test_in_table where id in (35, 8, 97);
+
+-- 测试2: 带重复值的 IN 查询
+select * from test_in_table where id in (35,35,97,8,8);
+
+-- 测试3: 单个值的 IN 查询
+select * from test_in_table where id in (35);
+
+-- 测试4: NOT IN 查询
+select * from test_in_table where id not in (35, 97);
+
+-- 清理
+DROP TABLE test_in_table;

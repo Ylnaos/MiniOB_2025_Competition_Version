@@ -1,0 +1,15 @@
+-- IN 查询测试脚本
+
+-- 1. 创建测试表
+DROP TABLE IF EXISTS WY12_1;
+CREATE TABLE WY12_1(id int, col1 int, feat1 float);
+
+-- 2. 插入测试数据
+INSERT INTO WY12_1 VALUES (35, 27, 36.49);
+INSERT INTO WY12_1 VALUES (35, 68, 81.63);
+INSERT INTO WY12_1 VALUES (8, 41, 27.62);
+INSERT INTO WY12_1 VALUES (97, 45, 56.94);
+INSERT INTO WY12_1 VALUES (100, 50, 100.0);
+
+-- 3. 测试 IN 查询
+select * from WY12_1 where id in (35,35,97,8,8);

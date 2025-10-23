@@ -37,22 +37,37 @@ RC ConjunctionSimplificationRule::rewrite(unique_ptr<Expression> &expr, bool &ch
 
   vector<unique_ptr<Expression>> &child_exprs      = conjunction_expr->children();
 
+  // 诊断：打印简化前的children
+  LOG_INFO("[SIMPLIFY] BEFORE: ConjunctionExpr type=%s, num_children=%zu",
+            conjunction_expr->conjunction_type() == ConjunctionExpr::Type::AND ? "AND" : "OR",
+            child_exprs.size());
+  for (size_t i = 0; i < child_exprs.size(); i++) {
+    LOG_INFO("[SIMPLIFY]   child[%zu]: expr_type=%d", i, static_cast<int>(child_exprs[i]->type()));
+  }
+
   // 先看看有没有能够直接去掉的表达式。比如AND时恒为true的表达式可以删除
   // 或者是否可以直接计算出当前表达式的值。比如AND时，如果有一个表达式为false，那么整个表达式就是false
+  int child_idx = 0;
   for (auto iter = child_exprs.begin(); iter != child_exprs.end();) {
     bool constant_value = false;
 
     rc                  = try_to_get_bool_constant(*iter, constant_value);
     if (rc != RC::SUCCESS) {
+      LOG_INFO("[SIMPLIFY] child[%d] is NOT a bool constant, keeping it", child_idx);
       rc = RC::SUCCESS;
       ++iter;
+      child_idx++;
       continue;
     }
 
+    LOG_INFO("[SIMPLIFY] child[%d] IS a bool constant: value=%d", child_idx, constant_value);
+
     if (conjunction_expr->conjunction_type() == ConjunctionExpr::Type::AND) {
       if (constant_value == true) {
+        LOG_INFO("[SIMPLIFY] AND: removing child[%d] because it's always true", child_idx);
         child_exprs.erase(iter);
       } else {
+        LOG_INFO("[SIMPLIFY] AND: found false child, entire expr is false");
         // always be false
         unique_ptr<Expression> child_expr = std::move(child_exprs.front());
         child_exprs.clear();
@@ -62,18 +77,23 @@ RC ConjunctionSimplificationRule::rewrite(unique_ptr<Expression> &expr, bool &ch
     } else {
       // conjunction_type == OR
       if (constant_value == true) {
+        LOG_INFO("[SIMPLIFY] OR: found true child, entire expr is true");
         // always be true
         unique_ptr<Expression> child_expr = std::move(child_exprs.front());
         child_exprs.clear();
         expr = std::move(child_expr);
         return rc;
       } else {
+        LOG_INFO("[SIMPLIFY] OR: removing child[%d] because it's always false", child_idx);
         child_exprs.erase(iter);
       }
     }
+    child_idx++;
   }
+  LOG_INFO("[SIMPLIFY] AFTER: num_children=%zu", child_exprs.size());
+
   if (child_exprs.size() == 1) {
-    LOG_TRACE("conjunction expression has only 1 child");
+    LOG_INFO("[SIMPLIFY] Only 1 child left, replacing ConjunctionExpr with the child");
     unique_ptr<Expression> child_expr = std::move(child_exprs.front());
     child_exprs.clear();
     expr = std::move(child_expr);

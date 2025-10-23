@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include "common/sys/rc.h"
+#include "common/lang/unordered_map.h"
 #include "sql/stmt/stmt.h"
 #include "storage/field/field.h"
 
@@ -61,6 +62,13 @@ public:
   SelectStmt *inner_view_stmt() const { return inner_view_stmt_; }
   void set_inner_view_stmt(SelectStmt *stmt) { inner_view_stmt_ = stmt; }
 
+  // 派生表（视图作为表使用）：别名 -> SelectStmt（拥有所有权）
+  void add_derived_table_stmt(const string &alias, SelectStmt *stmt) {
+    if (!alias.empty() && stmt != nullptr) {
+      derived_table_stmts_[alias].reset(stmt);
+    }
+  }
+
 private:
   vector<unique_ptr<Expression>> query_expressions_;
   vector<Table *>                tables_;
@@ -73,4 +81,5 @@ private:
   unique_ptr<Expression>         having_expr_;
   SelectStmt                    *inner_view_stmt_ = nullptr;  // 内层视图查询(包含聚合时使用)
   vector<SetOperation>           set_operations_;
+  unordered_map<string, unique_ptr<SelectStmt>> derived_table_stmts_;  // 派生表（视图作为表）
 };

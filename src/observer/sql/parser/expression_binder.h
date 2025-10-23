@@ -34,10 +34,23 @@ public:
   void set_inner_view_stmt(SelectStmt *stmt) { inner_view_stmt_ = stmt; }
   SelectStmt *inner_view_stmt() const { return inner_view_stmt_; }
 
+  // 支持多个派生表（视图作为表使用）
+  void add_derived_table(const string &alias, SelectStmt *stmt) {
+    if (!alias.empty() && stmt != nullptr) {
+      derived_tables_[alias] = stmt;
+    }
+  }
+  SelectStmt *find_derived_table(const string &alias) const {
+    auto it = derived_tables_.find(alias);
+    return (it != derived_tables_.end()) ? it->second : nullptr;
+  }
+  const unordered_map<string, SelectStmt *> &derived_tables() const { return derived_tables_; }
+
 private:
   vector<Table *> query_tables_;
   unordered_map<string, Table *> alias_map_;
   SelectStmt *inner_view_stmt_ = nullptr;
+  unordered_map<string, SelectStmt *> derived_tables_;  // 别名 -> 派生表SelectStmt
 };
 
 /**

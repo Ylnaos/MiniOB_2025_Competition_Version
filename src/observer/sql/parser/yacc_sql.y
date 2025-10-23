@@ -1037,55 +1037,7 @@ select_set_item:
     ;
 
 select_core:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by having order_by limit_opt
-    {
-      $$ = new ParsedSqlNode(SCF_SELECT);
-      if ($2 != nullptr) {
-        $$->selection.expressions.swap(*$2);
-        delete $2;
-      }
-
-      if ($4 != nullptr) {
-        $$->selection.relations.swap(*$4);
-        delete $4;
-      }
-
-      if ($5 != nullptr) {
-        $$->selection.conditions.swap(*$5);
-        delete $5;
-      }
-
-      // 合并 JOIN ... ON 条件到 where_expr（与 where 条件共同生效）
-      if (g_join_on_expr != nullptr) {
-        if ($$->selection.where_expr) {
-          vector<unique_ptr<Expression>> children;
-          children.emplace_back($$->selection.where_expr.release());
-          children.emplace_back(g_join_on_expr);
-          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children)));
-        } else {
-          $$->selection.where_expr.reset(g_join_on_expr);
-        }
-        g_join_on_expr = nullptr;
-      }
-
-      if ($6 != nullptr) {
-        $$->selection.group_by.swap(*$6);
-        delete $6;
-      }
-
-      if ($7 != nullptr) {
-        $$->selection.having.swap(*$7);
-        delete $7;
-      }
-
-      if ($8 != nullptr) {
-        $$->selection.order_by.swap(*$8);
-        delete $8;
-      }
-
-      $$->selection.limit = $9;
-    }
-    | SELECT expression_list FROM rel_list where_bool group_by having order_by limit_opt
+    SELECT expression_list FROM rel_list where_bool group_by having order_by limit_opt
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -1559,7 +1511,9 @@ condition:
       if ($4 != nullptr) { vals = std::move(*$4); delete $4; }
       AttrType rt = AttrType::UNDEFINED; int rlen = -1;
       if (!vals.empty()) { rt = vals[0].attr_type(); rlen = vals[0].length(); }
-      $$->right_expr.reset(new SubqueryExpr(vals, rt, rlen));
+      auto *subq_expr = new SubqueryExpr(vals, rt, rlen);
+      subq_expr->set_require_single_column(false);
+      $$->right_expr.reset(subq_expr);
       $$->comp = IN_OP;
       $$->left_is_attr = -1; $$->right_is_attr = -1;
     }
@@ -1571,7 +1525,9 @@ condition:
       if ($5 != nullptr) { vals = std::move(*$5); delete $5; }
       AttrType rt = AttrType::UNDEFINED; int rlen = -1;
       if (!vals.empty()) { rt = vals[0].attr_type(); rlen = vals[0].length(); }
-      $$->right_expr.reset(new SubqueryExpr(vals, rt, rlen));
+      auto *subq_expr = new SubqueryExpr(vals, rt, rlen);
+      subq_expr->set_require_single_column(false);
+      $$->right_expr.reset(subq_expr);
       $$->comp = NOT_IN_OP;
       $$->left_is_attr = -1; $$->right_is_attr = -1;
     }
@@ -1630,7 +1586,13 @@ bool_term:
       vector<unique_ptr<Expression>> children;
       children.emplace_back($1);
       children.emplace_back($3);
-      $$ = new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children));
+      auto *conj = new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children));
+      // 诊断：打印解析时创建的AND表达式children数量
+      LOG_INFO("[PARSER] Created AND expr: left_type=%d, right_type=%d, total_children=%zu",
+                $1 ? static_cast<int>($1->type()) : -1,
+                $3 ? static_cast<int>($3->type()) : -1,
+                conj->children().size());
+      $$ = conj;
     }
     | bool_factor
     {
