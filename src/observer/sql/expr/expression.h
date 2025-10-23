@@ -822,7 +822,11 @@ public:
     for (const auto &field : fields_) {
       fields_copy.push_back(field->copy());
     }
-    return make_unique<MatchAgainstExpr>(std::move(fields_copy), search_text_->copy());
+    auto copied = make_unique<MatchAgainstExpr>(std::move(fields_copy), search_text_->copy());
+    // 复制绑定的表和索引指针
+    copied->set_table(table_);
+    copied->set_index(index_);
+    return copied;
   }
 
   ExprType type() const override { return ExprType::MATCH_AGAINST; }

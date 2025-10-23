@@ -1896,6 +1896,10 @@ std::unique_ptr<ParsedSqlNode> copied;
 
 void SubqueryExpr::reset_cache() const
 {
+  if (!subquery_node_) {
+    // Value-list variants already hold their results and do not need clearing.
+    return;
+  }
   executed_ = false;
   results_.clear();
   result_type_ = AttrType::UNDEFINED;
@@ -3578,11 +3582,7 @@ value.set_boolean(false);
     return RC::SUCCESS;
   }
 
-  // 鍙冲€煎簲涓哄瓙鏌ヨ琛ㄨ揪寮?
-if (set_expr_->type() != ExprType::SUBQUERY) {
-    LOG_WARN("IN operator's right expr should be a subquery");
-    return RC::INVALID_ARGUMENT;
-  }
+  // Parser wraps the right side (including value lists) as SubqueryExpr.
   auto *subq = static_cast<SubqueryExpr *>(set_expr_.get());
   rc = subq->execute_with_context(&tuple);
   if (OB_FAIL(rc)) {

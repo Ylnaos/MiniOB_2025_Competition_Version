@@ -68,9 +68,26 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
     // 第一列由谓词给定
     const FieldMeta &f0 = fields[0];
     switch (f0.type()) {
-      case AttrType::INTS:
-      case AttrType::DATES: {
+      case AttrType::INTS: {
         int32_t v = left_value_.get_int();
+        encode_int(v, &left_bytes[off]);
+        encode_int(v, &right_bytes[off]);
+        off += sizeof(int32_t);
+      } break;
+      case AttrType::DATES: {
+        // 如果传入的值是字符串类型，需要先转换为 DATE 类型
+        int32_t v;
+        if (left_value_.attr_type() == AttrType::CHARS || left_value_.attr_type() == AttrType::TEXTS) {
+          Value date_value;
+          RC rc = Value::cast_to(left_value_, AttrType::DATES, date_value);
+          if (OB_FAIL(rc)) {
+            LOG_WARN("failed to cast string to date for composite index scan. value=%s", left_value_.to_string().c_str());
+            return rc;
+          }
+          v = date_value.get_date();
+        } else {
+          v = left_value_.get_int();
+        }
         encode_int(v, &left_bytes[off]);
         encode_int(v, &right_bytes[off]);
         off += sizeof(int32_t);
@@ -171,10 +188,41 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
     std::string right_bytes(fm.len(), '\0');
 
     switch (fm.type()) {
-      case AttrType::INTS:
-      case AttrType::DATES: {
+      case AttrType::INTS: {
         int32_t vL = left_value_.get_int();
         int32_t vR = (right_value_.attr_type() == AttrType::UNDEFINED) ? vL : right_value_.get_int();
+        encode_int(vL, &left_bytes[0]);
+        encode_int(vR, &right_bytes[0]);
+      } break;
+      case AttrType::DATES: {
+        // 如果传入的值是字符串类型，需要先转换为 DATE 类型
+        Value left_date_value, right_date_value;
+        int32_t vL, vR;
+
+        if (left_value_.attr_type() == AttrType::CHARS || left_value_.attr_type() == AttrType::TEXTS) {
+          RC rc = Value::cast_to(left_value_, AttrType::DATES, left_date_value);
+          if (OB_FAIL(rc)) {
+            LOG_WARN("failed to cast string to date for index scan. value=%s", left_value_.to_string().c_str());
+            return rc;
+          }
+          vL = left_date_value.get_date();
+        } else {
+          vL = left_value_.get_int();
+        }
+
+        if (right_value_.attr_type() == AttrType::UNDEFINED) {
+          vR = vL;
+        } else if (right_value_.attr_type() == AttrType::CHARS || right_value_.attr_type() == AttrType::TEXTS) {
+          RC rc = Value::cast_to(right_value_, AttrType::DATES, right_date_value);
+          if (OB_FAIL(rc)) {
+            LOG_WARN("failed to cast string to date for index scan. value=%s", right_value_.to_string().c_str());
+            return rc;
+          }
+          vR = right_date_value.get_date();
+        } else {
+          vR = right_value_.get_int();
+        }
+
         encode_int(vL, &left_bytes[0]);
         encode_int(vR, &right_bytes[0]);
       } break;
