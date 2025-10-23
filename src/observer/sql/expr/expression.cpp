@@ -1879,19 +1879,18 @@ SubqueryExpr::SubqueryExpr(const std::vector<Value> &cached_results, AttrType re
 
 unique_ptr<Expression> SubqueryExpr::copy() const
 {
-  if (executed_) {
-    auto copied = make_unique<SubqueryExpr>(results_, result_type_, result_len_);
-    copied->set_require_single_column(require_single_column_);
-    return copied;
-  }
-  // 娣辨嫹璐濊В鏋愯妭鐐?
-std::unique_ptr<ParsedSqlNode> copied;
+  std::unique_ptr<ParsedSqlNode> copied_node;
   if (subquery_node_) {
-    copied = deep_copy_parsed_node(*subquery_node_);
+    copied_node = deep_copy_parsed_node(*subquery_node_);
   }
-  auto new_expr = make_unique<SubqueryExpr>(std::move(copied));
-  new_expr->set_require_single_column(require_single_column_);
-  return new_expr;
+
+  auto copied = make_unique<SubqueryExpr>(std::move(copied_node));
+  copied->executed_ = executed_;
+  copied->results_ = results_;
+  copied->result_type_ = result_type_;
+  copied->result_len_ = result_len_;
+  copied->set_require_single_column(require_single_column_);
+  return copied;
 }
 
 void SubqueryExpr::reset_cache() const

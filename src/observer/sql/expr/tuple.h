@@ -473,6 +473,14 @@ public:
 
   RC find_cell(const TupleCellSpec &spec, Value &cell) const override { return tuple_->find_cell(spec, cell); }
 
+  RC get_record_id(RID &rid) const override
+  {
+    if (tuple_ == nullptr) {
+      return RC::INVALID_ARGUMENT;
+    }
+    return tuple_->get_record_id(rid);
+  }
+
 #if 0
   RC cell_spec_at(int index, const TupleCellSpec *&spec) const override
   {
@@ -645,6 +653,18 @@ public:
     }
 
     return right_->find_cell(spec, value);
+  }
+
+  RC get_record_id(RID &rid) const override
+  {
+    // 对于 JOIN，优先返回左表的 RID
+    if (left_ != nullptr) {
+      return left_->get_record_id(rid);
+    }
+    if (right_ != nullptr) {
+      return right_->get_record_id(rid);
+    }
+    return RC::INVALID_ARGUMENT;
   }
 
 private:
