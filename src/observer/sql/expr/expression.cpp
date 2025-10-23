@@ -315,60 +315,9 @@ static fs::path detect_jieba_dict_dir()
   return {};
 }
 
-static bool is_ascii_split_char(char ch)
-{
-  switch (ch) {
-    case '_':
-    case '.':
-    case ',':
-    case ';':
-    case ':':
-    case '!':
-    case '?':
-    case '(':
-    case ')':
-    case '[':
-    case ']':
-    case '{':
-    case '}':
-    case '<':
-    case '>':
-    case '\'':
-    case '"':
-    case '\\':
-    case '/':
-    case '|':
-    case '+':
-    case '-':
-    case '=':
-    case '@':
-    case '#':
-    case '$':
-    case '%':
-    case '^':
-    case '&':
-    case '*':
-      return true;
-    default: break;
-  }
-  return false;
-}
-
-static const char *const kUnicodePunctuations[] = {"？", "。", "，", "！", "、", "；", "：", "“", "”", "‘", "’", "（", "）",
+static const char *const kUnicodePunctuations[] = {"？", "。", "，", "！", "、", "；", "：", """, """, "'", "'", "（", "）",
     "【", "】", "《", "》", "——", "……"};
 static const size_t kUnicodePunctuationCount = sizeof(kUnicodePunctuations) / sizeof(kUnicodePunctuations[0]);
-
-static void remove_unicode_punctuation(string &token)
-{
-  for (size_t i = 0; i < kUnicodePunctuationCount; ++i) {
-    const char *punct = kUnicodePunctuations[i];
-    size_t pos = 0;
-    const size_t len = std::strlen(punct);
-    while (len > 0 && (pos = token.find(punct, pos)) != string::npos) {
-      token.erase(pos, len);
-    }
-  }
-}
 
 static bool is_unicode_punctuation(const string &text, size_t offset, int char_len)
 {
@@ -380,57 +329,6 @@ static bool is_unicode_punctuation(const string &text, size_t offset, int char_l
     }
   }
   return false;
-}
-
-static void emit_clean_token(vector<string> &tokens, const unordered_set<string> &stop_words, string token)
-{
-  if (token.empty()) {
-    return;
-  }
-
-  remove_unicode_punctuation(token);
-
-  size_t begin = 0;
-  while (begin < token.size() &&
-         (std::isspace(static_cast<unsigned char>(token[begin])) || std::ispunct(static_cast<unsigned char>(token[begin])))) {
-    ++begin;
-  }
-  size_t end = token.size();
-  while (end > begin &&
-         (std::isspace(static_cast<unsigned char>(token[end - 1])) || std::ispunct(static_cast<unsigned char>(token[end - 1])))) {
-    --end;
-  }
-
-  if (end <= begin) {
-    return;
-  }
-
-  string cleaned = token.substr(begin, end - begin);
-  remove_unicode_punctuation(cleaned);
-  common::strip(cleaned);
-  if (cleaned.empty()) {
-    return;
-  }
-
-  bool ascii_only = true;
-  for (unsigned char ch : cleaned) {
-    if (ch & 0x80u) {
-      ascii_only = false;
-      break;
-    }
-  }
-
-  if (stop_words.find(cleaned) != stop_words.end()) {
-    return;
-  }
-  if (ascii_only) {
-    string cleaned_lower = cleaned;
-    common::str_to_lower(cleaned_lower);
-    if (stop_words.find(cleaned_lower) != stop_words.end()) {
-      return;
-    }
-  }
-  tokens.emplace_back(std::move(cleaned));
 }
 
 enum class TokenCharType
@@ -472,134 +370,6 @@ static TokenCharType classify_token_char(const string &token, size_t offset, int
   return TokenCharType::NON_ASCII;
 }
 
-static void split_chinese_segment(
-    const string &segment,
-    const unordered_set<string> &stop_words,
-    const unordered_set<string> &dict_words,
-    size_t max_dict_word_bytes,
-    vector<string> &tokens);
-
-static void split_mixed_token(const string &piece,
-    const unordered_set<string> &stop_words,
-    const unordered_set<string> &dict_words,
-    size_t max_dict_word_bytes,
-    vector<string> &tokens)
-{
-  size_t i = 0;
-  while (i < piece.size()) {
-    unsigned char lead = static_cast<unsigned char>(piece[i]);
-    int char_len = utf8_char_length(lead);
-    if (char_len <= 0 || i + char_len > piece.size()) {
-      char_len = 1;
-    }
-    TokenCharType current_type = classify_token_char(piece, i, char_len);
-    if (current_type == TokenCharType::ASCII_OTHER) {
-      i += char_len;
-      continue;
-    }
-    if (current_type == TokenCharType::ASCII_ALNUM) {
-      size_t j = i + char_len;
-      while (j < piece.size()) {
-        unsigned char lead2 = static_cast<unsigned char>(piece[j]);
-        int len2 = utf8_char_length(lead2);
-        if (len2 <= 0 || j + len2 > piece.size()) {
-          len2 = 1;
-        }
-        TokenCharType type2 = classify_token_char(piece, j, len2);
-        if (type2 != TokenCharType::ASCII_ALNUM) {
-          break;
-        }
-        j += len2;
-      }
-      emit_clean_token(tokens, stop_words, piece.substr(i, j - i));
-      i = j;
-      continue;
-    }
-
-    size_t j = i + char_len;
-    while (j < piece.size()) {
-      unsigned char lead2 = static_cast<unsigned char>(piece[j]);
-      int len2 = utf8_char_length(lead2);
-      if (len2 <= 0 || j + len2 > piece.size()) {
-        len2 = 1;
-      }
-      TokenCharType type2 = classify_token_char(piece, j, len2);
-      if (type2 != TokenCharType::NON_ASCII) {
-        break;
-      }
-      j += len2;
-    }
-    split_chinese_segment(piece.substr(i, j - i), stop_words, dict_words, max_dict_word_bytes, tokens);
-    i = j;
-  }
-}
-
-static size_t match_dict_word(const string &text,
-    size_t offset,
-    size_t max_dict_word_bytes,
-    const unordered_set<string> &dict_words)
-{
-  size_t matched = 0;
-  size_t consumed = 0;
-  size_t pos = offset;
-  const size_t limit = std::min(max_dict_word_bytes, text.size() - offset);
-  while (pos < text.size() && consumed < limit) {
-    int len = utf8_char_length(static_cast<unsigned char>(text[pos]));
-    if (len <= 0 || pos + len > text.size()) {
-      len = 1;
-    }
-    consumed += static_cast<size_t>(len);
-    string candidate = text.substr(offset, consumed);
-    if (dict_words.find(candidate) != dict_words.end()) {
-      matched = consumed;
-    }
-    pos += static_cast<size_t>(len);
-  }
-  return matched;
-}
-
-static void split_chinese_segment(
-    const string &segment,
-    const unordered_set<string> &stop_words,
-    const unordered_set<string> &dict_words,
-    size_t max_dict_word_bytes,
-    vector<string> &tokens)
-{
-  size_t pos = 0;
-  while (pos < segment.size()) {
-    int char_len = utf8_char_length(static_cast<unsigned char>(segment[pos]));
-    if (char_len <= 0 || pos + char_len > segment.size()) {
-      char_len = 1;
-    }
-    if (is_unicode_punctuation(segment, pos, char_len)) {
-      pos += static_cast<size_t>(char_len);
-      continue;
-    }
-
-    size_t matched_bytes = match_dict_word(segment, pos, max_dict_word_bytes, dict_words);
-    if (matched_bytes == 0) {
-      matched_bytes = static_cast<size_t>(char_len);
-      size_t next_pos = pos + static_cast<size_t>(char_len);
-      if (next_pos < segment.size()) {
-        int next_len = utf8_char_length(static_cast<unsigned char>(segment[next_pos]));
-        if (next_len <= 0 || next_pos + static_cast<size_t>(next_len) > segment.size()) {
-          next_len = 1;
-        }
-        if (classify_token_char(segment, next_pos, next_len) == TokenCharType::NON_ASCII) {
-          string joined = segment.substr(pos, static_cast<size_t>(char_len) + static_cast<size_t>(next_len));
-          if (dict_words.find(joined) != dict_words.end()) {
-            matched_bytes = static_cast<size_t>(char_len) + static_cast<size_t>(next_len);
-          }
-        }
-      }
-    }
-
-    string word = segment.substr(pos, matched_bytes);
-    emit_clean_token(tokens, stop_words, std::move(word));
-    pos += matched_bytes;
-  }
-}
-
 static string normalize_text_for_segmentation(const string &input)
 {
   string output;
@@ -633,31 +403,6 @@ static string normalize_text_for_segmentation(const string &input)
     i += char_len;
   }
   return output;
-}
-
-static void process_word_into_tokens(const string &word,
-    const unordered_set<string> &stop_words,
-    const unordered_set<string> &dict_words,
-    size_t max_dict_word_bytes,
-    vector<string> &tokens)
-{
-  if (word.empty()) {
-    return;
-  }
-
-  size_t start = 0;
-  const size_t len = word.size();
-
-  for (size_t i = 0; i <= len; ++i) {
-    bool at_end = (i == len);
-    char ch = at_end ? '\0' : word[i];
-    if (at_end || is_ascii_split_char(ch)) {
-      if (i > start) {
-        split_mixed_token(word.substr(start, i - start), stop_words, dict_words, max_dict_word_bytes, tokens);
-      }
-      start = i + 1;
-    }
-  }
 }
 
 class JiebaTokenizer
@@ -694,7 +439,9 @@ public:
     invoke_cut(*ctx.jieba, normalized, raw, true, 0);
 
     tokens.clear();
-    tokens.reserve(raw.size() * 4);
+    tokens.reserve(raw.size());
+    // 直接使用 jieba 的分词结果，不进行后处理拆分
+    // 这样可以保留 jieba 识别的词组（如"表中"）不被拆分成单字
     for (const auto &word : raw) {
       if (word.empty()) {
         continue;
@@ -702,7 +449,11 @@ public:
       if (common::is_blank(word.c_str())) {
         continue;
       }
-      process_word_into_tokens(word, ctx.stop_words, ctx.dict_words, ctx.max_dict_word_bytes, tokens);
+      // 过滤停用词
+      if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
+        continue;
+      }
+      tokens.push_back(word);
     }
     return RC::SUCCESS;
   }
@@ -2121,6 +1872,14 @@ std::unique_ptr<ParsedSqlNode> copied;
   auto new_expr = make_unique<SubqueryExpr>(std::move(copied));
   new_expr->set_require_single_column(require_single_column_);
   return new_expr;
+}
+
+void SubqueryExpr::reset_cache() const
+{
+  executed_ = false;
+  results_.clear();
+  result_type_ = AttrType::UNDEFINED;
+  result_len_  = -1;
 }
 
 RC SubqueryExpr::execute_once() const

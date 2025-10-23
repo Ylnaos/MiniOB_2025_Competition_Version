@@ -98,6 +98,21 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
       }
     } break;
 
+    case ExprType::MATCH_AGAINST: {
+      auto &match_expr = static_cast<MatchAgainstExpr &>(expr);
+      // 遍历所有字段表达式
+      for (auto &field : match_expr.fields()) {
+        rc = callback(field);
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      }
+      // 遍历搜索文本表达式
+      if (OB_SUCC(rc)) {
+        rc = callback(match_expr.search_text());
+      }
+    } break;
+
     case ExprType::NONE:
     case ExprType::STAR:
     case ExprType::UNBOUND_FIELD:
@@ -112,4 +127,21 @@ RC ExpressionIterator::iterate_child_expr(Expression &expr, function<RC(unique_p
   }
 
   return rc;
+}
+
+void ExpressionIterator::reset_subquery_cache(Expression &expr)
+{
+  // 如果当前表达式是子查询，重置其缓存
+  if (expr.type() == ExprType::SUBQUERY) {
+    auto &subquery_expr = static_cast<SubqueryExpr &>(expr);
+    subquery_expr.reset_cache();
+  }
+
+  // 递归遍历所有子表达式，重置其中的子查询缓存
+  iterate_child_expr(expr, [](unique_ptr<Expression> &child_expr) -> RC {
+    if (child_expr) {
+      reset_subquery_cache(*child_expr);
+    }
+    return RC::SUCCESS;
+  });
 }

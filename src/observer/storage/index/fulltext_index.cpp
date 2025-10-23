@@ -16,9 +16,11 @@ See the Mulan PSL v2 for more details. */
 #include "storage/table/table.h"
 #include "storage/record/record_manager.h"
 #include "storage/record/record_scanner.h"
+#include "storage/record/lob_ref.h"
 #include "common/log/log.h"
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 
 // 包含表达式头文件以使用全局分词函数
 #include "sql/expr/expression.h"
@@ -345,8 +347,33 @@ RC FullTextIndex::extract_text_from_record(const char *record, std::string &text
       text.resize(pos);
     }
   } else if (field.type() == AttrType::TEXTS) {
-    // TEXT类型
-    text = std::string(field_data);
+    // TEXT类型 - 存储为LobRef，需要通过LOB handler获取实际数据
+    LobRef ref;
+    memcpy(&ref, field_data, sizeof(LobRef));
+
+    const int32_t length = ref.length;
+    const int64_t offset = ref.offset;
+
+    if (length <= 0) {
+      // 空文本
+      text = "";
+      return RC::SUCCESS;
+    }
+
+    if (table_ == nullptr || table_->lob_handler() == nullptr) {
+      LOG_WARN("table or lob_handler is null");
+      return RC::INTERNAL;
+    }
+
+    std::vector<char> buf;
+    buf.resize(static_cast<size_t>(length));
+    RC rc = table_->lob_handler()->get_data(offset, length, buf.data());
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to get lob data. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    text.assign(buf.data(), length);
   } else {
     LOG_WARN("unsupported field type for full-text index: %d", static_cast<int>(field.type()));
     return RC::SCHEMA_FIELD_TYPE_MISMATCH;

@@ -597,6 +597,9 @@ public:
   // 获取缓存的所有结果（首列）
   const std::vector<Value> &results() const { return results_; }
 
+  // 重置子查询缓存状态（用于需要重新执行子查询的场景）
+  void reset_cache() const;
+
 private:
   // 深拷贝 ParsedSqlNode（当前仅支持 SELECT）
   std::unique_ptr<ParsedSqlNode> deep_copy_parsed_node(const ParsedSqlNode &node) const;

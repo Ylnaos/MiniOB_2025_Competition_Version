@@ -17,6 +17,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/filter_stmt.h"
 #include "storage/field/field.h"
 #include "storage/record/record.h"
+#include "sql/expr/expression_iterator.h"
 
 PredicatePhysicalOperator::PredicatePhysicalOperator(std::unique_ptr<Expression> expr) : expression_(std::move(expr))
 {
@@ -45,6 +46,10 @@ RC PredicatePhysicalOperator::next()
       LOG_WARN("failed to get tuple from operator");
       break;
     }
+
+    // 在求值每个tuple前，重置表达式树中所有子查询的缓存状态
+    // 这确保子查询对每个tuple都能正确执行（对于非关联子查询，第一次执行后会重新缓存）
+    ExpressionIterator::reset_subquery_cache(*expression_);
 
     Value value;
     rc = expression_->get_value(*tuple, value);

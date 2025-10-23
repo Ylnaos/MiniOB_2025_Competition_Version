@@ -24,4 +24,7 @@ class ExpressionIterator
 {
 public:
   static RC iterate_child_expr(Expression &expr, function<RC(unique_ptr<Expression> &)> callback);
+
+  // 重置表达式树中所有子查询的缓存状态
+  static void reset_subquery_cache(Expression &expr);
 };
