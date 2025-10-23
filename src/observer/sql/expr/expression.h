@@ -52,6 +52,7 @@ enum class ExprType
   SUBQUERY,     ///< 子查询表达式（返回单列结果）
   EXISTS,       ///< EXISTS / NOT EXISTS 子查询判定表达式
   IN_LIST,      ///< IN/NOT IN 表达式（右侧可以为子查询）
+  MATCH_AGAINST,///< MATCH...AGAINST 全文检索表达式
 };
 
 /**
@@ -790,3 +791,68 @@ private:
   unique_ptr<Expression>   child2_;
   unique_ptr<Expression>   child3_;
 };
+
+/**
+ * @brief MATCH...AGAINST 全文检索表达式
+ * @ingroup Expression
+ */
+class MatchAgainstExpr : public Expression
+{
+public:
+  MatchAgainstExpr(vector<Expression *> fields, Expression *search_text)
+  {
+    for (Expression *field : fields) {
+      fields_.emplace_back(field);
+    }
+    search_text_.reset(search_text);
+  }
+
+  MatchAgainstExpr(vector<unique_ptr<Expression>> fields, unique_ptr<Expression> search_text)
+      : fields_(std::move(fields)), search_text_(std::move(search_text))
+  {}
+
+  virtual ~MatchAgainstExpr() = default;
+
+  unique_ptr<Expression> copy() const override
+  {
+    vector<unique_ptr<Expression>> fields_copy;
+    for (const auto &field : fields_) {
+      fields_copy.push_back(field->copy());
+    }
+    return make_unique<MatchAgainstExpr>(std::move(fields_copy), search_text_->copy());
+  }
+
+  ExprType type() const override { return ExprType::MATCH_AGAINST; }
+
+  AttrType value_type() const override { return AttrType::FLOATS; }
+
+  int value_length() const override { return sizeof(float); }
+
+  RC get_value(const Tuple &tuple, Value &value) const override;
+  RC get_column(Chunk &chunk, Column &column) override { return RC::UNIMPLEMENTED; }
+  RC try_get_value(Value &value) const override { return RC::UNIMPLEMENTED; }
+
+  const vector<unique_ptr<Expression>> &fields() const { return fields_; }
+  vector<unique_ptr<Expression>> &fields() { return fields_; }
+  const unique_ptr<Expression> &search_text() const { return search_text_; }
+  unique_ptr<Expression> &search_text() { return search_text_; }
+
+  void set_table(Table *table) { table_ = table; }
+  void set_index(Index *index) { index_ = index; }
+  Table *table() const { return table_; }
+  Index *index() const { return index_; }
+
+private:
+  vector<unique_ptr<Expression>> fields_;        ///< 要搜索的字段列表
+  unique_ptr<Expression>         search_text_;   ///< 搜索文本表达式
+  Table *table_ = nullptr;                       ///< 表指针（绑定阶段设置）
+  Index *index_ = nullptr;                       ///< 全文索引指针（绑定阶段设置）
+};
+
+/**
+ * @brief 全局分词函数，用于全文索引
+ * @param text 要分词的文本
+ * @param parser 分词器名称（例如 "jieba"）
+ * @param tokens 输出的词条列表
+ */
+RC jieba_tokenize(const std::string &text, const std::string &parser, std::vector<std::string> &tokens);

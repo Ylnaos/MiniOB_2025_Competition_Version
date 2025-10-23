@@ -49,6 +49,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/physical_plan_generator.h"
 #include "session/session.h"
 #include "storage/db/db.h"
+#include "storage/index/fulltext_index.h"
 #include "cppjieba/Jieba.hpp"
 
 using namespace std;
@@ -3781,4 +3782,69 @@ if (set_expr_->type() != ExprType::SUBQUERY) {
   bool result = not_in_ ? !found : found;
   value.set_boolean(result);
   return RC::SUCCESS;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// MatchAgainstExpr
+
+RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  // 1. 获取搜索文本
+  Value search_value;
+  RC rc = search_text_->get_value(tuple, search_value);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to get search text value. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  if (search_value.attr_type() != AttrType::CHARS && search_value.attr_type() != AttrType::TEXTS) {
+    LOG_WARN("search text must be string type");
+    return RC::INVALID_ARGUMENT;
+  }
+
+  std::string query = search_value.to_string();
+
+  // 2. 如果索引未绑定，返回0分
+  if (index_ == nullptr || table_ == nullptr) {
+    LOG_WARN("full-text index not bound");
+    value.set_float(0.0f);
+    return RC::SUCCESS;
+  }
+
+  // 3. 从tuple中获取当前记录的RID
+  RID rid;
+  rc = tuple.get_record_id(rid);
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to get record id from tuple. rc=%s", strrc(rc));
+    value.set_float(0.0f);
+    return RC::SUCCESS;
+  }
+
+  // 4. 调用FullTextIndex的calculate_bm25_score方法计算评分
+  // 需要将Index*转换为FullTextIndex*
+  FullTextIndex *ft_index = dynamic_cast<FullTextIndex *>(index_);
+  if (ft_index == nullptr) {
+    LOG_WARN("index is not a full-text index");
+    value.set_float(0.0f);
+    return RC::SUCCESS;
+  }
+
+  float score = 0.0f;
+  rc = ft_index->calculate_bm25_score(rid, query, score);
+  if (rc != RC::SUCCESS) {
+    // 如果计算失败（比如文档不在索引中），返回0分
+    value.set_float(0.0f);
+    return RC::SUCCESS;
+  }
+
+  value.set_float(score);
+  return RC::SUCCESS;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 全局分词函数
+
+RC jieba_tokenize(const std::string &text, const std::string &parser, std::vector<std::string> &tokens)
+{
+  return JiebaTokenizer::tokenize(text, parser, tokens);
 }

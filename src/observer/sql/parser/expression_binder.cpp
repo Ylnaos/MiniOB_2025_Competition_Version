@@ -73,6 +73,78 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
     return RC::SUCCESS;
   }
 
+  if (expr->type() == ExprType::MATCH_AGAINST) {
+    // MATCH...AGAINST 全文检索表达式
+    auto *match_expr = static_cast<MatchAgainstExpr *>(expr.get());
+
+    // 绑定字段表达式
+    for (auto &field : match_expr->fields()) {
+      vector<unique_ptr<Expression>> field_bound;
+      RC rc = bind_expression(field, field_bound);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to bind field in MATCH expression. rc=%s", strrc(rc));
+        return rc;
+      }
+      if (field_bound.size() == 1 && field_bound[0].get() != field.get()) {
+        field.reset(field_bound[0].release());
+      }
+    }
+
+    // 绑定搜索文本表达式
+    vector<unique_ptr<Expression>> search_bound;
+    RC rc = bind_expression(match_expr->search_text(), search_bound);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to bind search text in MATCH expression. rc=%s", strrc(rc));
+      return rc;
+    }
+    if (search_bound.size() == 1 && search_bound[0].get() != match_expr->search_text().get()) {
+      match_expr->search_text().reset(search_bound[0].release());
+    }
+
+    // 验证字段类型并查找全文索引
+    if (match_expr->fields().empty()) {
+      LOG_WARN("MATCH expression requires at least one field");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    // 获取字段对应的表
+    auto &first_field = match_expr->fields()[0];
+    if (first_field->type() != ExprType::FIELD) {
+      LOG_WARN("MATCH expression requires bound field expression");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    auto *field_expr = static_cast<FieldExpr *>(first_field.get());
+    Table *table = const_cast<Table *>(field_expr->field().table());
+
+    // 查找该字段上的全文索引
+    const FieldMeta *field_meta = field_expr->field().meta();
+    const TableMeta &table_meta = table->table_meta();
+    Index *fulltext_index = nullptr;
+
+    for (int i = 0; i < table_meta.index_num(); i++) {
+      const IndexMeta *index_meta = table_meta.index(i);
+      if (index_meta && index_meta->is_full_text_index() &&
+          index_meta->fields().size() == 1 &&
+          index_meta->fields()[0] == field_meta->name()) {
+        fulltext_index = table->find_index(index_meta->name());
+        break;
+      }
+    }
+
+    if (fulltext_index == nullptr) {
+      LOG_WARN("no full-text index found on field %s.%s", table->name(), field_meta->name());
+      return RC::NOT_EXIST;
+    }
+
+    // 设置表和索引
+    match_expr->set_table(table);
+    match_expr->set_index(fulltext_index);
+
+    bound_expressions.emplace_back(std::move(expr));
+    return RC::SUCCESS;
+  }
+
   if (expr->type() == ExprType::FUNCTION) {
     auto *func = static_cast<ScalarFunctionExpr *>(expr.get());
     auto bind_child = [&](unique_ptr<Expression> &child) -> RC {

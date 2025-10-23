@@ -90,6 +90,18 @@ struct RIDHash
   }
 };
 
+// std::hash specialization for RID
+namespace std {
+template <>
+struct hash<RID>
+{
+  size_t operator()(const RID &rid) const noexcept
+  {
+    return hash<PageNum>()(rid.page_num) ^ hash<SlotNum>()(rid.slot_num);
+  }
+};
+}  // namespace std
+
 /**
  * @brief 表示一个记录
  * @details 当前的记录都是连续存放的空间（内存或磁盘上）。

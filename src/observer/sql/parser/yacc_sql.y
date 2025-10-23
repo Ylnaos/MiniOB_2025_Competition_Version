@@ -1207,6 +1207,16 @@ expression:
     | aggregate_expression {
       $$ = $1;
     }
+    | MATCH LBRACE rel_attr RBRACE AGAINST LBRACE expression RBRACE {
+      // MATCH(field) AGAINST('search_text')
+      std::vector<Expression *> fields;
+      RelAttrSqlNode *node = $3;
+      fields.push_back(new UnboundFieldExpr(node->relation_name, node->attribute_name));
+      delete node;
+      MatchAgainstExpr *match = new MatchAgainstExpr(std::move(fields), $7);
+      match->set_name(token_name(sql_string, &@$));
+      $$ = match;
+    }
     | LBRACE select_stmt RBRACE {
       // 子查询表达式：将select子句作为一个表达式节点
       if ($2 == nullptr || $2->flag != SCF_SELECT) {

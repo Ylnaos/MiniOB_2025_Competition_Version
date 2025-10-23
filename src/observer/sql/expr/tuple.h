@@ -99,6 +99,11 @@ public:
    */
   virtual RC find_cell(const TupleCellSpec &spec, Value &cell) const = 0;
 
+  /**
+   * @brief 获取当前记录的RID（仅对RowTuple有效）
+   */
+  virtual RC get_record_id(RID &rid) const { return RC::UNIMPLEMENTED; }
+
   virtual string to_string() const
   {
     string    str;
@@ -410,6 +415,15 @@ public:
   Record &record() { return *record_; }
 
   const Record &record() const { return *record_; }
+
+  RC get_record_id(RID &rid) const override
+  {
+    if (record_ == nullptr) {
+      return RC::INVALID_ARGUMENT;
+    }
+    rid = record_->rid();
+    return RC::SUCCESS;
+  }
 
 private:
   Record             *record_ = nullptr;
