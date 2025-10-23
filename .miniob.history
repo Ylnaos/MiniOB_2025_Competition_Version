@@ -28,3 +28,9 @@ CREATE TABLE test_t1(id int, age int);
 CREATE DATABASE IF NOT EXISTS testdb;
 ### 2025-10-23 01:04:23.456
 select 1;
+### 2025-10-23 02:21:37.251
+select min(feat2) from csq_2;
+### 2025-10-23 02:40:57.600
+SELECT feat_a > (SELECT MIN(feat_b) FROM t_inner) FROM t_outer ORDER BY id;
+### 2025-10-23 02:48:27.120
+SELECT id, col_a, feat_a, feat_a > (SELECT MIN(feat_b) FROM t_inner) FROM t_outer ORDER BY id;

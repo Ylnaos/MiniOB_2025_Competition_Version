@@ -1,0 +1,1 @@
+select * from csq_1 where (select max(csq_2.feat2) from csq_2) > feat1 and exists (select * from csq_3 where csq_3.col3 < csq_1.col1);

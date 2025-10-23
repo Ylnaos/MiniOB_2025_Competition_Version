@@ -64,6 +64,8 @@ public:
                       int doc_length,
                       const std::vector<std::string> &query_tokens) const;
 
+  bool is_full_text_index() const override { return true; }
+
 private:
   RC initialize(Table *table, const IndexMeta &index_meta, span<const FieldMeta> field_metas);
   RC rebuild_from_table();

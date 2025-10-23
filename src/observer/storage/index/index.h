@@ -89,6 +89,8 @@ public:
    */
   virtual RC sync() = 0;
 
+  virtual bool is_full_text_index() const { return false; }
+
 protected:
   RC init(const IndexMeta &index_meta, span<const FieldMeta> field_metas);
 

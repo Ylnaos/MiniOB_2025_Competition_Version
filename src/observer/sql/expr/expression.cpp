@@ -33,6 +33,7 @@ See the Mulan PSL v2 for more details. */
 #include "session/session.h"
 #include "storage/db/db.h"
 #include "storage/index/full_text_index.h"
+#include "storage/index/index.h"
 #include "common/type/vector_type.h"
 
 using namespace std;
@@ -135,11 +136,15 @@ static RC eval_distance_value(const Value &vec1, const Value &vec2, string dist_
 
   const int len1 = vec1.length();
   const int len2 = vec2.length();
-  if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
-      (len1 % static_cast<int>(sizeof(float)) != 0) ||
-      (len2 % static_cast<int>(sizeof(float)) != 0)) {
+  if (len1 <= 0 || len2 <= 0) {
     out.set_null();
     return RC::SUCCESS;
+  }
+  if (len1 != len2 ||
+      (len1 % static_cast<int>(sizeof(float)) != 0) ||
+      (len2 % static_cast<int>(sizeof(float)) != 0)) {
+    LOG_WARN("Vector length mismatch or invalid bytes: len1=%d len2=%d", len1, len2);
+    return RC::INVALID_ARGUMENT;
   }
 
   const int dim = len1 / static_cast<int>(sizeof(float));
@@ -1838,11 +1843,15 @@ RC ScalarFunctionExpr::get_value(const Tuple &tuple, Value &value) const
       // 现在使用转换后的向量值
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
-          (len1 % static_cast<int>(sizeof(float)) != 0) ||
-          (len2 % static_cast<int>(sizeof(float)) != 0)) {
+      if (len1 <= 0 || len2 <= 0) {
         value.set_null();
         return RC::SUCCESS;
+      }
+      if (len1 != len2 ||
+          (len1 % static_cast<int>(sizeof(float)) != 0) ||
+          (len2 % static_cast<int>(sizeof(float)) != 0)) {
+        LOG_WARN("vector length mismatch: len1=%d len2=%d", len1, len2);
+        return RC::INVALID_ARGUMENT;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -2130,11 +2139,15 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
 
       const int len1 = vec_arg1.length();
       const int len2 = vec_arg2.length();
-      if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
-          (len1 % static_cast<int>(sizeof(float)) != 0) ||
-          (len2 % static_cast<int>(sizeof(float)) != 0)) {
+      if (len1 <= 0 || len2 <= 0) {
         value.set_null();
         return RC::SUCCESS;
+      }
+      if (len1 != len2 ||
+          (len1 % static_cast<int>(sizeof(float)) != 0) ||
+          (len2 % static_cast<int>(sizeof(float)) != 0)) {
+        LOG_WARN("vector length mismatch in const distance: len1=%d len2=%d", len1, len2);
+        return RC::INVALID_ARGUMENT;
       }
       const int dim = len1 / static_cast<int>(sizeof(float));
       const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -2443,11 +2456,15 @@ RC ScalarFunctionExpr::get_column(Chunk &chunk, Column &column)
         // 现在使用转换后的向量值进行计算
         const int len1 = vec_arg1.length();
         const int len2 = vec_arg2.length();
-        if (len1 <= 0 || len2 <= 0 || len1 != len2 ||
-            (len1 % static_cast<int>(sizeof(float)) != 0) ||
-            (len2 % static_cast<int>(sizeof(float)) != 0)) {
+        if (len1 <= 0 || len2 <= 0) {
           out.set_null();
           break;
+        }
+        if (len1 != len2 ||
+            (len1 % static_cast<int>(sizeof(float)) != 0) ||
+            (len2 % static_cast<int>(sizeof(float)) != 0)) {
+          LOG_WARN("vector length mismatch in column eval: len1=%d len2=%d", len1, len2);
+          return RC::INVALID_ARGUMENT;
         }
         const int dim = len1 / static_cast<int>(sizeof(float));
         const float *a = reinterpret_cast<const float *>(vec_arg1.data());
@@ -3109,14 +3126,30 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value) const
     return RC::INVALID_ARGUMENT;
   }
 
+  const RowTuple *row_tuple = dynamic_cast<const RowTuple *>(&tuple);
+  if (table_ == nullptr && row_tuple == nullptr) {
+    const auto *project = dynamic_cast<const ProjectTuple *>(&tuple);
+    if (project != nullptr) {
+      const Tuple *inner = project->tuple();
+      const auto  *inner_row = (inner != nullptr) ? dynamic_cast<const RowTuple *>(inner) : nullptr;
+      if (inner_row != nullptr) {
+        table_ = const_cast<Table *>(inner_row->table());
+      }
+    }
+  }
+
+  if (table_ == nullptr && row_tuple != nullptr) {
+    table_ = const_cast<Table *>(row_tuple->table());
+  }
+
   if (full_text_index_ == nullptr && table_ != nullptr && !fields_.empty() && fields_[0]) {
     const Expression *field_expr = fields_[0].get();
     const FieldExpr   *field     = dynamic_cast<const FieldExpr *>(field_expr);
     if (field != nullptr) {
       Index *index = table_->find_index_by_field(field->field_name());
-      full_text_index_ = dynamic_cast<FullTextIndex *>(index);
-      if (full_text_index_ != nullptr) {
-        parser_name_ = full_text_index_->index_meta().full_text_parser();
+      if (index != nullptr && index->is_full_text_index()) {
+        full_text_index_ = static_cast<FullTextIndex *>(index);
+        parser_name_     = full_text_index_->index_meta().full_text_parser();
       }
     }
   }

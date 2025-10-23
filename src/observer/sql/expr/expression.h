@@ -836,5 +836,5 @@ private:
   std::unique_ptr<Expression>              query_expr_;
   mutable string                           parser_name_;
   mutable FullTextIndex                   *full_text_index_ = nullptr;
-  Table                                   *table_           = nullptr;
+  mutable Table                           *table_           = nullptr;
 };

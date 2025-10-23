@@ -1,0 +1,1 @@
+SELECT * FROM t_outer WHERE feat_a > (SELECT MIN(feat_b) FROM t_inner) OR col_a <= (SELECT MIN(col_b) FROM t_inner);

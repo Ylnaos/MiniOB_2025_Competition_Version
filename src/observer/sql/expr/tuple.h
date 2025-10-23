@@ -411,6 +411,8 @@ public:
 
   const Record &record() const { return *record_; }
 
+  const Table *table() const { return table_; }
+
 private:
   Record             *record_ = nullptr;
   const Table        *table_  = nullptr;
@@ -435,6 +437,9 @@ public:
   auto get_expressions() const -> const vector<unique_ptr<Expression>> & { return expressions_; }
 
   void set_tuple(Tuple *tuple) { this->tuple_ = tuple; }
+
+  Tuple *tuple() { return tuple_; }
+  const Tuple *tuple() const { return tuple_; }
 
   int cell_num() const override { return static_cast<int>(expressions_.size()); }
 

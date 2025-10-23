@@ -100,7 +100,7 @@ static RC bind_match_against_expression(MatchAgainstExpr *match_expr,
     if (OB_FAIL(rc)) {
       return rc;
     }
-    if (!field_bound.empty() && field_bound[0].get() != field_expr.get()) {
+    if (!field_bound.empty()) {
       field_expr.reset(field_bound[0].release());
     }
 
@@ -137,8 +137,8 @@ static RC bind_match_against_expression(MatchAgainstExpr *match_expr,
   }
 
   Index *index = target_table->find_index_by_field(field_meta->name());
-  if (index != nullptr) {
-    full_text_index = dynamic_cast<FullTextIndex *>(index);
+  if (index != nullptr && index->is_full_text_index()) {
+    full_text_index = static_cast<FullTextIndex *>(index);
   }
 
   if (index == nullptr || full_text_index == nullptr || !index->index_meta().is_full_text_index()) {

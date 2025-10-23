@@ -22,6 +22,8 @@ See the Mulan PSL v2 for more details. */
 #include "sql/parser/parse.h"
 #include "storage/view/view.h"
 #include "sql/expr/expression.h"
+#include <unordered_map>
+#include <unordered_map>
 
 using namespace std;
 using namespace common;
@@ -623,14 +625,35 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
   }
 
-  // 绑定 SELECT 列
+  // 绑定 SELECT 列，并构建别名映射
   vector<unique_ptr<Expression>> bound_expressions;
+  std::unordered_map<string, size_t> projection_aliases;
   ExpressionBinder expression_binder(binder_context);
   for (unique_ptr<Expression> &expression : select_sql.expressions) {
+    size_t before = bound_expressions.size();
     RC rc = expression_binder.bind_expression(expression, bound_expressions);
     if (OB_FAIL(rc)) {
       LOG_INFO("bind expression failed. rc=%s", strrc(rc));
       return rc;
+    }
+    for (size_t idx = before; idx < bound_expressions.size(); ++idx) {
+      Expression *expr_ptr = bound_expressions[idx].get();
+      if (expr_ptr == nullptr) {
+        continue;
+      }
+      const char *alias = expr_ptr->alias();
+      const char *name  = expr_ptr->name();
+      string key;
+      if (alias != nullptr && alias[0] != '\0') {
+        key = alias;
+      } else if (name != nullptr && name[0] != '\0') {
+        key = name;
+      }
+      if (!key.empty()) {
+        string upper = key;
+        common::str_to_upper(upper);
+        projection_aliases[upper] = idx;
+      }
     }
   }
 
@@ -647,19 +670,44 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   // 绑定 ORDER BY
   vector<pair<unique_ptr<Expression>, bool>> order_by_items;
   for (auto &item : select_sql.order_by) {
+    // 未绑定字段，尝试用 projection 别名直接替换
+    if (item.expression != nullptr && item.expression->type() == ExprType::UNBOUND_FIELD) {
+      auto *unbound = static_cast<UnboundFieldExpr *>(item.expression.get());
+      if (unbound != nullptr) {
+        string upper = unbound->field_name();
+        common::str_to_upper(upper);
+        auto iter = projection_aliases.find(upper);
+        if (iter != projection_aliases.end() && iter->second < bound_expressions.size()) {
+          order_by_items.emplace_back(bound_expressions[iter->second]->copy(), item.asc);
+          continue;
+        }
+      }
+    }
     vector<unique_ptr<Expression>> bound;
     RC rc = expression_binder.bind_expression(item.expression, bound);
     if (rc == RC::SCHEMA_FIELD_NOT_EXIST || rc == RC::SCHEMA_FIELD_MISSING) {
       bool matched_alias = false;
+      string lookup;
       if (item.expression != nullptr && item.expression->type() == ExprType::UNBOUND_FIELD) {
         auto *unbound = static_cast<UnboundFieldExpr *>(item.expression.get());
         const char *alias_name = unbound->field_name();
         if (alias_name != nullptr && alias_name[0] != '\0') {
+          lookup = alias_name;
+        }
+      }
+      if (!lookup.empty()) {
+        string upper_lookup = lookup;
+        common::str_to_upper(upper_lookup);
+        auto iter = projection_aliases.find(upper_lookup);
+        if (iter != projection_aliases.end() && iter->second < bound_expressions.size()) {
+          order_by_items.emplace_back(bound_expressions[iter->second]->copy(), item.asc);
+          matched_alias = true;
+        } else {
           for (const auto &expr : bound_expressions) {
             const char *expr_alias = expr->alias();
             const char *expr_name  = expr->name();
-            if ((expr_alias != nullptr && 0 == strcasecmp(expr_alias, alias_name)) ||
-                (expr_name != nullptr && 0 == strcasecmp(expr_name, alias_name))) {
+            if ((expr_alias != nullptr && 0 == strcasecmp(expr_alias, lookup.c_str())) ||
+                (expr_name != nullptr && 0 == strcasecmp(expr_name, lookup.c_str()))) {
               order_by_items.emplace_back(expr->copy(), item.asc);
               matched_alias = true;
               break;
