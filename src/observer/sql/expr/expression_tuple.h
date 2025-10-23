@@ -72,6 +72,14 @@ public:
     return rc;
   }
 
+  RC get_record_id(RID &rid) const override
+  {
+    if (child_tuple_ == nullptr) {
+      return RC::INVALID_ARGUMENT;
+    }
+    return child_tuple_->get_record_id(rid);
+  }
+
 private:
   RC get_value(const ExprPointerType &expression, Value &value) const
   {

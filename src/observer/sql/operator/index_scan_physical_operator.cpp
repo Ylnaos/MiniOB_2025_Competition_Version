@@ -81,9 +81,9 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
           Value date_value;
           RC rc = Value::cast_to(left_value_, AttrType::DATES, date_value);
           if (OB_FAIL(rc)) {
-            // 无效的日期字符串，使用一个不可能匹配的值（负数），让查询返回空结果集
-            LOG_TRACE("invalid date string for index scan, will return empty result. value=%s", left_value_.to_string().c_str());
-            v = -1;
+            // 无效的日期字符串，直接返回错误让查询失败
+            LOG_WARN("invalid date string for index scan. value=%s", left_value_.to_string().c_str());
+            return rc;
           } else {
             v = date_value.get_date();
           }
@@ -204,9 +204,9 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
         if (left_value_.attr_type() == AttrType::CHARS || left_value_.attr_type() == AttrType::TEXTS) {
           RC rc = Value::cast_to(left_value_, AttrType::DATES, left_date_value);
           if (OB_FAIL(rc)) {
-            // 无效的日期字符串，使用一个不可能匹配的值（负数），让查询返回空结果集
-            LOG_TRACE("invalid date string for index scan, will return empty result. value=%s", left_value_.to_string().c_str());
-            vL = -1;
+            // 无效的日期字符串，直接返回错误让查询失败
+            LOG_WARN("invalid date string for index scan. value=%s", left_value_.to_string().c_str());
+            return rc;
           } else {
             vL = left_date_value.get_date();
           }
@@ -219,9 +219,9 @@ RC IndexScanPhysicalOperator::open(Trx *trx)
         } else if (right_value_.attr_type() == AttrType::CHARS || right_value_.attr_type() == AttrType::TEXTS) {
           RC rc = Value::cast_to(right_value_, AttrType::DATES, right_date_value);
           if (OB_FAIL(rc)) {
-            // 无效的日期字符串，使用一个不可能匹配的值（负数），让查询返回空结果集
-            LOG_TRACE("invalid date string for index scan, will return empty result. value=%s", right_value_.to_string().c_str());
-            vR = -1;
+            // 无效的日期字符串，直接返回错误让查询失败
+            LOG_WARN("invalid date string for index scan. value=%s", right_value_.to_string().c_str());
+            return rc;
           } else {
             vR = right_date_value.get_date();
           }
