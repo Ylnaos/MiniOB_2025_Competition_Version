@@ -473,6 +473,19 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         for (auto &cond : node->selection.conditions) {
           select_sql.conditions.emplace_back(std::move(cond));
         }
+        // 处理where_expr：如果视图有where_expr，需要与外层WHERE合并
+        if (node->selection.where_expr) {
+          if (select_sql.where_expr) {
+            // 外层也有where_expr，创建AND节点连接
+            vector<unique_ptr<Expression>> children;
+            children.push_back(std::move(select_sql.where_expr));
+            children.push_back(std::move(node->selection.where_expr));
+            select_sql.where_expr = make_unique<ConjunctionExpr>(ConjunctionExpr::Type::AND, std::move(children));
+          } else {
+            // 外层没有where_expr，直接移动
+            select_sql.where_expr = std::move(node->selection.where_expr);
+          }
+        }
 
         // 2) 如果是 SELECT *，用视图 SELECT 列替换
         bool only_star = (select_sql.expressions.size() == 1) &&
@@ -509,9 +522,140 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
             if (OB_FAIL(rc)) return rc;
           }
+          // 重写WHERE条件中的字段
+          if (select_sql.where_expr) {
+            RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
+            if (OB_FAIL(rc)) {
+              LOG_WARN("Failed to rewrite WHERE condition for view '%s'", view->name());
+              return rc;
+            }
+          }
         }
       }
     }
+  }
+
+  // 循环展开嵌套视图（支持 view on view）
+  // 示例：create view v8 as select ... from v6; 其中v6也是视图
+  const int MAX_VIEW_RECURSION_DEPTH = 10;  // 防止循环引用导致无限递归
+  for (int view_depth = 0; view_depth < MAX_VIEW_RECURSION_DEPTH; view_depth++) {
+    // 只处理单表FROM且无别名的情况
+    if (select_sql.relations.size() != 1 || !select_sql.relations[0].alias.empty()) {
+      break;
+    }
+
+    const char *rel_name = select_sql.relations[0].relation_name.c_str();
+    // 如果是物理表，退出循环
+    if (db->find_table(rel_name) != nullptr) {
+      break;
+    }
+
+    // 尝试查找视图
+    View *nested_view = db->find_view(rel_name);
+    if (nested_view == nullptr) {
+      break;  // 既不是表也不是视图，退出循环（后续会报错）
+    }
+
+    LOG_INFO("Expanding nested view: %s (depth=%d)", nested_view->name(), view_depth + 1);
+
+    // 解析嵌套视图的SQL
+    ParsedSqlResult parsed;
+    RC parse_rc = parse(nested_view->select_sql(), &parsed);
+    if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+      LOG_WARN("parse nested view select failed. view=%s, sql=%s", nested_view->name(), nested_view->select_sql());
+      return RC::SQL_SYNTAX;
+    }
+    ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+    if (node->flag != SCF_SELECT) {
+      LOG_WARN("nested view definition is not a SELECT. view=%s", nested_view->name());
+      return RC::SQL_SYNTAX;
+    }
+
+    // 检查嵌套视图是否包含聚合函数或GROUP BY
+    bool nested_view_has_aggregation = false;
+    for (const auto &expr : node->selection.expressions) {
+      if (contains_aggregation(expr)) {
+        nested_view_has_aggregation = true;
+        break;
+      }
+    }
+    if (!nested_view_has_aggregation && !node->selection.group_by.empty()) {
+      nested_view_has_aggregation = true;
+    }
+
+    // 如果嵌套视图包含聚合，不能继续平展开，需要作为子查询处理
+    // 退出循环，后续会在表收集阶段将其作为聚合视图处理
+    if (nested_view_has_aggregation) {
+      LOG_INFO("Nested view '%s' contains aggregation, stop flattening", nested_view->name());
+      break;
+    }
+
+    // 展开嵌套视图的 FROM/WHERE
+    select_sql.relations.swap(node->selection.relations);
+    for (auto &cond : node->selection.conditions) {
+      select_sql.conditions.emplace_back(std::move(cond));
+    }
+    // 处理where_expr：如果嵌套视图有where_expr，需要与外层WHERE合并
+    if (node->selection.where_expr) {
+      if (select_sql.where_expr) {
+        // 外层也有where_expr，创建AND节点连接
+        vector<unique_ptr<Expression>> children;
+        children.push_back(std::move(select_sql.where_expr));
+        children.push_back(std::move(node->selection.where_expr));
+        select_sql.where_expr = make_unique<ConjunctionExpr>(ConjunctionExpr::Type::AND, std::move(children));
+      } else {
+        // 外层没有where_expr，直接移动
+        select_sql.where_expr = std::move(node->selection.where_expr);
+      }
+    }
+
+    // 处理表达式映射和重写
+    bool only_star = (select_sql.expressions.size() == 1) &&
+                     (select_sql.expressions[0] != nullptr) &&
+                     (select_sql.expressions[0]->type() == ExprType::STAR);
+    if (only_star) {
+      // SELECT * 的情况：直接用嵌套视图的表达式替换
+      select_sql.expressions.swap(node->selection.expressions);
+      if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
+        select_sql.group_by.swap(node->selection.group_by);
+      }
+      if (!node->selection.order_by.empty() && select_sql.order_by.empty()) {
+        select_sql.order_by.swap(node->selection.order_by);
+      }
+    } else {
+      // 非 * 的情况：根据嵌套视图输出列名映射，重写外层未限定字段
+      unordered_map<string, pair<string, string>> name_to_relattr;
+      unordered_map<string, unique_ptr<Expression>> name_to_expr;
+      const vector<string> &nested_view_fields = nested_view->view_fields();
+      build_view_output_mapping(db, select_sql.relations, node->selection.expressions,
+                                nested_view_fields, name_to_relattr, name_to_expr);
+      for (auto &outer_expr : select_sql.expressions) {
+        RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("Failed to rewrite field for nested view '%s'", nested_view->name());
+          return rc;
+        }
+      }
+      for (auto &gexpr : select_sql.group_by) {
+        RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
+        if (OB_FAIL(rc)) return rc;
+      }
+      for (auto &item : select_sql.order_by) {
+        RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
+        if (OB_FAIL(rc)) return rc;
+      }
+      // 重写WHERE条件中的字段
+      if (select_sql.where_expr) {
+        RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("Failed to rewrite WHERE condition for nested view '%s'", nested_view->name());
+          return rc;
+        }
+      }
+    }
+
+    LOG_INFO("Successfully expanded nested view: %s", nested_view->name());
+    // 继续循环，检查新的relations是否还包含视图
   }
 
   // 绑定阶段
@@ -602,18 +746,9 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   }
   FilterStmt *filter_stmt = nullptr;
   RC rc = RC::SUCCESS;
-  if (select_sql.where_expr) {
-    // 使用表达式绑定
-    vector<unique_ptr<Expression>> bound;
-    RC rc2 = expression_binder.bind_expression(select_sql.where_expr, bound);
-    if (OB_FAIL(rc2) || bound.size() != 1) {
-      LOG_WARN("bind where boolean expression failed. rc=%s", strrc(rc2));
-      return rc2 == RC::SUCCESS ? RC::INVALID_ARGUMENT : rc2;
-    }
-    // 后续在逻辑阶段接成谓词算子
-    // 先占位到 select_stmt 中
-    // filter_stmt 为空，表示不使用传统过滤器
-  } else {
+  // 注意：where_expr的绑定统一放到后面与其他表达式一起处理，避免重复绑定
+  if (!select_sql.where_expr) {
+    // 仅当没有where_expr时，使用传统的FilterStmt（条件链）
     rc = FilterStmt::create(db,
         default_table,
         &table_map,
@@ -693,7 +828,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
 
     if (!cmp_exprs.empty()) {
-      unique_ptr<Expression> having_expr(new ConjunctionExpr(ConjunctionExpr::Type::AND, cmp_exprs));
+      unique_ptr<Expression> having_expr(new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(cmp_exprs)));
       select_stmt->having_expr_.swap(having_expr);
     }
   }

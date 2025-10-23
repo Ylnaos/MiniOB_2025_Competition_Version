@@ -1061,7 +1061,7 @@ select_core:        /*  select 语句的语法解析树*/
           vector<unique_ptr<Expression>> children;
           children.emplace_back($$->selection.where_expr.release());
           children.emplace_back(g_join_on_expr);
-          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, children));
+          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children)));
         } else {
           $$->selection.where_expr.reset(g_join_on_expr);
         }
@@ -1107,7 +1107,7 @@ select_core:        /*  select 语句的语法解析树*/
           vector<unique_ptr<Expression>> children;
           children.emplace_back($$->selection.where_expr.release());
           children.emplace_back(g_join_on_expr);
-          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, children));
+          $$->selection.where_expr.reset(new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children)));
         } else {
           $$->selection.where_expr.reset(g_join_on_expr);
         }
@@ -1458,7 +1458,7 @@ join_seq:
         vector<unique_ptr<Expression>> children;
         children.emplace_back(g_join_on_expr);
         children.emplace_back($6);
-        g_join_on_expr = new ConjunctionExpr(ConjunctionExpr::Type::AND, children);
+        g_join_on_expr = new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children));
       }
     }
     | join_seq JOIN relation ON bool_term {
@@ -1471,7 +1471,7 @@ join_seq:
         vector<unique_ptr<Expression>> children;
         children.emplace_back(g_join_on_expr);
         children.emplace_back($5);
-        g_join_on_expr = new ConjunctionExpr(ConjunctionExpr::Type::AND, children);
+        g_join_on_expr = new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children));
       }
     }
     ;
@@ -1623,14 +1623,14 @@ bool_term:
       vector<unique_ptr<Expression>> children;
       children.emplace_back($1);
       children.emplace_back($3);
-      $$ = new ConjunctionExpr(ConjunctionExpr::Type::OR, children);
+      $$ = new ConjunctionExpr(ConjunctionExpr::Type::OR, std::move(children));
     }
     | bool_term AND bool_factor
     {
       vector<unique_ptr<Expression>> children;
       children.emplace_back($1);
       children.emplace_back($3);
-      $$ = new ConjunctionExpr(ConjunctionExpr::Type::AND, children);
+      $$ = new ConjunctionExpr(ConjunctionExpr::Type::AND, std::move(children));
     }
     | bool_factor
     {

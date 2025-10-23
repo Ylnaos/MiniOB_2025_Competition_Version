@@ -377,7 +377,7 @@ public:
   };
 
 public:
-  ConjunctionExpr(Type type, vector<unique_ptr<Expression>> &children);
+  ConjunctionExpr(Type type, vector<unique_ptr<Expression>> &&children);
   virtual ~ConjunctionExpr() = default;
 
   unique_ptr<Expression> copy() const override
@@ -386,7 +386,7 @@ public:
     for (auto &child : children_) {
       children.emplace_back(child->copy());
     }
-    return make_unique<ConjunctionExpr>(conjunction_type_, children);
+    return make_unique<ConjunctionExpr>(conjunction_type_, std::move(children));
   }
 
   ExprType type() const override { return ExprType::CONJUNCTION; }

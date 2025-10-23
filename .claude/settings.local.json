@@ -22,7 +22,8 @@
       "Bash(git prune:*)",
       "Bash(git gc:*)",
       "mcp__filesystem__list_directory",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

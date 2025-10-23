@@ -1013,6 +1013,9 @@ if (left_->type() == ExprType::SUBQUERY || right_->type() == ExprType::SUBQUERY)
     const bool left_is_subq  = left_->type() == ExprType::SUBQUERY;
     const bool right_is_subq = right_->type() == ExprType::SUBQUERY;
 
+    LOG_INFO("[COMPARISON] with subquery: left_is_subq=%d, right_is_subq=%d, comp=%d",
+              left_is_subq, right_is_subq, static_cast<int>(comp_));
+
     RC rc = RC::SUCCESS;
 
     // 涓や晶鍧囦负瀛愭煡璇細鎸夋爣閲忔瘮杈冩墽琛?
@@ -1062,11 +1065,15 @@ if (left_is_subq && right_is_subq) {
 
     // 鑾峰彇鍙︿竴渚у€?
 Value other_val;
-    rc = (left_is_subq ? right_->get_value(tuple, other_val) : left_->get_value(tuple, other_val));
+    Expression *other_expr = left_is_subq ? right_.get() : left_.get();
+    rc = other_expr->get_value(tuple, other_val);
     if (OB_FAIL(rc)) {
-      LOG_WARN("failed to get value of non-subquery expression. rc=%s", strrc(rc));
+      LOG_WARN("failed to get value of non-subquery expression. rc=%s, expr_type=%d",
+               strrc(rc), static_cast<int>(other_expr->type()));
       return rc;
     }
+    LOG_INFO("[COMPARISON] non-subquery side value: %s (type=%d)", other_val.to_string().c_str(),
+              static_cast<int>(other_val.attr_type()));
 
     // 绌洪泦鍚堬細姣旇緝缁撴灉鎭掍负 false
     if (vals.empty()) {
@@ -1081,11 +1088,14 @@ if (vals.size() == 1) {
         value.set_null();
         return RC::SUCCESS;
       }
+      LOG_INFO("[COMPARISON] scalar subquery: subq_val=%s, other_val=%s, left_is_subq=%d",
+                vals[0].to_string().c_str(), other_val.to_string().c_str(), left_is_subq);
       bool bool_value = false;
       rc              = left_is_subq ? compare_value(vals[0], other_val, bool_value)
                                      : compare_value(other_val, vals[0], bool_value);
       if (OB_SUCC(rc)) {
         value.set_boolean(bool_value);
+        LOG_INFO("[COMPARISON] scalar result: %d", bool_value);
       }
       return rc;
     }
@@ -1250,7 +1260,7 @@ RC ComparisonExpr::compare_column(const Column &left, const Column &right, vecto
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-ConjunctionExpr::ConjunctionExpr(Type type, vector<unique_ptr<Expression>> &children)
+ConjunctionExpr::ConjunctionExpr(Type type, vector<unique_ptr<Expression>> &&children)
     : conjunction_type_(type), children_(std::move(children))
 {}
 
@@ -1262,14 +1272,24 @@ RC ConjunctionExpr::get_value(const Tuple &tuple, Value &value) const
     return rc;
   }
 
+  LOG_INFO("[CONJUNCTION] type=%s, num_children=%zu",
+            conjunction_type_ == Type::AND ? "AND" : "OR", children_.size());
+
   bool has_null = false;  // 是否遇到过 NULL 值
   Value tmp_value;
+  int child_idx = 0;
   for (const unique_ptr<Expression> &expr : children_) {
+    LOG_INFO("[CONJUNCTION] evaluating child[%d], expr_type=%d", child_idx, static_cast<int>(expr->type()));
     rc = expr->get_value(tuple, tmp_value);
     if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to get value by child expression. rc=%s", strrc(rc));
+      LOG_WARN("failed to get value by child expression[%d]. rc=%s, expr_type=%d",
+               child_idx, strrc(rc), static_cast<int>(expr->type()));
       return rc;
     }
+    LOG_INFO("[CONJUNCTION] child[%d] result: %s (is_null=%d, bool=%d)", child_idx,
+              tmp_value.to_string().c_str(), tmp_value.is_null(),
+              tmp_value.is_null() ? -1 : (int)tmp_value.get_boolean());
+    child_idx++;
 
     // 处理 NULL 值（三值逻辑）
     if (tmp_value.is_null()) {
@@ -1998,10 +2018,13 @@ TupleSchema schema;
   if (!results_.empty()) {
     result_type_ = results_.front().attr_type();
     result_len_  = results_.front().length();
+    LOG_INFO("[SUBQUERY] execute_once completed: num_results=%zu, first_value=%s",
+              results_.size(), results_.front().to_string().c_str());
   } else {
     // 娌℃湁缁撴灉锛岄粯璁ょ被鍨嬫部鐢?UNDEFINED
     result_type_ = AttrType::UNDEFINED;
     result_len_  = -1;
+    LOG_INFO("[SUBQUERY] execute_once completed: no results");
   }
 
   executed_ = true;
@@ -2062,11 +2085,15 @@ RC ExistsExpr::get_value(const Tuple &tuple, Value &value) const
   auto *subq = static_cast<SubqueryExpr *>(subquery_.get());
   RC rc      = subq->execute_with_context(&tuple);
   if (OB_FAIL(rc)) {
+    LOG_WARN("EXISTS subquery execution failed. rc=%s", strrc(rc));
     return rc;
   }
 
   bool has_rows = !subq->results().empty();
-  value.set_boolean(negated_ ? !has_rows : has_rows);
+  bool result_value = negated_ ? !has_rows : has_rows;
+  LOG_INFO("[EXISTS] has_rows=%d, negated=%d, result=%d, num_results=%zu",
+            has_rows, negated_, result_value, subq->results().size());
+  value.set_boolean(result_value);
   return RC::SUCCESS;
 }
 
@@ -2634,10 +2661,40 @@ RC ScalarFunctionExpr::try_get_value(Value &value) const
       value.set_float(static_cast<float>(rf));
       return RC::SUCCESS;
     }
-    case FuncType::STRING_TO_VECTOR:
+    case FuncType::STRING_TO_VECTOR: {
+      // STRING_TO_VECTOR 支持常量折叠：将字符串常量解析为向量
+      if (arg.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      Value vec_value;
+      rc = parse_string_like_to_vector(arg, vec_value);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+      value = std::move(vec_value);
+      return RC::SUCCESS;
+    }
     case FuncType::VECTOR_TO_STRING: {
-      // 这些函数需要参数,在try_get_value中不支持常量折叠
-      return RC::UNIMPLEMENTED;
+      // VECTOR_TO_STRING 支持常量折叠：将向量常量转换为字符串
+      if (arg.attr_type() == AttrType::NULLS) {
+        value.set_null();
+        return RC::SUCCESS;
+      }
+      Value vec_value;
+      if (arg.attr_type() == AttrType::VECTORS) {
+        vec_value = arg;
+      } else {
+        rc = Value::cast_to(arg, AttrType::VECTORS, vec_value);
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+      }
+      string result_str;
+      rc = DataType::type_instance(AttrType::VECTORS)->to_string(vec_value, result_str);
+      if (OB_FAIL(rc)) return rc;
+      value.set_string(result_str.c_str());
+      return RC::SUCCESS;
     }
     case FuncType::TOKENIZE: {
       Value *parser_ptr = nullptr;
@@ -3063,8 +3120,11 @@ RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
     return RC::INTERNAL;
   }
 
+  LOG_INFO("[SUBQUERY] execute_with_context: did_substitute=%d", did_substitute);
+
   // 鑻ヤ笉瀛樺湪鐩稿叧寮曠敤锛岃惤鍥炰竴娆℃€х紦瀛樿矾寰?
 if (!did_substitute) {
+    LOG_INFO("[SUBQUERY] no correlated reference, falling back to execute_once");
     return execute_once();
   }
 
@@ -3427,6 +3487,7 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     }
 
     if (outer_table != nullptr && field_name != nullptr && *field_name != '\0') {
+      LOG_INFO("[CORRELATED] identified outer reference: %s.%s", outer_table, field_name);
       Value v;
       RC    rc2 = outer_tuple.find_cell(TupleCellSpec(outer_table, field_name), v);
       if (rc2 != RC::SUCCESS) {
@@ -3441,6 +3502,8 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
         rc = rc2;
         return nullptr;
       }
+      LOG_INFO("[CORRELATED] substituting %s.%s with value: %s",
+                outer_table, field_name, v.to_string().c_str());
       did_substitute = true;
       auto ve        = std::make_unique<ValueExpr>(v);
       if (expr.alias() != nullptr) {
