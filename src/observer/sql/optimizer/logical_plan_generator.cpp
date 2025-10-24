@@ -99,10 +99,16 @@ RC LogicalPlanGenerator::create_plan(CalcStmt *calc_stmt, unique_ptr<LogicalOper
 
 RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  LOG_WARN("[LOGICAL_PLAN_GEN] create_plan called: inner_view_stmt=%p, derived_tables=%zu, tables=%zu",
+           select_stmt->inner_view_stmt(),
+           select_stmt->derived_table_stmts().size(),
+           select_stmt->tables().size());
+
   // 特殊处理:如果SelectStmt包含inner_view_stmt,说明这是一个FROM子查询
   // 需要先生成内层子查询的逻辑计划,然后用SubqueryLogicalOperator封装
   // 外层查询可以像访问表一样访问子查询结果
   if (select_stmt->inner_view_stmt() != nullptr) {
+    LOG_WARN("[LOGICAL_PLAN_GEN] Entering inner_view_stmt branch");
 
     // 1. 生成内层子查询的完整逻辑计划
     unique_ptr<LogicalOperator> inner_logical_oper;
@@ -152,6 +158,14 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     }
 
     // 添加外层的PROJECT算子
+    LOG_WARN("[LOGICAL_PLAN] Creating ProjectLogicalOperator for view query, expressions count=%zu",
+             select_stmt->query_expressions().size());
+    for (size_t i = 0; i < select_stmt->query_expressions().size(); ++i) {
+      const auto &expr = select_stmt->query_expressions()[i];
+      LOG_WARN("[LOGICAL_PLAN]   expr[%zu]: type=%d, name=%s", i,
+               expr ? static_cast<int>(expr->type()) : -1,
+               expr ? (expr->name() ? expr->name() : "NULL") : "NULL_PTR");
+    }
     unique_ptr<LogicalOperator> project_oper = make_unique<ProjectLogicalOperator>(std::move(select_stmt->query_expressions()));
     project_oper->add_child(std::move(last_oper));
 
@@ -159,6 +173,7 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     static_cast<ProjectLogicalOperator*>(project_oper.get())->set_limit(select_stmt->limit());
 
     logical_operator = std::move(project_oper);
+    LOG_WARN("[LOGICAL_PLAN] ProjectLogicalOperator created successfully");
     return RC::SUCCESS;
   }
 
@@ -198,6 +213,10 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
 RC LogicalPlanGenerator::create_single_select_plan(
     SelectStmt *select_stmt, unique_ptr<LogicalOperator> &logical_operator)
 {
+  LOG_WARN("[LOGICAL_PLAN_GEN] create_single_select_plan called: tables=%zu, derived_tables=%zu",
+           select_stmt->tables().size(),
+           select_stmt->derived_table_stmts().size());
+
   unique_ptr<LogicalOperator> *last_oper = nullptr;
 
   unique_ptr<LogicalOperator> table_oper(nullptr);
@@ -288,7 +307,10 @@ RC LogicalPlanGenerator::create_single_select_plan(
     last_oper = &predicate_oper;
   }
 
-  if (tables.empty() && !predicate_oper && select_stmt->group_by().empty() && select_stmt->order_by().empty()) {
+  // 只有在没有任何表数据源（既没有物理表，也没有派生表）时，才创建CalcLogicalOperator
+  // 如果有派生表（视图），必须继续创建ProjectLogicalOperator
+  if (tables.empty() && derived_tables.empty() && !predicate_oper &&
+      select_stmt->group_by().empty() && select_stmt->order_by().empty()) {
     logical_operator.reset(new CalcLogicalOperator(std::move(select_stmt->query_expressions())));
     return RC::SUCCESS;
   }

@@ -25,7 +25,8 @@ TupleCellSpec::TupleCellSpec(const char *table_name, const char *field_name, con
   if (field_name) {
     field_name_ = field_name;
   }
-  if (alias) {
+  // 修复：当alias为空字符串时，也自动填充，保持与双参数构造函数一致
+  if (alias && alias[0] != '\0') {
     alias_ = alias;
   } else {
     if (table_name_.empty()) {
@@ -46,8 +47,8 @@ TupleCellSpec::TupleCellSpec(const char *alias)
       // 找到点号,且不在首尾,分解为table_name和field_name
       table_name_ = alias_str.substr(0, dot_pos);
       field_name_ = alias_str.substr(dot_pos + 1);
-      // alias_留空,以便与AliasedTuple::spec_at的格式匹配
-      // alias_ = alias_str;  // 不设置,保持为空
+      // 设置alias为原始输入,保持与三参数构造函数行为一致
+      alias_ = alias_str;
     } else {
       // 没有点号或格式不对,只设置alias
       alias_ = alias_str;
@@ -63,8 +64,8 @@ TupleCellSpec::TupleCellSpec(const string &alias)
     // 找到点号,且不在首尾,分解为table_name和field_name
     table_name_ = alias.substr(0, dot_pos);
     field_name_ = alias.substr(dot_pos + 1);
-    // alias_留空,以便与AliasedTuple::spec_at的格式匹配
-    // alias_ = alias;  // 不设置,保持为空
+    // 设置alias为原始输入,保持与三参数构造函数行为一致
+    alias_ = alias;
   } else {
     // 没有点号或格式不对,只设置alias
     alias_ = alias;

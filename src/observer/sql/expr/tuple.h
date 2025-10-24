@@ -623,13 +623,22 @@ public:
 
     ASSERT(cells_.size() == specs_holder->size(), "cells_.size()=%d, specs_.size()=%d", cells_.size(), specs_holder->size());
 
+    LOG_WARN("[VALUELISTTUPLE] find_cell: looking for table='%s', field='%s', alias='%s', total_specs=%zu",
+              spec.table_name(), spec.field_name(), spec.alias(), specs_holder->size());
+
     const int size = static_cast<int>(specs_holder->size());
     for (int i = 0; i < size; i++) {
-      if ((*specs_holder)[i].equals(spec)) {
+      const TupleCellSpec &stored_spec = (*specs_holder)[i];
+      LOG_WARN("[VALUELISTTUPLE]  spec[%d]: table='%s', field='%s', alias='%s', equals=%d",
+                i, stored_spec.table_name(), stored_spec.field_name(), stored_spec.alias(),
+                stored_spec.equals(spec));
+      if (stored_spec.equals(spec)) {
         cell = cells_[i];
+        LOG_WARN("[VALUELISTTUPLE]  MATCHED at index %d", i);
         return RC::SUCCESS;
       }
     }
+    LOG_WARN("[VALUELISTTUPLE]  NOT FOUND");
     return RC::NOTFOUND;
   }
 
@@ -783,8 +792,8 @@ public:
     if (OB_FAIL(rc)) {
       return rc;
     }
-    // 为spec添加表名前缀
-    spec = TupleCellSpec(alias_.c_str(), spec.field_name(), spec.alias());
+    // 为spec添加表名前缀，传递空字符串让构造函数自动填充alias为"table.field"格式
+    spec = TupleCellSpec(alias_.c_str(), spec.field_name(), "");
     return RC::SUCCESS;
   }
 

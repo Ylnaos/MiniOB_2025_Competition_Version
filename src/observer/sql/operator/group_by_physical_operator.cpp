@@ -82,7 +82,9 @@ RC GroupByPhysicalOperator::evaluate(GroupValueType &group_value)
 
   vector<TupleCellSpec> aggregator_names;
   for (Expression *expr : aggregate_expressions_) {
-    aggregator_names.emplace_back(expr->name());
+    const char *expr_name = expr->name();
+    LOG_WARN("[GROUP_BY_EVAL] Creating TupleCellSpec from expr->name()='%s'", expr_name ? expr_name : "NULL");
+    aggregator_names.emplace_back(expr_name);
   }
 
   AggregatorList &aggregators           = get<0>(group_value);
