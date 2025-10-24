@@ -373,6 +373,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           // 2. 创建外层SelectStmt,将内层查询设置为子查询数据源
           SelectStmt *outer_select = new SelectStmt();
           outer_select->set_inner_view_stmt(inner_select);
+          // 保存视图别名（如果没有别名，使用视图名称本身）
+          outer_select->set_inner_view_alias(view_alias.empty() ? view->name() : view_alias);
 
           // 3. 处理外层的表达式：将UNBOUND_AGGREGATION转换为AggregateExpr
           // 这是必需的，因为执行器需要明确的AggregateExpr类型

@@ -3588,7 +3588,7 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
         rc2       = outer_tuple.find_cell(TupleCellSpec(tf), v);
       }
       if (rc2 != RC::SUCCESS) {
-        rc2 = outer_tuple.find_cell(TupleCellSpec(field_name), v);
+        rc2 = outer_tuple.find_cell(TupleCellSpec("", field_name), v);
       }
       if (rc2 != RC::SUCCESS) {
         LOG_WARN("failed to fetch correlated value %s.%s from outer tuple", outer_table, field_name);

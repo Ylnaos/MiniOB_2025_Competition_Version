@@ -40,6 +40,21 @@ Table *BinderContext::find_table(const char *table_name) const
   return *iter;
 }
 
+string BinderContext::get_alias_for_table(Table *table) const
+{
+  if (table == nullptr) {
+    return "";
+  }
+  // 遍历别名映射，查找指向该表的别名
+  for (const auto &pair : alias_map_) {
+    if (pair.second == table) {
+      // 找到了，返回别名（已经是大写的）
+      return pair.first;
+    }
+  }
+  return "";
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 static void wildcard_fields(
     Table *table, const string &relation_name, vector<unique_ptr<Expression>> &expressions)
@@ -437,7 +452,13 @@ RC ExpressionBinder::bind_star_expression(
     if (!is_blank(table_name) && 0 != strcmp(table_name, "*")) {
       qualifier = table_name;
     } else {
-      qualifier = table->name();
+      // 如果用户没有指定表名（裸 * 或 t.*），优先使用别名（如果有），否则使用物理表名
+      string alias = context_.get_alias_for_table(table);
+      if (!alias.empty()) {
+        qualifier = alias;  // 别名已经是大写的
+      } else {
+        qualifier = table->name();
+      }
     }
     common::str_to_upper(qualifier);
     wildcard_fields(table, qualifier, bound_expressions);
@@ -470,6 +491,7 @@ RC ExpressionBinder::bind_star_expression(
       auto *field_expr = new FieldExpr();
       field_expr->set_pos(static_cast<int>(idx));
       field_expr->set_name(alias + "." + candidate_name);
+      field_expr->set_relation_name(alias);  // 设置relation_name以支持find_cell查找
       LOG_DEBUG("Wildcard bind field from derived table: %s.%s at position %zu",
                 alias.c_str(), candidate_name.c_str(), idx);
       bound_expressions.emplace_back(field_expr);
@@ -738,7 +760,13 @@ RC ExpressionBinder::bind_unbound_field_expression(
     if (!is_blank(table_name)) {
       qualifier = table_name;
     } else {
-      qualifier = table->name();
+      // 如果用户没有指定表名，优先使用别名（如果有），否则使用物理表名
+      string alias = context_.get_alias_for_table(table);
+      if (!alias.empty()) {
+        qualifier = alias;  // 别名已经是大写的
+      } else {
+        qualifier = table->name();
+      }
     }
     common::str_to_upper(qualifier);
     LOG_DEBUG("bind unbound wildcard field: table=%s qualifier=%s", table->name(), qualifier.c_str());
@@ -765,7 +793,13 @@ RC ExpressionBinder::bind_unbound_field_expression(
     if (!is_blank(table_name)) {
       qualifier = table_name;
     } else {
-      qualifier = table->name();
+      // 如果用户没有指定表名，优先使用别名（如果有），否则使用物理表名
+      string alias = context_.get_alias_for_table(table);
+      if (!alias.empty()) {
+        qualifier = alias;  // 别名已经是大写的
+      } else {
+        qualifier = table->name();
+      }
     }
     common::str_to_upper(qualifier);
     FieldExpr *field_expr = new FieldExpr(field, qualifier);

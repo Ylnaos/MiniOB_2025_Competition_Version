@@ -39,9 +39,34 @@ TupleCellSpec::TupleCellSpec(const char *table_name, const char *field_name, con
 TupleCellSpec::TupleCellSpec(const char *alias)
 {
   if (alias) {
-    alias_ = alias;
+    string alias_str(alias);
+    // 尝试解析 "table.field" 格式
+    size_t dot_pos = alias_str.find('.');
+    if (dot_pos != string::npos && dot_pos > 0 && dot_pos < alias_str.length() - 1) {
+      // 找到点号,且不在首尾,分解为table_name和field_name
+      table_name_ = alias_str.substr(0, dot_pos);
+      field_name_ = alias_str.substr(dot_pos + 1);
+      // alias_留空,以便与AliasedTuple::spec_at的格式匹配
+      // alias_ = alias_str;  // 不设置,保持为空
+    } else {
+      // 没有点号或格式不对,只设置alias
+      alias_ = alias_str;
+    }
   }
 }
 
-TupleCellSpec::TupleCellSpec(const string &alias) : alias_(alias)
-{}
+TupleCellSpec::TupleCellSpec(const string &alias)
+{
+  // 尝试解析 "table.field" 格式
+  size_t dot_pos = alias.find('.');
+  if (dot_pos != string::npos && dot_pos > 0 && dot_pos < alias.length() - 1) {
+    // 找到点号,且不在首尾,分解为table_name和field_name
+    table_name_ = alias.substr(0, dot_pos);
+    field_name_ = alias.substr(dot_pos + 1);
+    // alias_留空,以便与AliasedTuple::spec_at的格式匹配
+    // alias_ = alias;  // 不设置,保持为空
+  } else {
+    // 没有点号或格式不对,只设置alias
+    alias_ = alias;
+  }
+}

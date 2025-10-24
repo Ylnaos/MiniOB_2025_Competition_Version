@@ -115,6 +115,8 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     // 2. 用SubqueryLogicalOperator封装内层逻辑计划
     auto subquery_oper = make_unique<SubqueryLogicalOperator>();
     subquery_oper->set_subquery_plan(std::move(inner_logical_oper));
+    // 设置视图别名以支持字段查找
+    subquery_oper->set_alias(select_stmt->inner_view_alias());
 
     // 3. 将SubqueryLogicalOperator作为数据源，构建外层查询
     // 外层可能包含GROUP BY、WHERE等操作

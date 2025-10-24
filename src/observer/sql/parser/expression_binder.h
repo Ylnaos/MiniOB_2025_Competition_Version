@@ -42,6 +42,9 @@ public:
 
   Table *find_table(const char *table_name) const;
 
+  // 根据 Table* 查找其别名（如果没有别名则返回空字符串）
+  string get_alias_for_table(Table *table) const;
+
   const vector<Table *> &query_tables() const { return query_tables_; }
   void set_inner_view_stmt(SelectStmt *stmt) { inner_view_stmt_ = stmt; }
   SelectStmt *inner_view_stmt() const { return inner_view_stmt_; }

@@ -62,6 +62,10 @@ public:
   SelectStmt *inner_view_stmt() const { return inner_view_stmt_; }
   void set_inner_view_stmt(SelectStmt *stmt) { inner_view_stmt_ = stmt; }
 
+  // 内层视图的别名（如果有）
+  const std::string &inner_view_alias() const { return inner_view_alias_; }
+  void set_inner_view_alias(const std::string &alias) { inner_view_alias_ = alias; }
+
   // 派生表（视图作为表使用）：别名 -> SelectStmt（拥有所有权）
   void add_derived_table_stmt(const string &alias, SelectStmt *stmt) {
     if (!alias.empty() && stmt != nullptr) {
@@ -81,6 +85,7 @@ private:
   unique_ptr<Expression>         where_expr_;
   unique_ptr<Expression>         having_expr_;
   SelectStmt                    *inner_view_stmt_ = nullptr;  // 内层视图查询(包含聚合时使用)
+  std::string                    inner_view_alias_;           // 内层视图的别名
   vector<SetOperation>           set_operations_;
   unordered_map<string, unique_ptr<SelectStmt>> derived_table_stmts_;  // 派生表（视图作为表）
 };

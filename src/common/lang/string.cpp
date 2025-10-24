@@ -295,11 +295,21 @@ string double_to_str(double v)
   }
   snprintf(buf, sizeof(buf), "%.2f", rounded_v);
   size_t len = strlen(buf);
-  while (buf[len - 1] == '0') {
-    len--;
+  // 去掉多余的尾部零，但至少保留一位小数
+  // 找到小数点位置
+  size_t dot_pos = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (buf[i] == '.') {
+      dot_pos = i;
+      break;
+    }
   }
-  if (buf[len - 1] == '.') {
-    len--;
+
+  // 如果有小数点，去掉尾部的零，但保留至少一位小数
+  if (dot_pos > 0) {
+    while (len > dot_pos + 2 && buf[len - 1] == '0') {
+      len--;
+    }
   }
 
   return string(buf, len);
