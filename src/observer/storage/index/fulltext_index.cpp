@@ -102,6 +102,12 @@ RC FullTextIndex::open(Table *table, const char *file_name, const IndexMeta &ind
 
   LOG_INFO("Opening full-text index on table %s, parser=%s, rebuilding index...", table->name(), parser_name_.c_str());
 
+  // 清空现有索引数据
+  inverted_index_.clear();
+  doc_lengths_.clear();
+  total_docs_ = 0;
+  avg_doc_length_ = 0.0;
+
   // 遍历表中所有记录，重新构建倒排索引
   RecordScanner *scanner = nullptr;
   rc = table->get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
@@ -277,51 +283,141 @@ RC FullTextIndex::calculate_bm25_score(const RID &rid, const std::string &query,
 {
   score = 0.0f;
 
+  LOG_INFO("BM25: Starting score calculation for RID{%d:%d}, query='%s'",
+           rid.page_num, rid.slot_num, query.c_str());
+
   // 对查询文本分词
   std::vector<std::string> query_tokens;
   RC rc = tokenize_text(query, query_tokens);
-  if (rc != RC::SUCCESS) {
-    return rc;
+  if (rc != RC::SUCCESS || query_tokens.empty()) {
+    LOG_INFO("BM25: tokenization failed or empty tokens for query='%s', rc=%s, tokens_size=%zu",
+             query.c_str(), strrc(rc), query_tokens.size());
+    return RC::SUCCESS;
+  }
+
+  LOG_INFO("BM25: query='%s' tokenized into %zu tokens", query.c_str(), query_tokens.size());
+  for (size_t i = 0; i < query_tokens.size(); i++) {
+    LOG_INFO("BM25:   token[%zu]='%s'", i, query_tokens[i].c_str());
   }
 
   // 获取文档长度
+  LOG_INFO("BM25: Looking for RID{%d:%d} in doc_lengths_, total_docs=%d",
+           rid.page_num, rid.slot_num, total_docs_);
+  LOG_INFO("BM25: doc_lengths_ size=%zu", doc_lengths_.size());
+
+  // 打印所有文档RID用于调试
+  int count = 0;
+  for (const auto &pair : doc_lengths_) {
+    if (count < 5) {  // 只打印前5个避免日志过多
+      LOG_INFO("BM25:   doc_lengths_[%d:%d] = %d",
+               pair.first.page_num, pair.first.slot_num, pair.second);
+    }
+    count++;
+  }
+  if (count > 5) {
+    LOG_INFO("BM25:   ... and %d more documents", count - 5);
+  }
+
   auto doc_len_it = doc_lengths_.find(rid);
   if (doc_len_it == doc_lengths_.end()) {
-    return RC::RECORD_NOT_EXIST;
+    LOG_INFO("BM25: ERROR - document RID{%d:%d} not found in doc_lengths_!",
+             rid.page_num, rid.slot_num);
+    return RC::SUCCESS;
   }
   int doc_len = doc_len_it->second;
 
+  LOG_INFO("BM25: found document RID{%d:%d} with length=%d, avg_doc_length=%.2f, total_docs=%d",
+           rid.page_num, rid.slot_num, doc_len, avg_doc_length_, total_docs_);
+
+  // 防止除零错误
+  if (avg_doc_length_ <= 0.0 || total_docs_ <= 0) {
+    LOG_INFO("BM25: ERROR - invalid parameters, avg_doc_length=%.2f, total_docs=%d",
+             avg_doc_length_, total_docs_);
+    return RC::SUCCESS;
+  }
+
+  float total_score = 0.0f;
+  int matched_terms = 0;
+
+  LOG_INFO("BM25: inverted_index_ size=%zu", inverted_index_.size());
+
   // 对每个查询词计算BM25评分
   for (const auto &query_term : query_tokens) {
+    LOG_INFO("BM25: processing query_term='%s'", query_term.c_str());
     auto it = inverted_index_.find(query_term);
     if (it == inverted_index_.end()) {
+      LOG_INFO("BM25: query_term='%s' not found in inverted_index_", query_term.c_str());
       continue;
     }
 
     const auto &posting_list = it->second;
     int df = static_cast<int>(posting_list.size());
+    LOG_INFO("BM25: query_term='%s' found in %d documents", query_term.c_str(), df);
+    LOG_INFO("BM25: posting_list has %d entries", df);
+
+    // 如果文档频率为0，跳过
+    if (df <= 0) {
+      continue;
+    }
 
     // 查找该文档在posting list中的条目
     int tf = 0;
+    LOG_INFO("BM25: searching for RID{%d:%d} in posting_list for term='%s' (size=%d)",
+             rid.page_num, rid.slot_num, query_term.c_str(), df);
+
+    for (int i = 0; i < posting_list.size() && i < 3; i++) {  // 只检查前3个条目避免日志过多
+      const auto &entry = posting_list[i];
+      LOG_INFO("BM25:   posting_list[%d]: RID{%d:%d}, tf=%d",
+               i, entry.rid.page_num, entry.rid.slot_num, entry.term_freq);
+    }
+    if (posting_list.size() > 3) {
+      LOG_INFO("BM25:   ... and %d more entries", posting_list.size() - 3);
+    }
+
     for (const auto &entry : posting_list) {
       if (entry.rid == rid) {
         tf = entry.term_freq;
+        LOG_INFO("BM25: *** FOUND document RID{%d:%d} in posting list for term='%s', tf=%d ***",
+                 rid.page_num, rid.slot_num, query_term.c_str(), tf);
         break;
       }
     }
 
     if (tf == 0) {
+      LOG_INFO("BM25: *** NOT FOUND document RID{%d:%d} in posting list for term='%s' ***",
+               rid.page_num, rid.slot_num, query_term.c_str());
       continue;  // 该文档不包含这个查询词
     }
 
-    // 计算IDF
-    float idf = std::log((total_docs_ - df + 0.5) / (df + 0.5));
+    // 计算IDF - 使用标准BM25的IDF公式
+    // log((N - df + 0.5) / (df + 0.5))，其中N是总文档数
+    float idf = std::log((total_docs_ - df + 0.5f) / (df + 0.5f));
+
+    // 确保IDF不为负数
+    if (idf < 0.0f) {
+      idf = 0.0f;
+    }
 
     // 计算BM25评分贡献
+    // BM25 = IDF * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * doc_len / avg_doc_len))
     float numerator = static_cast<float>(tf) * (k1_ + 1.0f);
-    float denominator = static_cast<float>(tf) + k1_ * (1.0f - b_ + b_ * doc_len / avg_doc_length_);
-    score += idf * (numerator / denominator);
+    float denominator = static_cast<float>(tf) + k1_ * (1.0f - b_ + b_ * static_cast<float>(doc_len) / avg_doc_length_);
+
+    // 防止除零错误
+    if (denominator > 0.0f) {
+      float term_score = idf * (numerator / denominator);
+      total_score += term_score;
+      matched_terms++;
+      LOG_INFO("BM25: term='%s' tf=%d idf=%.3f numerator=%.3f denominator=%.3f term_score=%.3f total_score=%.3f",
+             query_term.c_str(), tf, idf, numerator, denominator, term_score, total_score);
+    } else {
+      LOG_INFO("BM25: term='%s' denominator <= 0, skipping", query_term.c_str());
+    }
   }
+
+  score = total_score;
+  LOG_INFO("BM25: *** FINAL SCORE=%.6f for RID{%d:%d}, matched_terms=%d/%zu ***",
+           score, rid.page_num, rid.slot_num, matched_terms, query_tokens.size());
 
   return RC::SUCCESS;
 }

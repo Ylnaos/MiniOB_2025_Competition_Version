@@ -215,8 +215,12 @@ public:
   unique_ptr<Expression> copy() const override { return make_unique<FieldExpr>(field_, relation_name_); }
 
   ExprType type() const override { return ExprType::FIELD; }
-  AttrType value_type() const override { return field_.attr_type(); }
-  int      value_length() const override { return field_.meta()->len(); }
+  AttrType value_type() const override {
+    return is_derived_field_ ? derived_value_type_ : field_.attr_type();
+  }
+  int value_length() const override {
+    return is_derived_field_ ? derived_value_length_ : field_.meta()->len();
+  }
 
   Field &field() { return field_; }
 
@@ -225,8 +229,24 @@ public:
   void set_relation_name(const string &relation_name) { relation_name_ = relation_name; }
   const string &relation_name() const { return relation_name_; }
 
-  const char *table_name() const { return field_.table_name(); }
-  const char *field_name() const { return field_.field_name(); }
+  const char *table_name() const {
+    return is_derived_field_ ? derived_table_name_.c_str() : field_.table_name();
+  }
+  const char *field_name() const {
+    return is_derived_field_ ? derived_field_name_.c_str() : field_.field_name();
+  }
+
+  // 设置派生表字段信息（用于视图作为派生表的场景）
+  void set_derived_field(const string &table_name, const string &field_name,
+                         AttrType value_type, int value_length) {
+    is_derived_field_ = true;
+    derived_table_name_ = table_name;
+    derived_field_name_ = field_name;
+    derived_value_type_ = value_type;
+    derived_value_length_ = value_length;
+  }
+
+  bool is_derived_field() const { return is_derived_field_; }
 
   RC get_column(Chunk &chunk, Column &column) override;
 
@@ -235,6 +255,13 @@ public:
 private:
   Field field_;
   string relation_name_;
+
+  // 派生表字段支持
+  bool is_derived_field_ = false;
+  string derived_table_name_;
+  string derived_field_name_;
+  AttrType derived_value_type_ = AttrType::UNDEFINED;
+  int derived_value_length_ = 0;
 };
 
 /**

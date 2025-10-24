@@ -94,11 +94,28 @@ RC PredicatePushdownRewriter::get_exprs_can_pushdown(
   RC rc = RC::SUCCESS;
   if (expr->type() == ExprType::CONJUNCTION) {
     ConjunctionExpr *conjunction_expr = static_cast<ConjunctionExpr *>(expr.get());
-    // 或 操作的比较，太复杂，现在不考虑
+    // 或 操作的处理：如果包含子查询，不进行下推优化，直接跳过
     if (conjunction_expr->conjunction_type() == ConjunctionExpr::Type::OR) {
-      LOG_WARN("unsupported or operation");
-      rc = RC::UNIMPLEMENTED;
-      return rc;
+      // 检查是否包含子查询，如果不包含子查询可以按原来的逻辑处理
+      bool has_subquery = false;
+      vector<unique_ptr<Expression>> &child_exprs = conjunction_expr->children();
+      for (auto &child : child_exprs) {
+        if (expression_contains_subquery(child.get())) {
+          has_subquery = true;
+          break;
+        }
+      }
+
+      if (has_subquery) {
+        LOG_TRACE("or operation with subquery, skip pushdown optimization");
+        // 对于包含子查询的OR操作，不进行下推，直接返回成功
+        return RC::SUCCESS;
+      } else {
+        // 不包含子查询的OR操作，按照原来的逻辑返回未实现
+        LOG_WARN("unsupported or operation without subquery");
+        rc = RC::UNIMPLEMENTED;
+        return rc;
+      }
     }
 
     vector<unique_ptr<Expression>> &child_exprs = conjunction_expr->children();
@@ -123,4 +140,47 @@ RC PredicatePushdownRewriter::get_exprs_can_pushdown(
     pushdown_exprs.emplace_back(std::move(expr));
   }
   return rc;
+}
+
+bool PredicatePushdownRewriter::expression_contains_subquery(Expression *expr)
+{
+  if (expr == nullptr) {
+    return false;
+  }
+
+  // 如果是子查询表达式，直接返回true
+  if (expr->type() == ExprType::SUBQUERY) {
+    return true;
+  }
+
+  // 如果是EXISTS/NOT EXISTS表达式，检查子查询
+  if (expr->type() == ExprType::EXISTS) {
+    ExistsExpr *exists_expr = static_cast<ExistsExpr *>(expr);
+    return exists_expr->subquery() && exists_expr->subquery()->type() == ExprType::SUBQUERY;
+  }
+
+  // 如果是IN/NOT IN表达式，检查右边的子查询
+  if (expr->type() == ExprType::IN_LIST) {
+    InExpr *in_expr = static_cast<InExpr *>(expr);
+    return in_expr->set_expr() && in_expr->set_expr()->type() == ExprType::SUBQUERY;
+  }
+
+  // 如果是比较表达式，检查左右两边
+  if (expr->type() == ExprType::COMPARISON) {
+    ComparisonExpr *comp_expr = static_cast<ComparisonExpr *>(expr);
+    return expression_contains_subquery(comp_expr->left().get()) ||
+           expression_contains_subquery(comp_expr->right().get());
+  }
+
+  // 如果是复合表达式，递归检查子表达式
+  if (expr->type() == ExprType::CONJUNCTION) {
+    ConjunctionExpr *conj_expr = static_cast<ConjunctionExpr *>(expr);
+    for (const auto &child : conj_expr->children()) {
+      if (expression_contains_subquery(child.get())) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }

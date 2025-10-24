@@ -468,8 +468,12 @@ RC ExpressionBinder::bind_star_expression(
       auto *field_expr = new FieldExpr();
       field_expr->set_pos(static_cast<int>(idx));
       field_expr->set_name(alias + "." + candidate_name);
-      LOG_DEBUG("Wildcard bind field from derived table: %s.%s at position %zu",
-                alias.c_str(), candidate_name.c_str(), idx);
+      // 设置派生表字段的类型信息
+      field_expr->set_derived_field(alias, candidate_name,
+                                    output_expr->value_type(),
+                                    output_expr->value_length());
+      LOG_DEBUG("Wildcard bind field from derived table: %s.%s at position %zu, type=%d",
+                alias.c_str(), candidate_name.c_str(), idx, static_cast<int>(output_expr->value_type()));
       bound_expressions.emplace_back(field_expr);
     }
   }
@@ -586,11 +590,15 @@ RC ExpressionBinder::bind_unbound_field_expression(
           auto *field_expr = new FieldExpr();
           field_expr->set_pos(static_cast<int>(idx));
           field_expr->set_name(target_name);
+          // 设置派生表字段的类型信息
+          field_expr->set_derived_field(derived_alias, target_name,
+                                        output_expr->value_type(),
+                                        output_expr->value_length());
           if (expr->alias() != nullptr) {
             field_expr->set_alias(expr->alias());
           }
-          LOG_DEBUG("Bind unqualified field '%s' from single derived table '%s' at position %zu",
-                    target_name.c_str(), derived_alias.c_str(), idx);
+          LOG_DEBUG("Bind unqualified field '%s' from single derived table '%s' at position %zu, type=%d",
+                    target_name.c_str(), derived_alias.c_str(), idx, static_cast<int>(output_expr->value_type()));
           bound_expressions.emplace_back(field_expr);
           return RC::SUCCESS;
         }
@@ -640,8 +648,12 @@ RC ExpressionBinder::bind_unbound_field_expression(
             auto *field_expr = new FieldExpr();
             field_expr->set_pos(static_cast<int>(idx));
             field_expr->set_name(alias_upper + "." + candidate_name);
-            LOG_DEBUG("Bind field from derived table: %s.%s at position %zu",
-                      alias_upper.c_str(), candidate_name.c_str(), idx);
+            // 设置派生表字段的类型信息
+            field_expr->set_derived_field(alias_upper, candidate_name,
+                                          output_expr->value_type(),
+                                          output_expr->value_length());
+            LOG_DEBUG("Bind field from derived table: %s.%s at position %zu, type=%d",
+                      alias_upper.c_str(), candidate_name.c_str(), idx, static_cast<int>(output_expr->value_type()));
             bound_expressions.emplace_back(field_expr);
           }
           return RC::SUCCESS;
@@ -673,11 +685,16 @@ RC ExpressionBinder::bind_unbound_field_expression(
               auto *field_expr = new FieldExpr();
               field_expr->set_pos(static_cast<int>(idx));
               field_expr->set_name(alias_upper + "." + target_name);
+              // 设置派生表字段的类型信息
+              field_expr->set_derived_field(alias_upper, target_name,
+                                            output_expr->value_type(),
+                                            output_expr->value_length());
               if (expr->alias() != nullptr) {
                 field_expr->set_alias(expr->alias());
               }
-              LOG_DEBUG("Bind field '%s' from derived table '%s' at position %zu",
-                        target_name.c_str(), alias_upper.c_str(), idx);
+              LOG_DEBUG("Bind field '%s' from derived table '%s' at position %zu, type=%d, length=%d",
+                        target_name.c_str(), alias_upper.c_str(), idx,
+                        static_cast<int>(output_expr->value_type()), output_expr->value_length());
               bound_expressions.emplace_back(field_expr);
               return RC::SUCCESS;
             }

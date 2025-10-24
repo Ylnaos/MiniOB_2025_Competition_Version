@@ -777,11 +777,39 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   binder_context.set_binding_context(BinderContext::BindingContext::ORDER_BY);
   for (auto &item : select_sql.order_by) {
     vector<unique_ptr<Expression>> bound;
-    RC rc = expression_binder.bind_expression(item.expression, bound);
-    if (OB_FAIL(rc)) {
-      LOG_INFO("bind order by expression failed. rc=%s", strrc(rc));
-      return rc;
+
+    // 首先检查ORDER BY表达式是否是SELECT子句中的别名
+    bool found_alias = false;
+    if (item.expression->type() == ExprType::UNBOUND_FIELD) {
+      UnboundFieldExpr *field_expr = static_cast<UnboundFieldExpr *>(item.expression.get());
+      const char *field_name = field_expr->field_name();
+      const char *table_name = field_expr->table_name();
+
+      // 如果没有表名限定符，检查是否是SELECT子句中的别名
+      if (table_name == nullptr || table_name[0] == '\0') {
+        for (size_t i = 0; i < bound_expressions.size(); i++) {
+          const auto &expr = bound_expressions[i];
+          const char *alias = expr->alias();
+          if (alias != nullptr && strcasecmp(alias, field_name) == 0) {
+            // 找到匹配的别名，直接使用该表达式
+            unique_ptr<Expression> copied_expr = expr->copy();
+            bound.push_back(std::move(copied_expr));
+            found_alias = true;
+            break;
+          }
+        }
+      }
     }
+
+    // 如果没有找到别名，按正常方式绑定表达式
+    if (!found_alias) {
+      RC rc = expression_binder.bind_expression(item.expression, bound);
+      if (OB_FAIL(rc)) {
+        LOG_INFO("bind order by expression failed. rc=%s", strrc(rc));
+        return rc;
+      }
+    }
+
     if (bound.size() != 1) {
       LOG_WARN("invalid order by expression size: %d", bound.size());
       return RC::INVALID_ARGUMENT;
