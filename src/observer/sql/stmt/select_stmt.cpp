@@ -748,8 +748,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         // 注册派生表到BinderContext
         binder_context.add_derived_table(alias_token, view_select_stmt);
 
-        // 将派生表的别名添加到table_aliases（用于后续处理）
-        table_aliases.push_back(alias_token);
 
         // 注意：由于这是派生表，不添加到tables和table_map中
         // （tables只包含物理表，派生表通过binder_context.derived_tables()访问）
@@ -763,6 +761,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
 
     // 找到物理表，正常处理
+    LOG_WARN("[FROM_CLAUSE] Found physical table: name=%s, alias=%s",
+              table_name, r.alias.empty() ? "(none)" : r.alias.c_str());
     binder_context.add_table(table);
     tables.push_back(table);
     table_map.insert({table_name, table});
@@ -774,6 +774,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
     common::str_to_upper(alias_token);
     table_aliases.push_back(alias_token);
+    LOG_WARN("[FROM_CLAUSE] Registering alias: '%s' -> table '%s'", alias_token.c_str(), table_name);
     // 别名检查：同层不重复
     if (!r.alias.empty()) {
       if (table_map.find(r.alias) != table_map.end()) {
@@ -781,9 +782,14 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         return RC::INVALID_ARGUMENT;
       }
       table_map.insert({r.alias, table});
-      binder_context.add_alias(r.alias, table);
+      // 关键修复：使用大写的alias_token而不是原始的r.alias
+      binder_context.add_alias(alias_token, table);
+      LOG_WARN("[FROM_CLAUSE] Added alias to binder_context: '%s' (uppercase)", alias_token.c_str());
     }
   }
+
+  LOG_WARN("[FROM_CLAUSE] Finished processing FROM clause: %zu physical tables, %zu derived tables",
+            tables.size(), binder_context.derived_tables().size());
 
   // 绑定 SELECT 列
   vector<unique_ptr<Expression>> bound_expressions;

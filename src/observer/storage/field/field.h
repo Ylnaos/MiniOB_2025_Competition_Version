@@ -33,8 +33,8 @@ public:
 
   AttrType attr_type() const { return field_->type(); }
 
-  const char *table_name() const { return table_->name(); }
-  const char *field_name() const { return field_->name(); }
+  const char *table_name() const { return table_ ? table_->name() : ""; }
+  const char *field_name() const { return field_ ? field_->name() : ""; }
 
   void set_table(const Table *table) { this->table_ = table; }
   void set_field(const FieldMeta *field) { this->field_ = field; }

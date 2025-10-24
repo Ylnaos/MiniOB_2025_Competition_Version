@@ -221,6 +221,11 @@ RC LogicalPlanGenerator::create_single_select_plan(
 
   const vector<Table *> &tables  = select_stmt->tables();
   const vector<string>  &aliases = select_stmt->table_aliases();
+  LOG_WARN("[LOGICAL_PLAN_GEN] Physical tables count=%zu, aliases count=%zu", tables.size(), aliases.size());
+  for (size_t i = 0; i < tables.size(); i++) {
+    const char *alias_str = (i < aliases.size()) ? aliases[i].c_str() : "(none)";
+    LOG_WARN("[LOGICAL_PLAN_GEN]   tables[%zu]=%s, alias=%s", i, tables[i]->name(), alias_str);
+  }
   for (size_t idx = 0; idx < tables.size(); idx++) {
     Table *table = tables[idx];
 
@@ -241,8 +246,10 @@ RC LogicalPlanGenerator::create_single_select_plan(
 
   // 处理派生表（视图作为表使用）
   const auto &derived_tables = select_stmt->derived_table_stmts();
+  LOG_WARN("[LOGICAL_PLAN] Current SelectStmt has %zu derived tables", derived_tables.size());
   for (const auto &entry : derived_tables) {
     const string &alias = entry.first;
+    LOG_WARN("[LOGICAL_PLAN] Processing derived table: alias='%s'", alias.c_str());
     SelectStmt *derived_stmt = entry.second.get();
 
     // 为派生表（视图）创建逻辑计划

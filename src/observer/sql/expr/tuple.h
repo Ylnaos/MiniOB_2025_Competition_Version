@@ -329,8 +329,30 @@ public:
       return !alias_.empty() && table_name != nullptr && 0 == strcasecmp(table_name, alias_.c_str());
     };
 
+    LOG_WARN("[ROWTUPLE] find_cell: table_name=%s, field_name=%s, physical_table=%s, alias=%s",
+              table_name ? table_name : "(null)", field_name ? field_name : "(null)",
+              table_->name(), alias_.empty() ? "(none)" : alias_.c_str());
+    LOG_WARN("[ROWTUPLE] matches_physical=%d, matches_alias=%d", matches_physical(), matches_alias());
+    std::string fields_list;
+    for (size_t i = 0; i < speces_.size(); ++i) {
+      const FieldExpr *field_expr = speces_[i];
+      const Field &field = field_expr->field();
+      if (i > 0) fields_list += ", ";
+      fields_list += field.field_name();
+    }
+    LOG_WARN("[ROWTUPLE] Available fields (%zu): %s", speces_.size(), fields_list.c_str());
+
     // 首先按表名或别名匹配
-    if (matches_physical() || matches_alias()) {
+    // 如果表名不为空但既不匹配物理表名也不匹配别名，则尝试大小写不敏感匹配
+    bool relaxed_match = false;
+    if (table_name != nullptr && table_name[0] != '\0' && !matches_physical() && !matches_alias()) {
+      // 尝试将table_name作为别名进行大小写不敏感匹配（可能是别名未正确传播）
+      if (!alias_.empty() && 0 == strcasecmp(table_name, alias_.c_str())) {
+        relaxed_match = true;
+      }
+    }
+
+    if (matches_physical() || matches_alias() || relaxed_match) {
       std::string target_name;
       if (field_name != nullptr && field_name[0] != '\0') {
         target_name = field_name;
@@ -492,9 +514,18 @@ public:
           std::string expr_name_upper = expr_name;
           common::str_to_upper(expr_name_upper);
 
-          LOG_DEBUG("  expression[%zu]: name='%s'", i, expr_name_upper.c_str());
+          // 提取字段名（去掉表名前缀，如"T1.NAME" -> "NAME"）
+          std::string expr_field_only = expr_name_upper;
+          size_t dot_pos = expr_name_upper.find('.');
+          if (dot_pos != std::string::npos) {
+            expr_field_only = expr_name_upper.substr(dot_pos + 1);
+          }
 
-          if (expr_name_upper == name_upper) {
+          LOG_DEBUG("  expression[%zu]: name='%s', field_only='%s'",
+                    i, expr_name_upper.c_str(), expr_field_only.c_str());
+
+          // 支持完整匹配或去前缀匹配
+          if (expr_name_upper == name_upper || expr_field_only == name_upper) {
             // 找到匹配的expression，计算其值
             LOG_DEBUG("  MATCHED! Calling get_value on expression[%zu]", i);
             return expressions_[i]->get_value(*tuple_, cell);
@@ -759,7 +790,7 @@ public:
 
   RC find_cell(const TupleCellSpec &spec, Value &cell) const override
   {
-    LOG_DEBUG("AliasedTuple::find_cell called: table='%s', field='%s', alias_='%s'",
+    LOG_WARN("[ALIASEDTUPLE] find_cell called: table='%s', field='%s', alias_='%s'",
               spec.table_name() ? spec.table_name() : "NULL",
               spec.field_name() ? spec.field_name() : "NULL",
               alias_.c_str());
@@ -767,7 +798,7 @@ public:
     // 检查请求的表名是否匹配当前别名
     if (!spec.table_name() || spec.table_name()[0] == '\0') {
       // 没有指定表名，直接查找
-      LOG_DEBUG("  No table name specified, delegating to tuple_");
+      LOG_WARN("[ALIASEDTUPLE]  No table name specified, delegating to tuple_");
       return tuple_->find_cell(spec, cell);
     }
 
@@ -778,7 +809,7 @@ public:
 
     if (table_upper != alias_upper) {
       // 表名不匹配
-      LOG_DEBUG("  Table name mismatch: requested='%s', alias='%s', NOTFOUND",
+      LOG_WARN("[ALIASEDTUPLE]  Table name mismatch: requested='%s', alias='%s', NOTFOUND",
                 table_upper.c_str(), alias_upper.c_str());
       return RC::NOTFOUND;
     }
@@ -790,11 +821,11 @@ public:
       field_to_find = spec.alias();
     }
 
-    LOG_DEBUG("  Table name matched, searching for field='%s'", field_to_find);
+    LOG_WARN("[ALIASEDTUPLE]  Table name matched, searching for field='%s'", field_to_find);
 
-    TupleCellSpec field_only_spec(field_to_find);
+    TupleCellSpec field_only_spec("", field_to_find);
     RC rc = tuple_->find_cell(field_only_spec, cell);
-    LOG_DEBUG("  Result from tuple_->find_cell: rc=%d", static_cast<int>(rc));
+    LOG_WARN("[ALIASEDTUPLE]  Result from tuple_->find_cell: rc=%d", static_cast<int>(rc));
     return rc;
   }
 

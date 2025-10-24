@@ -458,6 +458,13 @@ public:
         continue;
       }
 
+      // 特殊处理："为空" + "的" 转换为 "空的"
+      if (word == "为空" && i + 1 < raw.size() && raw[i + 1] == "的") {
+        tokens.push_back("空的");
+        i++;  // 跳过下一个 "的"
+        continue;
+      }
+
       // 过滤停用词
       if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
         continue;
@@ -687,9 +694,12 @@ RC FieldExpr::get_value(const Tuple &tuple, Value &value) const
         field_name_str = field_name_str.substr(dot_pos + 1);
       }
 
-      LOG_DEBUG("FieldExpr::get_value for derived table field: relation=%s, field=%s",
-                relation_name_.c_str(), field_name_str.c_str());
-      return tuple.find_cell(TupleCellSpec(relation_name_.c_str(), field_name_str.c_str()), value);
+      LOG_WARN("[DERIVED_FIELD] Looking up: relation=%s, name=%s, extracted_field=%s",
+                relation_name_.c_str(), this->name(), field_name_str.c_str());
+      RC rc = tuple.find_cell(TupleCellSpec(relation_name_.c_str(), field_name_str.c_str()), value);
+      LOG_WARN("[DERIVED_FIELD] find_cell result: rc=%s (relation=%s, field=%s)",
+                strrc(rc), relation_name_.c_str(), field_name_str.c_str());
+      return rc;
     } else {
       if (pos_ < 0) {
         LOG_WARN("FieldExpr with null table lacks position");
@@ -701,7 +711,14 @@ RC FieldExpr::get_value(const Tuple &tuple, Value &value) const
   // 关键修复：使用relation_name_（别名）而不是table_name()（物理表名）来查找tuple cell
   // 这样自连接时可以通过别名区分同一物理表的不同实例（如 t1.id vs t2.id）
   const char *table_for_lookup = relation_name_.empty() ? table_name() : relation_name_.c_str();
-  return tuple.find_cell(TupleCellSpec(table_for_lookup, field_name()), value);
+  LOG_WARN("[PHYSICAL_FIELD_DEBUG] field_.table()=%p, field_.meta()=%p, has_relation_name=%d",
+            field_.table(), field_.meta(), !relation_name_.empty());
+  LOG_WARN("[PHYSICAL_FIELD] Looking up: table_for_lookup=%s, field=%s (relation_name=%s, table_name=%s)",
+            table_for_lookup, field_name(), relation_name_.c_str(), table_name());
+  RC rc = tuple.find_cell(TupleCellSpec(table_for_lookup, field_name()), value);
+  LOG_WARN("[PHYSICAL_FIELD] find_cell result: rc=%s (table=%s, field=%s)",
+            strrc(rc), table_for_lookup, field_name());
+  return rc;
 }
 
 bool FieldExpr::equal(const Expression &other) const

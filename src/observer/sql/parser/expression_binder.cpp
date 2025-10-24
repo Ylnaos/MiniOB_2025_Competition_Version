@@ -23,9 +23,11 @@ using namespace common;
 
 Table *BinderContext::find_table(const char *table_name) const
 {
-  // 先按别名匹配
+  // 先按别名匹配（大小写不敏感）
   if (table_name != nullptr && *table_name != '\0') {
-    auto it = alias_map_.find(string(table_name));
+    string table_name_upper = table_name;
+    common::str_to_upper(table_name_upper);
+    auto it = alias_map_.find(table_name_upper);
     if (it != alias_map_.end()) {
       return it->second;
     }
@@ -744,6 +746,16 @@ RC ExpressionBinder::bind_unbound_field_expression(
   } else {
     const FieldMeta *field_meta = table->table_meta().field(field_name);
     if (nullptr == field_meta) {
+      // 打印表中所有可用字段用于诊断
+      LOG_WARN("[FIELD_BIND] Looking for field '%s' in table '%s' (alias: %s)",
+                field_name, table->name(), table_name);
+      LOG_WARN("[FIELD_BIND] Available fields in table '%s':", table->name());
+      for (int i = 0; i < table->table_meta().field_num(); i++) {
+        const FieldMeta *fm = table->table_meta().field(i);
+        if (fm) {
+          LOG_WARN("[FIELD_BIND]   - %s (type=%d)", fm->name(), static_cast<int>(fm->type()));
+        }
+      }
       LOG_INFO("no such field in table: %s.%s", table_name, field_name);
       return RC::SCHEMA_FIELD_MISSING;
     }
