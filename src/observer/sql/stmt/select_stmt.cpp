@@ -347,10 +347,20 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           view_has_aggregation = true;
         }
 
-        // 如果视图包含聚合,则不展开
-        // 对于这种情况,需要将外层查询转换为对视图结果的查询
-        // 使用通用的子查询机制处理
-        if (view_has_aggregation) {
+        // 检查视图是否为多表JOIN
+        bool view_is_multi_table = (node->selection.relations.size() > 1);
+
+        // 如果视图是多表视图，不展开，保持为视图引用
+        // 后续会在多表FROM处理逻辑（第710-768行）中将其作为派生表处理
+        if (view_is_multi_table) {
+          LOG_INFO("Multi-table view '%s' detected, will be treated as derived table", view->name());
+          // 保持select_sql.relations不变（仍然指向视图）
+          // 不执行任何视图展开操作
+          // 结束当前视图处理，继续后续流程
+        } else if (view_has_aggregation) {
+          // 如果视图包含聚合,则不展开
+          // 对于这种情况,需要将外层查询转换为对视图结果的查询
+          // 使用通用的子查询机制处理
           // 1. 创建视图的SelectStmt作为内层子查询
           Stmt *inner_stmt = nullptr;
           RC rc = SelectStmt::create(db, node->selection, inner_stmt);
@@ -467,10 +477,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
           stmt = outer_select;
           return RC::SUCCESS;
-        }
-
-        // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
-        select_sql.relations.swap(node->selection.relations);
+        } else {
+          // 单表简单视图：执行展开逻辑
+          // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
+          select_sql.relations.swap(node->selection.relations);
         // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
         if (!view_alias.empty() && select_sql.relations.size() == 1) {
           select_sql.relations[0].alias = view_alias;
@@ -538,9 +548,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             }
           }
         }
-      }
-    }
-  }
+        }  // else块结束 - 单表简单视图展开结束
+      }  // if (view != nullptr) 结束
+    }  // if (db->find_table(rel_name) == nullptr) 结束
+  }  // if (select_sql.relations.size() == 1) 结束
 
   // 循环展开嵌套视图（支持 view on view）
   // 示例：create view v8 as select ... from v6; 其中v6也是视图
@@ -591,10 +602,17 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       nested_view_has_aggregation = true;
     }
 
-    // 如果嵌套视图包含聚合，不能继续平展开，需要作为子查询处理
-    // 退出循环，后续会在表收集阶段将其作为聚合视图处理
+    // 检查嵌套视图是否为多表视图
+    bool nested_view_is_multi_table = (node->selection.relations.size() > 1);
+
+    // 如果嵌套视图包含聚合或是多表视图，不能继续展开，需要作为派生表处理
+    // 退出循环，后续会在表收集阶段将其作为派生表处理
     if (nested_view_has_aggregation) {
       LOG_INFO("Nested view '%s' contains aggregation, stop flattening", nested_view->name());
+      break;
+    }
+    if (nested_view_is_multi_table) {
+      LOG_INFO("Nested view '%s' is multi-table, stop flattening", nested_view->name());
       break;
     }
 
@@ -745,6 +763,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
 
     // 找到物理表，正常处理
+    LOG_WARN("[FROM_CLAUSE] Found physical table: name=%s, alias=%s",
+              table_name, r.alias.empty() ? "(none)" : r.alias.c_str());
     binder_context.add_table(table);
     tables.push_back(table);
     table_map.insert({table_name, table});
@@ -756,6 +776,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
     common::str_to_upper(alias_token);
     table_aliases.push_back(alias_token);
+    LOG_WARN("[FROM_CLAUSE] Registering alias: '%s' -> table '%s'", alias_token.c_str(), table_name);
     // 别名检查：同层不重复
     if (!r.alias.empty()) {
       if (table_map.find(r.alias) != table_map.end()) {
@@ -763,9 +784,14 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         return RC::INVALID_ARGUMENT;
       }
       table_map.insert({r.alias, table});
-      binder_context.add_alias(r.alias, table);
+      // 关键修复：使用大写的alias_token而不是原始的r.alias
+      binder_context.add_alias(alias_token, table);
+      LOG_WARN("[FROM_CLAUSE] Added alias to binder_context: '%s' (uppercase)", alias_token.c_str());
     }
   }
+
+  LOG_WARN("[FROM_CLAUSE] Finished processing FROM clause: %zu physical tables, %zu derived tables",
+            tables.size(), binder_context.derived_tables().size());
 
   // 绑定 SELECT 列
   vector<unique_ptr<Expression>> bound_expressions;

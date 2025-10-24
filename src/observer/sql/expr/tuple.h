@@ -329,8 +329,30 @@ public:
       return !alias_.empty() && table_name != nullptr && 0 == strcasecmp(table_name, alias_.c_str());
     };
 
+    LOG_WARN("[ROWTUPLE] find_cell: table_name=%s, field_name=%s, physical_table=%s, alias=%s",
+              table_name ? table_name : "(null)", field_name ? field_name : "(null)",
+              table_->name(), alias_.empty() ? "(none)" : alias_.c_str());
+    LOG_WARN("[ROWTUPLE] matches_physical=%d, matches_alias=%d", matches_physical(), matches_alias());
+    std::string fields_list;
+    for (size_t i = 0; i < speces_.size(); ++i) {
+      const FieldExpr *field_expr = speces_[i];
+      const Field &field = field_expr->field();
+      if (i > 0) fields_list += ", ";
+      fields_list += field.field_name();
+    }
+    LOG_WARN("[ROWTUPLE] Available fields (%zu): %s", speces_.size(), fields_list.c_str());
+
     // 首先按表名或别名匹配
-    if (matches_physical() || matches_alias()) {
+    // 如果表名不为空但既不匹配物理表名也不匹配别名，则尝试大小写不敏感匹配
+    bool relaxed_match = false;
+    if (table_name != nullptr && table_name[0] != '\0' && !matches_physical() && !matches_alias()) {
+      // 尝试将table_name作为别名进行大小写不敏感匹配（可能是别名未正确传播）
+      if (!alias_.empty() && 0 == strcasecmp(table_name, alias_.c_str())) {
+        relaxed_match = true;
+      }
+    }
+
+    if (matches_physical() || matches_alias() || relaxed_match) {
       std::string target_name;
       if (field_name != nullptr && field_name[0] != '\0') {
         target_name = field_name;
@@ -471,7 +493,52 @@ public:
     return RC::SUCCESS;
   }
 
-  RC find_cell(const TupleCellSpec &spec, Value &cell) const override { return tuple_->find_cell(spec, cell); }
+  RC find_cell(const TupleCellSpec &spec, Value &cell) const override
+  {
+    // 先尝试在expressions_中按名称查找（支持计算列和别名）
+    const char *name_to_find = spec.field_name();
+    if (!name_to_find || name_to_find[0] == '\0') {
+      name_to_find = spec.alias();
+    }
+
+    if (name_to_find && name_to_find[0] != '\0') {
+      std::string name_upper = name_to_find;
+      common::str_to_upper(name_upper);
+
+      LOG_DEBUG("ProjectTuple::find_cell searching for '%s', num_expressions=%zu",
+                name_upper.c_str(), expressions_.size());
+
+      for (size_t i = 0; i < expressions_.size(); ++i) {
+        const char *expr_name = expressions_[i]->name();
+        if (expr_name) {
+          std::string expr_name_upper = expr_name;
+          common::str_to_upper(expr_name_upper);
+
+          // 提取字段名（去掉表名前缀，如"T1.NAME" -> "NAME"）
+          std::string expr_field_only = expr_name_upper;
+          size_t dot_pos = expr_name_upper.find('.');
+          if (dot_pos != std::string::npos) {
+            expr_field_only = expr_name_upper.substr(dot_pos + 1);
+          }
+
+          LOG_DEBUG("  expression[%zu]: name='%s', field_only='%s'",
+                    i, expr_name_upper.c_str(), expr_field_only.c_str());
+
+          // 支持完整匹配或去前缀匹配
+          if (expr_name_upper == name_upper || expr_field_only == name_upper) {
+            // 找到匹配的expression，计算其值
+            LOG_DEBUG("  MATCHED! Calling get_value on expression[%zu]", i);
+            return expressions_[i]->get_value(*tuple_, cell);
+          }
+        }
+      }
+
+      LOG_DEBUG("  NOT FOUND in expressions, delegating to tuple_->find_cell");
+    }
+
+    // 如果expressions_中没找到，尝试从底层tuple查找
+    return tuple_->find_cell(spec, cell);
+  }
 
   RC get_record_id(RID &rid) const override
   {
@@ -693,4 +760,78 @@ public:
 private:
   Tuple *left_  = nullptr;
   Tuple *right_ = nullptr;
+};
+
+/**
+ * @brief 带别名的Tuple包装器，用于派生表（视图作为表使用）
+ * @ingroup Tuple
+ * @details 包装一个tuple并为所有字段添加表名前缀，使其能在JOIN中被正确查找
+ */
+class AliasedTuple : public Tuple
+{
+public:
+  AliasedTuple(Tuple *tuple, const std::string &alias) : tuple_(tuple), alias_(alias) {}
+  virtual ~AliasedTuple() = default;
+
+  int cell_num() const override { return tuple_->cell_num(); }
+
+  RC cell_at(int index, Value &cell) const override { return tuple_->cell_at(index, cell); }
+
+  RC spec_at(int index, TupleCellSpec &spec) const override
+  {
+    RC rc = tuple_->spec_at(index, spec);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    // 为spec添加表名前缀
+    spec = TupleCellSpec(alias_.c_str(), spec.field_name(), spec.alias());
+    return RC::SUCCESS;
+  }
+
+  RC find_cell(const TupleCellSpec &spec, Value &cell) const override
+  {
+    LOG_WARN("[ALIASEDTUPLE] find_cell called: table='%s', field='%s', alias_='%s'",
+              spec.table_name() ? spec.table_name() : "NULL",
+              spec.field_name() ? spec.field_name() : "NULL",
+              alias_.c_str());
+
+    // 检查请求的表名是否匹配当前别名
+    if (!spec.table_name() || spec.table_name()[0] == '\0') {
+      // 没有指定表名，直接查找
+      LOG_WARN("[ALIASEDTUPLE]  No table name specified, delegating to tuple_");
+      return tuple_->find_cell(spec, cell);
+    }
+
+    std::string table_upper = spec.table_name();
+    common::str_to_upper(table_upper);
+    std::string alias_upper = alias_;
+    common::str_to_upper(alias_upper);
+
+    if (table_upper != alias_upper) {
+      // 表名不匹配
+      LOG_WARN("[ALIASEDTUPLE]  Table name mismatch: requested='%s', alias='%s', NOTFOUND",
+                table_upper.c_str(), alias_upper.c_str());
+      return RC::NOTFOUND;
+    }
+
+    // 表名匹配，使用字段名或别名查找
+    // 如果有field_name就用field_name，否则用alias
+    const char *field_to_find = spec.field_name();
+    if (!field_to_find || field_to_find[0] == '\0') {
+      field_to_find = spec.alias();
+    }
+
+    LOG_WARN("[ALIASEDTUPLE]  Table name matched, searching for field='%s'", field_to_find);
+
+    TupleCellSpec field_only_spec("", field_to_find);
+    RC rc = tuple_->find_cell(field_only_spec, cell);
+    LOG_WARN("[ALIASEDTUPLE]  Result from tuple_->find_cell: rc=%d", static_cast<int>(rc));
+    return rc;
+  }
+
+  RC get_record_id(RID &rid) const override { return tuple_->get_record_id(rid); }
+
+private:
+  Tuple      *tuple_;  // 被包装的tuple
+  std::string alias_;  // 派生表别名
 };

@@ -458,6 +458,13 @@ public:
         continue;
       }
 
+      // 特殊处理："为空" + "的" 转换为 "空的"
+      if (word == "为空" && i + 1 < raw.size() && raw[i + 1] == "的") {
+        tokens.push_back("空的");
+        i++;  // 跳过下一个 "的"
+        continue;
+      }
+
       // 过滤停用词
       if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
         continue;
@@ -677,16 +684,41 @@ static inline double round_half_to_even(double x)
 RC FieldExpr::get_value(const Tuple &tuple, Value &value) const
 {
   if (field_.table() == nullptr) {
-    if (pos_ < 0) {
-      LOG_WARN("FieldExpr with null table lacks position");
-      return RC::INTERNAL;
+    // 派生表字段：如果设置了relation_name_，使用find_cell查找（支持JOIN）
+    // 否则使用position查找（仅适用于单表场景）
+    if (!relation_name_.empty()) {
+      // 从name()中提取字段名（去掉表名前缀，如"V.ID" -> "ID"）
+      string field_name_str = this->name();
+      size_t dot_pos = field_name_str.find('.');
+      if (dot_pos != string::npos) {
+        field_name_str = field_name_str.substr(dot_pos + 1);
+      }
+
+      LOG_WARN("[DERIVED_FIELD] Looking up: relation=%s, name=%s, extracted_field=%s",
+                relation_name_.c_str(), this->name(), field_name_str.c_str());
+      RC rc = tuple.find_cell(TupleCellSpec(relation_name_.c_str(), field_name_str.c_str()), value);
+      LOG_WARN("[DERIVED_FIELD] find_cell result: rc=%s (relation=%s, field=%s)",
+                strrc(rc), relation_name_.c_str(), field_name_str.c_str());
+      return rc;
+    } else {
+      if (pos_ < 0) {
+        LOG_WARN("FieldExpr with null table lacks position");
+        return RC::INTERNAL;
+      }
+      return tuple.cell_at(pos_, value);
     }
-    return tuple.cell_at(pos_, value);
   }
   // 关键修复：使用relation_name_（别名）而不是table_name()（物理表名）来查找tuple cell
   // 这样自连接时可以通过别名区分同一物理表的不同实例（如 t1.id vs t2.id）
   const char *table_for_lookup = relation_name_.empty() ? table_name() : relation_name_.c_str();
-  return tuple.find_cell(TupleCellSpec(table_for_lookup, field_name()), value);
+  LOG_WARN("[PHYSICAL_FIELD_DEBUG] field_.table()=%p, field_.meta()=%p, has_relation_name=%d",
+            field_.table(), field_.meta(), !relation_name_.empty());
+  LOG_WARN("[PHYSICAL_FIELD] Looking up: table_for_lookup=%s, field=%s (relation_name=%s, table_name=%s)",
+            table_for_lookup, field_name(), relation_name_.c_str(), table_name());
+  RC rc = tuple.find_cell(TupleCellSpec(table_for_lookup, field_name()), value);
+  LOG_WARN("[PHYSICAL_FIELD] find_cell result: rc=%s (table=%s, field=%s)",
+            strrc(rc), table_for_lookup, field_name());
+  return rc;
 }
 
 bool FieldExpr::equal(const Expression &other) const
@@ -698,13 +730,23 @@ bool FieldExpr::equal(const Expression &other) const
     return false;
   }
   const auto &other_field_expr = static_cast<const FieldExpr &>(other);
+
+  // 对于派生表字段，使用 Expression::name() 而不是 field_name()
+  // 因为派生表字段的 field_.table() 是 nullptr，无法访问 field_.meta()
+  const char *this_field_name = (field_.table() == nullptr) ? this->name() : field_name();
+  const char *other_field_name = (other_field_expr.field_.table() == nullptr)
+                                  ? other_field_expr.name()
+                                  : other_field_expr.field_name();
+
   const string this_rel = relation_name_.empty() ? string(table_name()) : relation_name_;
   const string other_rel =
       other_field_expr.relation_name_.empty() ? string(other_field_expr.table_name()) : other_field_expr.relation_name_;
+
   LOG_DEBUG("FieldExpr::equal compare %s.%s (rel=%s) vs %s.%s (rel=%s)",
-      table_name(), field_name(), this_rel.c_str(),
-      other_field_expr.table_name(), other_field_expr.field_name(), other_rel.c_str());
-  return this_rel == other_rel && field_name() == other_field_expr.field_name();
+      table_name(), this_field_name, this_rel.c_str(),
+      other_field_expr.table_name(), other_field_name, other_rel.c_str());
+
+  return this_rel == other_rel && strcmp(this_field_name, other_field_name) == 0;
 }
 
 // TODO: 鍦ㄨ繘琛岃〃杈惧紡璁＄畻鏃讹紝`chunk` 鍖呭惈浜嗘墍鏈夊垪锛屽洜姝ゅ彲浠ラ€氳繃 `field_id` 鑾峰彇鍒板搴斿垪銆?// 鍚庣画鍙互浼樺寲鎴愬湪 `FieldExpr` 涓瓨鍌?`chunk` 涓煇鍒楃殑浣嶇疆淇℃伅銆?
@@ -3124,11 +3166,18 @@ RC SubqueryExpr::execute_with_context(const Tuple *outer_tuple) const
     return RC::INVALID_ARGUMENT;
   }
 
+  // 简单子查询快速路径：如果已经执行过，直接返回缓存结果
+  // 这避免了对非相关子查询重复执行 deep_copy_parsed_node_with_ctx
+  if (executed_) {
+    LOG_INFO("[SUBQUERY] already executed, using cached results (size=%zu)", results_.size());
+    return RC::SUCCESS;
+  }
+
   // 鏋勯€犲甫甯搁噺鏇挎崲鐨勬柊 AST
   bool did_substitute = false;
   std::unique_ptr<ParsedSqlNode> copied = deep_copy_parsed_node_with_ctx(*subquery_node_, *outer_tuple, did_substitute);
   if (!copied) {
-    LOG_WARN("failed to copy subquery node with ctx");
+    LOG_WARN("failed to copy subquery node with ctx - this may indicate an issue with expression copying");
     return RC::INTERNAL;
   }
 
@@ -3347,7 +3396,11 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     if (expr_ptr) {
       bool sub = false; RC rc = RC::SUCCESS;
       auto new_expr = copy_and_substitute_outer_refs(*expr_ptr, inner_names, outer_tuple, sub, rc);
-      if (!new_expr || rc != RC::SUCCESS) return nullptr;
+      if (!new_expr || rc != RC::SUCCESS) {
+        LOG_WARN("[SUBQUERY] failed to copy/substitute expression in SELECT list: expr_type=%d, rc=%s",
+                 static_cast<int>(expr_ptr->type()), strrc(rc));
+        return nullptr;
+      }
       dst.expressions.emplace_back(std::move(new_expr));
       did_substitute = did_substitute || sub;
     }
@@ -3369,14 +3422,22 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     bool sub = false;
     if (cond.left_expr) {
       auto left_new = copy_and_substitute_outer_refs(*cond.left_expr, inner_names, outer_tuple, sub, rc);
-      if (!left_new || rc != RC::SUCCESS) return nullptr;
+      if (!left_new || rc != RC::SUCCESS) {
+        LOG_WARN("[SUBQUERY] failed to copy/substitute left condition expression: expr_type=%d, rc=%s",
+                 static_cast<int>(cond.left_expr->type()), strrc(rc));
+        return nullptr;
+      }
       new_cond.left_expr.reset(left_new.release());
       did_substitute = did_substitute || sub;
     }
     sub = false;
     if (cond.right_expr) {
       auto right_new = copy_and_substitute_outer_refs(*cond.right_expr, inner_names, outer_tuple, sub, rc);
-      if (!right_new || rc != RC::SUCCESS) return nullptr;
+      if (!right_new || rc != RC::SUCCESS) {
+        LOG_WARN("[SUBQUERY] failed to copy/substitute right condition expression: expr_type=%d, rc=%s",
+                 static_cast<int>(cond.right_expr->type()), strrc(rc));
+        return nullptr;
+      }
       new_cond.right_expr.reset(right_new.release());
       did_substitute = did_substitute || sub;
     }
@@ -3387,7 +3448,11 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
   if (src.where_expr) {
     bool sub = false; RC rc = RC::SUCCESS;
     auto new_where = copy_and_substitute_outer_refs(*src.where_expr, inner_names, outer_tuple, sub, rc);
-    if (!new_where || rc != RC::SUCCESS) return nullptr;
+    if (!new_where || rc != RC::SUCCESS) {
+      LOG_WARN("[SUBQUERY] failed to copy/substitute WHERE expression: expr_type=%d, rc=%s",
+               static_cast<int>(src.where_expr->type()), strrc(rc));
+      return nullptr;
+    }
     dst.where_expr.reset(new_where.release());
     did_substitute = did_substitute || sub;
   }
@@ -3397,7 +3462,11 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     if (grp) {
       bool sub = false; RC rc = RC::SUCCESS;
       auto new_grp = copy_and_substitute_outer_refs(*grp, inner_names, outer_tuple, sub, rc);
-      if (!new_grp || rc != RC::SUCCESS) return nullptr;
+      if (!new_grp || rc != RC::SUCCESS) {
+        LOG_WARN("[SUBQUERY] failed to copy/substitute GROUP BY expression: expr_type=%d, rc=%s",
+                 static_cast<int>(grp->type()), strrc(rc));
+        return nullptr;
+      }
       dst.group_by.emplace_back(std::move(new_grp));
       did_substitute = did_substitute || sub;
     }
@@ -3417,14 +3486,22 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     bool sub = false;
     if (cond.left_expr) {
       auto left_new = copy_and_substitute_outer_refs(*cond.left_expr, inner_names, outer_tuple, sub, rc);
-      if (!left_new || rc != RC::SUCCESS) return nullptr;
+      if (!left_new || rc != RC::SUCCESS) {
+        LOG_WARN("[SUBQUERY] failed to copy/substitute left HAVING expression: expr_type=%d, rc=%s",
+                 static_cast<int>(cond.left_expr->type()), strrc(rc));
+        return nullptr;
+      }
       new_cond.left_expr.reset(left_new.release());
       did_substitute = did_substitute || sub;
     }
     sub = false;
     if (cond.right_expr) {
       auto right_new = copy_and_substitute_outer_refs(*cond.right_expr, inner_names, outer_tuple, sub, rc);
-      if (!right_new || rc != RC::SUCCESS) return nullptr;
+      if (!right_new || rc != RC::SUCCESS) {
+        LOG_WARN("[SUBQUERY] failed to copy/substitute right HAVING expression: expr_type=%d, rc=%s",
+                 static_cast<int>(cond.right_expr->type()), strrc(rc));
+        return nullptr;
+      }
       new_cond.right_expr.reset(right_new.release());
       did_substitute = did_substitute || sub;
     }
@@ -3437,7 +3514,11 @@ std::unique_ptr<ParsedSqlNode> SubqueryExpr::deep_copy_parsed_node_with_ctx(
     if (ord.expression) {
       bool sub = false; RC rc = RC::SUCCESS;
       auto new_ord = copy_and_substitute_outer_refs(*ord.expression, inner_names, outer_tuple, sub, rc);
-      if (!new_ord || rc != RC::SUCCESS) return nullptr;
+      if (!new_ord || rc != RC::SUCCESS) {
+        LOG_WARN("[SUBQUERY] failed to copy/substitute ORDER BY expression: expr_type=%d, rc=%s",
+                 static_cast<int>(ord.expression->type()), strrc(rc));
+        return nullptr;
+      }
       item.expression.reset(new_ord.release());
       did_substitute = did_substitute || sub;
     }

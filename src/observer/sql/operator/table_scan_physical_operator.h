@@ -83,4 +83,5 @@ private:
   RowTuple                       tuple_;
   vector<unique_ptr<Expression>> predicates_;  // TODO chang predicate to table tuple filter
   std::string                    alias_;
+  std::unique_ptr<Tuple>         aliased_tuple_;  ///< 带别名的tuple包装器（用于JOIN中的字段查找）
 };

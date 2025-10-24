@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/table_scan_physical_operator.h"
 #include "event/sql_debug.h"
 #include "storage/table/table.h"
+#include "sql/expr/tuple.h"
 
 using namespace std;
 
@@ -70,6 +71,14 @@ RC TableScanPhysicalOperator::close() {
 Tuple *TableScanPhysicalOperator::current_tuple()
 {
   tuple_.set_record(&current_record_);
+
+  // 如果设置了别名，用AliasedTuple包装以支持JOIN中的字段查找
+  LOG_WARN("[TABLESCAN] current_tuple: table=%s, alias=%s, alias_empty=%d", table_->name(), alias_.c_str(), alias_.empty());
+  if (!alias_.empty()) {
+    aliased_tuple_.reset(new AliasedTuple(&tuple_, alias_));
+    return aliased_tuple_.get();
+  }
+
   return &tuple_;
 }
 

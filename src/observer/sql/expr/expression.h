@@ -215,8 +215,18 @@ public:
   unique_ptr<Expression> copy() const override { return make_unique<FieldExpr>(field_, relation_name_); }
 
   ExprType type() const override { return ExprType::FIELD; }
-  AttrType value_type() const override { return field_.attr_type(); }
-  int      value_length() const override { return field_.meta()->len(); }
+  AttrType value_type() const override {
+    // 派生表字段使用 derived_type_，物理表字段使用 field_.attr_type()
+    return (field_.table() == nullptr && derived_type_ != AttrType::UNDEFINED)
+           ? derived_type_
+           : field_.attr_type();
+  }
+  int      value_length() const override {
+    // 派生表字段使用 derived_length_，物理表字段使用 field_.meta()->len()
+    return (field_.table() == nullptr && derived_length_ > 0)
+           ? derived_length_
+           : field_.meta()->len();
+  }
 
   Field &field() { return field_; }
 
@@ -232,9 +242,22 @@ public:
 
   RC get_value(const Tuple &tuple, Value &value) const override;
 
+  // 派生表字段支持：设置字段位置（用于通过位置访问tuple）
+  void set_pos(int pos) { pos_ = pos; }
+  int pos() const { return pos_; }
+
+  // 派生表字段支持：设置类型信息（因为派生表字段没有FieldMeta）
+  void set_derived_type_info(AttrType type, int length) {
+    derived_type_ = type;
+    derived_length_ = length;
+  }
+
 private:
   Field field_;
   string relation_name_;
+  int pos_ = -1;  ///< 派生表字段在tuple中的位置（-1表示未设置）
+  AttrType derived_type_ = AttrType::UNDEFINED;  ///< 派生表字段的类型（用于value_type()）
+  int derived_length_ = 0;  ///< 派生表字段的长度（用于value_length()）
 };
 
 /**
