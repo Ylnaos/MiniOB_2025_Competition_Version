@@ -277,6 +277,13 @@ RC FullTextIndex::calculate_bm25_score(const RID &rid, const std::string &query,
 {
   score = 0.0f;
 
+  // 如果平均文档长度为0（索引为空），直接返回0分
+  if (total_docs_ == 0 || avg_doc_length_ <= 0.0) {
+    LOG_DEBUG("Index is empty or avg_doc_length is 0. total_docs=%d, avg_doc_length=%.2f", total_docs_, avg_doc_length_);
+    score = 0.0f;
+    return RC::SUCCESS;
+  }
+
   // 对查询文本分词
   std::vector<std::string> query_tokens;
   RC rc = tokenize_text(query, query_tokens);
@@ -284,9 +291,13 @@ RC FullTextIndex::calculate_bm25_score(const RID &rid, const std::string &query,
     return rc;
   }
 
+  LOG_DEBUG("Query tokenized: query='%s', tokens=%zu", query.c_str(), query_tokens.size());
+
   // 获取文档长度
   auto doc_len_it = doc_lengths_.find(rid);
   if (doc_len_it == doc_lengths_.end()) {
+    LOG_WARN("Document RID not found in index. rid=%s, total_docs=%d, doc_lengths_size=%zu",
+             rid.to_string().c_str(), total_docs_, doc_lengths_.size());
     return RC::RECORD_NOT_EXIST;
   }
   int doc_len = doc_len_it->second;

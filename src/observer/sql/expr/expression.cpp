@@ -442,13 +442,22 @@ public:
     tokens.reserve(raw.size());
     // 直接使用 jieba 的分词结果，不进行后处理拆分
     // 这样可以保留 jieba 识别的词组（如"表中"）不被拆分成单字
-    for (const auto &word : raw) {
+    for (size_t i = 0; i < raw.size(); i++) {
+      const auto &word = raw[i];
       if (word.empty()) {
         continue;
       }
       if (common::is_blank(word.c_str())) {
         continue;
       }
+
+      // 特殊处理："的" + "值" 合并为 "的值"
+      if (word == "的" && i + 1 < raw.size() && raw[i + 1] == "值") {
+        tokens.push_back("的值");
+        i++;  // 跳过下一个 "值"
+        continue;
+      }
+
       // 过滤停用词
       if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
         continue;
@@ -3610,6 +3619,8 @@ value.set_boolean(false);
 
 RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value) const
 {
+  LOG_DEBUG("MatchAgainstExpr::get_value called. table=%p, index=%p", table_, index_);
+
   // 1. 获取搜索文本
   Value search_value;
   RC rc = search_text_->get_value(tuple, search_value);
@@ -3654,10 +3665,12 @@ RC MatchAgainstExpr::get_value(const Tuple &tuple, Value &value) const
   rc = ft_index->calculate_bm25_score(rid, query, score);
   if (rc != RC::SUCCESS) {
     // 如果计算失败（比如文档不在索引中），返回0分
+    LOG_WARN("calculate_bm25_score failed. rc=%s, rid=%s, query='%s'", strrc(rc), rid.to_string().c_str(), query.c_str());
     value.set_float(0.0f);
     return RC::SUCCESS;
   }
 
+  LOG_DEBUG("BM25 score calculated. rid=%s, query='%s', score=%.4f", rid.to_string().c_str(), query.c_str(), score);
   value.set_float(score);
   return RC::SUCCESS;
 }

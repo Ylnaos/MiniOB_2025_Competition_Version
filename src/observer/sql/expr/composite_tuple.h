@@ -41,6 +41,7 @@ public:
   RC  cell_at(int index, Value &cell) const override;
   RC  spec_at(int index, TupleCellSpec &spec) const override;
   RC  find_cell(const TupleCellSpec &spec, Value &cell) const override;
+  RC  get_record_id(RID &rid) const override;
 
   void   add_tuple(unique_ptr<Tuple> tuple);
   Tuple &tuple_at(size_t index);

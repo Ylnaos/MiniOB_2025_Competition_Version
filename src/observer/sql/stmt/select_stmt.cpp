@@ -319,9 +319,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   if (select_sql.relations.size() == 1) {
     const RelationSqlNode &rel = select_sql.relations[0];
     const char *rel_name = rel.relation_name.c_str();
+    string view_alias = rel.alias;  // 保存视图的别名（如果有）
     if (db->find_table(rel_name) == nullptr) {
       View *view = db->find_view(rel_name);
-      if (view != nullptr && rel.alias.empty()) {
+      if (view != nullptr) {  // 移除 rel.alias.empty() 限制，支持带别名的视图展开
         ParsedSqlResult parsed;
         RC parse_rc = parse(view->select_sql(), &parsed);
         if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
@@ -470,6 +471,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
         // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
         select_sql.relations.swap(node->selection.relations);
+        // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
+        if (!view_alias.empty() && select_sql.relations.size() == 1) {
+          select_sql.relations[0].alias = view_alias;
+          LOG_INFO("Assigned view alias '%s' to inner table '%s'",
+                   view_alias.c_str(), select_sql.relations[0].relation_name.c_str());
+        }
         for (auto &cond : node->selection.conditions) {
           select_sql.conditions.emplace_back(std::move(cond));
         }
@@ -539,11 +546,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   // 示例：create view v8 as select ... from v6; 其中v6也是视图
   const int MAX_VIEW_RECURSION_DEPTH = 10;  // 防止循环引用导致无限递归
   for (int view_depth = 0; view_depth < MAX_VIEW_RECURSION_DEPTH; view_depth++) {
-    // 只处理单表FROM且无别名的情况
-    if (select_sql.relations.size() != 1 || !select_sql.relations[0].alias.empty()) {
+    // 只处理单表FROM的情况（支持带别名的视图）
+    if (select_sql.relations.size() != 1) {
       break;
     }
 
+    string nested_view_alias = select_sql.relations[0].alias;  // 保存别名以传递给内部表
     const char *rel_name = select_sql.relations[0].relation_name.c_str();
     // 如果是物理表，退出循环
     if (db->find_table(rel_name) != nullptr) {
@@ -592,6 +600,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
     // 展开嵌套视图的 FROM/WHERE
     select_sql.relations.swap(node->selection.relations);
+    // 如果外层视图有别名，且嵌套视图内部只有一个表，将别名传递给这个表
+    if (!nested_view_alias.empty() && select_sql.relations.size() == 1) {
+      select_sql.relations[0].alias = nested_view_alias;
+      LOG_INFO("Passed nested view alias '%s' to inner table '%s'",
+               nested_view_alias.c_str(), select_sql.relations[0].relation_name.c_str());
+    }
     for (auto &cond : node->selection.conditions) {
       select_sql.conditions.emplace_back(std::move(cond));
     }
@@ -657,6 +671,9 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     LOG_INFO("Successfully expanded nested view: %s", nested_view->name());
     // 继续循环，检查新的relations是否还包含视图
   }
+
+  // TODO: 多表FROM子句中的视图展开需要更复杂的列引用重写逻辑
+  // 当前暂不支持，视图将作为派生表处理
 
   // 绑定阶段
   BinderContext binder_context;

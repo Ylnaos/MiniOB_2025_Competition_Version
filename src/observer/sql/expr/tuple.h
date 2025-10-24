@@ -566,12 +566,33 @@ public:
     return RC::NOTFOUND;
   }
 
+  RC get_record_id(RID &rid) const override
+  {
+    if (has_rid_) {
+      rid = rid_;
+      return RC::SUCCESS;
+    }
+    return RC::UNIMPLEMENTED;
+  }
+
+  void set_record_id(const RID &rid)
+  {
+    rid_ = rid;
+    has_rid_ = true;
+  }
+
   static RC make(const Tuple &tuple, ValueListTuple &value_list)
   {
     value_list.cells_.clear();
     const bool use_shared_specs = static_cast<bool>(value_list.shared_specs_);
     if (!use_shared_specs) {
       value_list.specs_.clear();
+    }
+
+    // 尝试从源 tuple 获取 RID 并保存
+    RID rid;
+    if (tuple.get_record_id(rid) == RC::SUCCESS) {
+      value_list.set_record_id(rid);
     }
 
     const int cell_num = tuple.cell_num();
@@ -604,6 +625,8 @@ private:
   vector<Value>                         cells_;
   vector<TupleCellSpec>                 specs_;
   std::shared_ptr<vector<TupleCellSpec>> shared_specs_;
+  RID                                    rid_;         ///< 保存的RID（如果有）
+  bool                                   has_rid_ = false;  ///< 是否有有效的RID
 };
 
 class JoinedTuple : public Tuple

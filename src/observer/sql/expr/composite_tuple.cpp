@@ -64,8 +64,17 @@ RC CompositeTuple::find_cell(const TupleCellSpec &spec, Value &cell) const
 
 void CompositeTuple::add_tuple(unique_ptr<Tuple> tuple) { tuples_.push_back(std::move(tuple)); }
 
-Tuple &CompositeTuple::tuple_at(size_t index) 
-{ 
+Tuple &CompositeTuple::tuple_at(size_t index)
+{
   ASSERT(index < tuples_.size(), "index=%d, tuples_size=%d", index, tuples_.size());
-  return *tuples_[index]; 
+  return *tuples_[index];
+}
+
+RC CompositeTuple::get_record_id(RID &rid) const
+{
+  // 优先返回第一个 tuple 的 RID
+  if (!tuples_.empty()) {
+    return tuples_[0]->get_record_id(rid);
+  }
+  return RC::UNIMPLEMENTED;
 }
