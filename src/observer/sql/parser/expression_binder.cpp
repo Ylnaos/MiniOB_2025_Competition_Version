@@ -582,15 +582,26 @@ RC ExpressionBinder::bind_unbound_field_expression(
         }
         common::str_to_upper(candidate_name);
 
-        if (candidate_name == target_name) {
+        // 提取字段名（去掉表名前缀）
+        string field_name_only = candidate_name;
+        size_t dot_pos = candidate_name.find('.');
+        if (dot_pos != string::npos) {
+          field_name_only = candidate_name.substr(dot_pos + 1);
+        }
+
+        if (candidate_name == target_name || field_name_only == target_name) {
           auto *field_expr = new FieldExpr();
           field_expr->set_pos(static_cast<int>(idx));
-          field_expr->set_name(target_name);
+          field_expr->set_name(derived_alias + "." + target_name);  // 使用完整名称（表名.字段名）
+          field_expr->set_relation_name(derived_alias);  // 设置relation_name以支持find_cell查找
+          // 从派生表的输出表达式中提取类型信息
+          field_expr->set_derived_type_info(output_expr->value_type(), output_expr->value_length());
           if (expr->alias() != nullptr) {
             field_expr->set_alias(expr->alias());
           }
-          LOG_DEBUG("Bind unqualified field '%s' from single derived table '%s' at position %zu",
-                    target_name.c_str(), derived_alias.c_str(), idx);
+          LOG_DEBUG("Bind unqualified field '%s' from single derived table '%s' at position %zu, type=%d, length=%d, relation=%s",
+                    target_name.c_str(), derived_alias.c_str(), idx,
+                    static_cast<int>(output_expr->value_type()), output_expr->value_length(), derived_alias.c_str());
           bound_expressions.emplace_back(field_expr);
           return RC::SUCCESS;
         }
@@ -637,11 +648,22 @@ RC ExpressionBinder::bind_unbound_field_expression(
             }
             common::str_to_upper(candidate_name);
 
+            // 提取字段名（去掉表名前缀）
+            string field_name_only = candidate_name;
+            size_t dot_pos = candidate_name.find('.');
+            if (dot_pos != string::npos) {
+              field_name_only = candidate_name.substr(dot_pos + 1);
+            }
+
             auto *field_expr = new FieldExpr();
             field_expr->set_pos(static_cast<int>(idx));
-            field_expr->set_name(alias_upper + "." + candidate_name);
-            LOG_DEBUG("Bind field from derived table: %s.%s at position %zu",
-                      alias_upper.c_str(), candidate_name.c_str(), idx);
+            field_expr->set_name(alias_upper + "." + field_name_only);
+            field_expr->set_relation_name(alias_upper);  // 设置relation_name以支持find_cell查找
+            // 从派生表的输出表达式中提取类型信息
+            field_expr->set_derived_type_info(output_expr->value_type(), output_expr->value_length());
+            LOG_DEBUG("Bind field from derived table: %s.%s at position %zu, type=%d, length=%d, relation=%s",
+                      alias_upper.c_str(), field_name_only.c_str(), idx,
+                      static_cast<int>(output_expr->value_type()), output_expr->value_length(), alias_upper.c_str());
             bound_expressions.emplace_back(field_expr);
           }
           return RC::SUCCESS;
@@ -669,15 +691,26 @@ RC ExpressionBinder::bind_unbound_field_expression(
             }
             common::str_to_upper(candidate_name);
 
-            if (candidate_name == target_name) {
+            // 提取字段名（去掉表名前缀）
+            string field_name_only = candidate_name;
+            size_t dot_pos = candidate_name.find('.');
+            if (dot_pos != string::npos) {
+              field_name_only = candidate_name.substr(dot_pos + 1);
+            }
+
+            if (candidate_name == target_name || field_name_only == target_name) {
               auto *field_expr = new FieldExpr();
               field_expr->set_pos(static_cast<int>(idx));
               field_expr->set_name(alias_upper + "." + target_name);
+              field_expr->set_relation_name(alias_upper);  // 设置relation_name以支持find_cell查找
+              // 从派生表的输出表达式中提取类型信息
+              field_expr->set_derived_type_info(output_expr->value_type(), output_expr->value_length());
               if (expr->alias() != nullptr) {
                 field_expr->set_alias(expr->alias());
               }
-              LOG_DEBUG("Bind field '%s' from derived table '%s' at position %zu",
-                        target_name.c_str(), alias_upper.c_str(), idx);
+              LOG_DEBUG("Bind field '%s' from derived table '%s' at position %zu, type=%d, length=%d, relation=%s",
+                        target_name.c_str(), alias_upper.c_str(), idx,
+                        static_cast<int>(output_expr->value_type()), output_expr->value_length(), alias_upper.c_str());
               bound_expressions.emplace_back(field_expr);
               return RC::SUCCESS;
             }

@@ -43,10 +43,23 @@ public:
    */
   LogicalOperator *subquery_plan() const;
 
+  /**
+   * @brief 设置子查询的别名（用于派生表引用）
+   * @param alias 别名
+   */
+  void set_alias(const std::string &alias) { alias_ = alias; }
+
+  /**
+   * @brief 获取子查询的别名
+   * @return 别名
+   */
+  const std::string &alias() const { return alias_; }
+
   unique_ptr<LogicalProperty> find_log_prop(const vector<LogicalProperty *> &log_props) override;
 
 private:
   // 注意：不使用children_来存储，因为子查询是特殊的封装关系
   // 使用独立的成员变量更清晰
   std::unique_ptr<LogicalOperator> subquery_plan_;
+  std::string alias_;  // 派生表别名
 };

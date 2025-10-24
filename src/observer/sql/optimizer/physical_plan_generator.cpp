@@ -614,8 +614,14 @@ RC PhysicalPlanGenerator::create_plan(SubqueryLogicalOperator &subquery_oper, un
   // 用SubqueryPhysicalOperator封装物理计划
   auto subquery_physical_oper = make_unique<SubqueryPhysicalOperator>();
   subquery_physical_oper->set_subquery(std::move(subquery_physical_plan));
+  // 设置别名以支持JOIN中的字段查找
+  if (!subquery_oper.alias().empty()) {
+    subquery_physical_oper->set_alias(subquery_oper.alias());
+    LOG_TRACE("create a subquery physical operator with alias '%s'", subquery_oper.alias().c_str());
+  } else {
+    LOG_TRACE("create a subquery physical operator without alias");
+  }
 
   oper = std::move(subquery_physical_oper);
-  LOG_TRACE("create a subquery physical operator");
   return RC::SUCCESS;
 }

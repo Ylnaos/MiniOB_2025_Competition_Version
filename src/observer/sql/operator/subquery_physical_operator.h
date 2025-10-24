@@ -44,6 +44,20 @@ public:
    */
   void set_subquery(std::unique_ptr<PhysicalOperator> child_oper);
 
+  /**
+   * @brief 设置派生表别名（用于JOIN中的字段查找）
+   * @param alias 别名
+   */
+  void set_alias(const std::string &alias) { alias_ = alias; }
+
+  /**
+   * @brief 获取派生表别名
+   * @return 别名
+   */
+  const std::string &alias() const { return alias_; }
+
 private:
   Trx *trx_ = nullptr;  ///< 用于子查询执行的事务上下文
+  std::string alias_;   ///< 派生表别名
+  std::unique_ptr<Tuple> aliased_tuple_;  ///< 带别名的tuple包装器
 };

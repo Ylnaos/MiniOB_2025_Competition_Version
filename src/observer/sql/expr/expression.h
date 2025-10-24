@@ -212,11 +212,32 @@ public:
 
   bool equal(const Expression &other) const override;
 
-  unique_ptr<Expression> copy() const override { return make_unique<FieldExpr>(field_, relation_name_); }
+  unique_ptr<Expression> copy() const override {
+    auto field_expr = make_unique<FieldExpr>(field_, relation_name_);
+    field_expr->set_pos(pos_);
+    // 使用name()方法获取name_的值（name_是基类Expression的私有成员）
+    if (this->name() != nullptr && this->name()[0] != '\0') {
+      field_expr->set_name(this->name());
+    }
+    field_expr->set_derived_type_info(derived_type_, derived_length_);
+    return field_expr;
+  }
 
   ExprType type() const override { return ExprType::FIELD; }
-  AttrType value_type() const override { return field_.attr_type(); }
-  int      value_length() const override { return field_.meta()->len(); }
+  AttrType value_type() const override {
+    // 对于派生表字段（field_.table()==nullptr），使用存储的类型信息
+    if (field_.table() == nullptr) {
+      return derived_type_;
+    }
+    return field_.attr_type();
+  }
+  int value_length() const override {
+    // 对于派生表字段（field_.table()==nullptr），使用存储的长度信息
+    if (field_.table() == nullptr) {
+      return derived_length_;
+    }
+    return field_.meta()->len();
+  }
 
   Field &field() { return field_; }
 
@@ -228,6 +249,12 @@ public:
   const char *table_name() const { return field_.table_name(); }
   const char *field_name() const { return field_.field_name(); }
 
+  // 为派生表字段设置类型信息（当field_.table()==nullptr时使用）
+  void set_derived_type_info(AttrType type, int length) {
+    derived_type_ = type;
+    derived_length_ = length;
+  }
+
   RC get_column(Chunk &chunk, Column &column) override;
 
   RC get_value(const Tuple &tuple, Value &value) const override;
@@ -235,6 +262,9 @@ public:
 private:
   Field field_;
   string relation_name_;
+  // 派生表字段的类型信息（当field_.table()==nullptr时使用）
+  AttrType derived_type_ = AttrType::UNDEFINED;
+  int derived_length_ = 0;
 };
 
 /**

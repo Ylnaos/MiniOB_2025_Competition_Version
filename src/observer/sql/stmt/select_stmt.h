@@ -68,6 +68,7 @@ public:
       derived_table_stmts_[alias].reset(stmt);
     }
   }
+  const unordered_map<string, unique_ptr<SelectStmt>> &derived_table_stmts() const { return derived_table_stmts_; }
 
 private:
   vector<unique_ptr<Expression>> query_expressions_;

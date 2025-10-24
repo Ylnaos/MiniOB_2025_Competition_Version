@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "sql/operator/subquery_physical_operator.h"
+#include "sql/expr/tuple.h"
 #include "common/log/log.h"
 
 using namespace common;
@@ -65,5 +66,16 @@ Tuple *SubqueryPhysicalOperator::current_tuple()
     return nullptr;
   }
 
-  return children_[0]->current_tuple();
+  Tuple *child_tuple = children_[0]->current_tuple();
+  if (child_tuple == nullptr) {
+    return nullptr;
+  }
+
+  // 如果设置了别名，用AliasedTuple包装以支持JOIN中的表名查找
+  if (!alias_.empty()) {
+    aliased_tuple_.reset(new AliasedTuple(child_tuple, alias_));
+    return aliased_tuple_.get();
+  }
+
+  return child_tuple;
 }

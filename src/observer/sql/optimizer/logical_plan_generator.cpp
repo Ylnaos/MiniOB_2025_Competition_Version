@@ -239,6 +239,39 @@ RC LogicalPlanGenerator::create_single_select_plan(
     }
   }
 
+  // 处理派生表（视图作为表使用）
+  const auto &derived_tables = select_stmt->derived_table_stmts();
+  for (const auto &entry : derived_tables) {
+    const string &alias = entry.first;
+    SelectStmt *derived_stmt = entry.second.get();
+
+    // 为派生表（视图）创建逻辑计划
+    unique_ptr<LogicalOperator> derived_logical_oper;
+    RC rc = create_plan(derived_stmt, derived_logical_oper);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("Failed to create logical plan for derived table '%s'. rc=%s", alias.c_str(), strrc(rc));
+      return rc;
+    }
+
+    // 用SubqueryLogicalOperator封装派生表的逻辑计划
+    auto subquery_oper = make_unique<SubqueryLogicalOperator>();
+    subquery_oper->set_subquery_plan(std::move(derived_logical_oper));
+    subquery_oper->set_alias(alias);  // 设置别名以便外层引用
+
+    // 将派生表加入到JOIN树中
+    unique_ptr<LogicalOperator> derived_oper = std::move(subquery_oper);
+    if (table_oper == nullptr) {
+      table_oper = std::move(derived_oper);
+    } else {
+      JoinLogicalOperator *join_oper = new JoinLogicalOperator;
+      join_oper->add_child(std::move(table_oper));
+      join_oper->add_child(std::move(derived_oper));
+      table_oper = unique_ptr<LogicalOperator>(join_oper);
+    }
+
+    LOG_INFO("Added derived table '%s' to JOIN tree as SubqueryLogicalOperator", alias.c_str());
+  }
+
   if (predicate_oper) {
     if (*last_oper) {
       predicate_oper->add_child(std::move(*last_oper));

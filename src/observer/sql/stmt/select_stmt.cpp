@@ -347,10 +347,20 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           view_has_aggregation = true;
         }
 
-        // 如果视图包含聚合,则不展开
-        // 对于这种情况,需要将外层查询转换为对视图结果的查询
-        // 使用通用的子查询机制处理
-        if (view_has_aggregation) {
+        // 检查视图是否为多表JOIN
+        bool view_is_multi_table = (node->selection.relations.size() > 1);
+
+        // 如果视图是多表视图，不展开，保持为视图引用
+        // 后续会在多表FROM处理逻辑（第710-768行）中将其作为派生表处理
+        if (view_is_multi_table) {
+          LOG_INFO("Multi-table view '%s' detected, will be treated as derived table", view->name());
+          // 保持select_sql.relations不变（仍然指向视图）
+          // 不执行任何视图展开操作
+          // 结束当前视图处理，继续后续流程
+        } else if (view_has_aggregation) {
+          // 如果视图包含聚合,则不展开
+          // 对于这种情况,需要将外层查询转换为对视图结果的查询
+          // 使用通用的子查询机制处理
           // 1. 创建视图的SelectStmt作为内层子查询
           Stmt *inner_stmt = nullptr;
           RC rc = SelectStmt::create(db, node->selection, inner_stmt);
@@ -467,16 +477,16 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
           stmt = outer_select;
           return RC::SUCCESS;
-        }
-
-        // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
-        select_sql.relations.swap(node->selection.relations);
-        // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
-        if (!view_alias.empty() && select_sql.relations.size() == 1) {
-          select_sql.relations[0].alias = view_alias;
-          LOG_INFO("Assigned view alias '%s' to inner table '%s'",
-                   view_alias.c_str(), select_sql.relations[0].relation_name.c_str());
-        }
+        } else {
+          // 单表简单视图：执行展开逻辑
+          // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
+          select_sql.relations.swap(node->selection.relations);
+          // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
+          if (!view_alias.empty() && select_sql.relations.size() == 1) {
+            select_sql.relations[0].alias = view_alias;
+            LOG_INFO("Assigned view alias '%s' to inner table '%s'",
+                     view_alias.c_str(), select_sql.relations[0].relation_name.c_str());
+          }
         for (auto &cond : node->selection.conditions) {
           select_sql.conditions.emplace_back(std::move(cond));
         }
@@ -538,9 +548,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             }
           }
         }
-      }
-    }
-  }
+        }  // else块结束 - 单表简单视图展开结束
+      }  // if (view != nullptr) 结束
+    }  // if (db->find_table(rel_name) == nullptr) 结束
+  }  // if (select_sql.relations.size() == 1) 结束
 
   // 循环展开嵌套视图（支持 view on view）
   // 示例：create view v8 as select ... from v6; 其中v6也是视图
@@ -591,10 +602,17 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       nested_view_has_aggregation = true;
     }
 
-    // 如果嵌套视图包含聚合，不能继续平展开，需要作为子查询处理
-    // 退出循环，后续会在表收集阶段将其作为聚合视图处理
+    // 检查嵌套视图是否为多表视图
+    bool nested_view_is_multi_table = (node->selection.relations.size() > 1);
+
+    // 如果嵌套视图包含聚合或是多表视图，不能继续展开，需要作为派生表处理
+    // 退出循环，后续会在表收集阶段将其作为派生表处理
     if (nested_view_has_aggregation) {
       LOG_INFO("Nested view '%s' contains aggregation, stop flattening", nested_view->name());
+      break;
+    }
+    if (nested_view_is_multi_table) {
+      LOG_INFO("Nested view '%s' is multi-table, stop flattening", nested_view->name());
       break;
     }
 
