@@ -73,7 +73,6 @@ Tuple *TableScanPhysicalOperator::current_tuple()
   tuple_.set_record(&current_record_);
 
   // 如果设置了别名，用AliasedTuple包装以支持JOIN中的字段查找
-  LOG_WARN("[TABLESCAN] current_tuple: table=%s, alias=%s, alias_empty=%d", table_->name(), alias_.c_str(), alias_.empty());
   if (!alias_.empty()) {
     aliased_tuple_.reset(new AliasedTuple(&tuple_, alias_));
     return aliased_tuple_.get();

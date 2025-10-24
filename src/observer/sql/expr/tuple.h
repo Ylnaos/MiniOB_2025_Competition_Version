@@ -329,30 +329,8 @@ public:
       return !alias_.empty() && table_name != nullptr && 0 == strcasecmp(table_name, alias_.c_str());
     };
 
-    LOG_WARN("[ROWTUPLE] find_cell: table_name=%s, field_name=%s, physical_table=%s, alias=%s",
-              table_name ? table_name : "(null)", field_name ? field_name : "(null)",
-              table_->name(), alias_.empty() ? "(none)" : alias_.c_str());
-    LOG_WARN("[ROWTUPLE] matches_physical=%d, matches_alias=%d", matches_physical(), matches_alias());
-    std::string fields_list;
-    for (size_t i = 0; i < speces_.size(); ++i) {
-      const FieldExpr *field_expr = speces_[i];
-      const Field &field = field_expr->field();
-      if (i > 0) fields_list += ", ";
-      fields_list += field.field_name();
-    }
-    LOG_WARN("[ROWTUPLE] Available fields (%zu): %s", speces_.size(), fields_list.c_str());
-
     // 首先按表名或别名匹配
-    // 如果表名不为空但既不匹配物理表名也不匹配别名，则尝试大小写不敏感匹配
-    bool relaxed_match = false;
-    if (table_name != nullptr && table_name[0] != '\0' && !matches_physical() && !matches_alias()) {
-      // 尝试将table_name作为别名进行大小写不敏感匹配（可能是别名未正确传播）
-      if (!alias_.empty() && 0 == strcasecmp(table_name, alias_.c_str())) {
-        relaxed_match = true;
-      }
-    }
-
-    if (matches_physical() || matches_alias() || relaxed_match) {
+    if (matches_physical() || matches_alias()) {
       std::string target_name;
       if (field_name != nullptr && field_name[0] != '\0') {
         target_name = field_name;
@@ -495,7 +473,14 @@ public:
 
   RC find_cell(const TupleCellSpec &spec, Value &cell) const override
   {
-    // 先尝试在expressions_中按名称查找（支持计算列和别名）
+    // 先尝试从底层tuple查找（适用于物理表字段）
+    RC rc = tuple_->find_cell(spec, cell);
+    if (rc == RC::SUCCESS) {
+      return rc;
+    }
+
+    // 如果底层tuple找不到，尝试在expressions_中查找（适用于计算列和派生表字段）
+    // 从spec中提取字段名进行匹配（忽略表名，因为派生表的表名在外层处理）
     const char *name_to_find = spec.field_name();
     if (!name_to_find || name_to_find[0] == '\0') {
       name_to_find = spec.alias();
@@ -505,39 +490,29 @@ public:
       std::string name_upper = name_to_find;
       common::str_to_upper(name_upper);
 
-      LOG_DEBUG("ProjectTuple::find_cell searching for '%s', num_expressions=%zu",
-                name_upper.c_str(), expressions_.size());
-
       for (size_t i = 0; i < expressions_.size(); ++i) {
         const char *expr_name = expressions_[i]->name();
         if (expr_name) {
           std::string expr_name_upper = expr_name;
           common::str_to_upper(expr_name_upper);
 
-          // 提取字段名（去掉表名前缀，如"T1.NAME" -> "NAME"）
+          // 提取字段名（去掉表名前缀，如"TABLE.FIELD" -> "FIELD"）
           std::string expr_field_only = expr_name_upper;
           size_t dot_pos = expr_name_upper.find('.');
           if (dot_pos != std::string::npos) {
             expr_field_only = expr_name_upper.substr(dot_pos + 1);
           }
 
-          LOG_DEBUG("  expression[%zu]: name='%s', field_only='%s'",
-                    i, expr_name_upper.c_str(), expr_field_only.c_str());
-
-          // 支持完整匹配或去前缀匹配
-          if (expr_name_upper == name_upper || expr_field_only == name_upper) {
-            // 找到匹配的expression，计算其值
-            LOG_DEBUG("  MATCHED! Calling get_value on expression[%zu]", i);
+          // 匹配字段名（忽略表名差异）
+          if (expr_field_only == name_upper) {
             return expressions_[i]->get_value(*tuple_, cell);
           }
         }
       }
-
-      LOG_DEBUG("  NOT FOUND in expressions, delegating to tuple_->find_cell");
     }
 
-    // 如果expressions_中没找到，尝试从底层tuple查找
-    return tuple_->find_cell(spec, cell);
+    // 如果expressions_中也找不到，返回原始错误码
+    return rc;
   }
 
   RC get_record_id(RID &rid) const override
@@ -633,33 +608,12 @@ public:
     return RC::NOTFOUND;
   }
 
-  RC get_record_id(RID &rid) const override
-  {
-    if (has_rid_) {
-      rid = rid_;
-      return RC::SUCCESS;
-    }
-    return RC::UNIMPLEMENTED;
-  }
-
-  void set_record_id(const RID &rid)
-  {
-    rid_ = rid;
-    has_rid_ = true;
-  }
-
   static RC make(const Tuple &tuple, ValueListTuple &value_list)
   {
     value_list.cells_.clear();
     const bool use_shared_specs = static_cast<bool>(value_list.shared_specs_);
     if (!use_shared_specs) {
       value_list.specs_.clear();
-    }
-
-    // 尝试从源 tuple 获取 RID 并保存
-    RID rid;
-    if (tuple.get_record_id(rid) == RC::SUCCESS) {
-      value_list.set_record_id(rid);
     }
 
     const int cell_num = tuple.cell_num();
@@ -692,8 +646,6 @@ private:
   vector<Value>                         cells_;
   vector<TupleCellSpec>                 specs_;
   std::shared_ptr<vector<TupleCellSpec>> shared_specs_;
-  RID                                    rid_;         ///< 保存的RID（如果有）
-  bool                                   has_rid_ = false;  ///< 是否有有效的RID
 };
 
 class JoinedTuple : public Tuple
@@ -790,15 +742,9 @@ public:
 
   RC find_cell(const TupleCellSpec &spec, Value &cell) const override
   {
-    LOG_WARN("[ALIASEDTUPLE] find_cell called: table='%s', field='%s', alias_='%s'",
-              spec.table_name() ? spec.table_name() : "NULL",
-              spec.field_name() ? spec.field_name() : "NULL",
-              alias_.c_str());
-
     // 检查请求的表名是否匹配当前别名
     if (!spec.table_name() || spec.table_name()[0] == '\0') {
       // 没有指定表名，直接查找
-      LOG_WARN("[ALIASEDTUPLE]  No table name specified, delegating to tuple_");
       return tuple_->find_cell(spec, cell);
     }
 
@@ -809,8 +755,6 @@ public:
 
     if (table_upper != alias_upper) {
       // 表名不匹配
-      LOG_WARN("[ALIASEDTUPLE]  Table name mismatch: requested='%s', alias='%s', NOTFOUND",
-                table_upper.c_str(), alias_upper.c_str());
       return RC::NOTFOUND;
     }
 
@@ -821,12 +765,8 @@ public:
       field_to_find = spec.alias();
     }
 
-    LOG_WARN("[ALIASEDTUPLE]  Table name matched, searching for field='%s'", field_to_find);
-
     TupleCellSpec field_only_spec("", field_to_find);
-    RC rc = tuple_->find_cell(field_only_spec, cell);
-    LOG_WARN("[ALIASEDTUPLE]  Result from tuple_->find_cell: rc=%d", static_cast<int>(rc));
-    return rc;
+    return tuple_->find_cell(field_only_spec, cell);
   }
 
   RC get_record_id(RID &rid) const override { return tuple_->get_record_id(rid); }

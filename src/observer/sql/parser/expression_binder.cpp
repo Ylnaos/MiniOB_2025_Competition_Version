@@ -601,9 +601,6 @@ RC ExpressionBinder::bind_unbound_field_expression(
           if (expr->alias() != nullptr) {
             field_expr->set_alias(expr->alias());
           }
-          LOG_DEBUG("Bind unqualified field '%s' from single derived table '%s' at position %zu, type=%d, length=%d, relation=%s",
-                    target_name.c_str(), derived_alias.c_str(), idx,
-                    static_cast<int>(output_expr->value_type()), output_expr->value_length(), derived_alias.c_str());
           bound_expressions.emplace_back(field_expr);
           return RC::SUCCESS;
         }
@@ -663,9 +660,6 @@ RC ExpressionBinder::bind_unbound_field_expression(
             field_expr->set_relation_name(alias_upper);  // 设置relation_name以支持find_cell查找
             // 从派生表的输出表达式中提取类型信息
             field_expr->set_derived_type_info(output_expr->value_type(), output_expr->value_length());
-            LOG_DEBUG("Bind field from derived table: %s.%s at position %zu, type=%d, length=%d, relation=%s",
-                      alias_upper.c_str(), field_name_only.c_str(), idx,
-                      static_cast<int>(output_expr->value_type()), output_expr->value_length(), alias_upper.c_str());
             bound_expressions.emplace_back(field_expr);
           }
           return RC::SUCCESS;
@@ -710,9 +704,6 @@ RC ExpressionBinder::bind_unbound_field_expression(
               if (expr->alias() != nullptr) {
                 field_expr->set_alias(expr->alias());
               }
-              LOG_DEBUG("Bind field '%s' from derived table '%s' at position %zu, type=%d, length=%d, relation=%s",
-                        target_name.c_str(), alias_upper.c_str(), idx,
-                        static_cast<int>(output_expr->value_type()), output_expr->value_length(), alias_upper.c_str());
               bound_expressions.emplace_back(field_expr);
               return RC::SUCCESS;
             }
@@ -746,16 +737,6 @@ RC ExpressionBinder::bind_unbound_field_expression(
   } else {
     const FieldMeta *field_meta = table->table_meta().field(field_name);
     if (nullptr == field_meta) {
-      // 打印表中所有可用字段用于诊断
-      LOG_WARN("[FIELD_BIND] Looking for field '%s' in table '%s' (alias: %s)",
-                field_name, table->name(), table_name);
-      LOG_WARN("[FIELD_BIND] Available fields in table '%s':", table->name());
-      for (int i = 0; i < table->table_meta().field_num(); i++) {
-        const FieldMeta *fm = table->table_meta().field(i);
-        if (fm) {
-          LOG_WARN("[FIELD_BIND]   - %s (type=%d)", fm->name(), static_cast<int>(fm->type()));
-        }
-      }
       LOG_INFO("no such field in table: %s.%s", table_name, field_name);
       return RC::SCHEMA_FIELD_MISSING;
     }
