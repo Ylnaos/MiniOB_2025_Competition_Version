@@ -468,6 +468,7 @@ RC ExpressionBinder::bind_star_expression(
       auto *field_expr = new FieldExpr();
       field_expr->set_pos(static_cast<int>(idx));
       field_expr->set_name(alias + "." + candidate_name);
+      field_expr->set_relation_name(alias);
       LOG_DEBUG("Wildcard bind field from derived table: %s.%s at position %zu",
                 alias.c_str(), candidate_name.c_str(), idx);
       bound_expressions.emplace_back(field_expr);
@@ -586,6 +587,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
           auto *field_expr = new FieldExpr();
           field_expr->set_pos(static_cast<int>(idx));
           field_expr->set_name(target_name);
+          field_expr->set_relation_name(derived_alias);
           if (expr->alias() != nullptr) {
             field_expr->set_alias(expr->alias());
           }
@@ -640,6 +642,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
             auto *field_expr = new FieldExpr();
             field_expr->set_pos(static_cast<int>(idx));
             field_expr->set_name(alias_upper + "." + candidate_name);
+            field_expr->set_relation_name(alias_upper);
             LOG_DEBUG("Bind field from derived table: %s.%s at position %zu",
                       alias_upper.c_str(), candidate_name.c_str(), idx);
             bound_expressions.emplace_back(field_expr);
@@ -673,6 +676,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
               auto *field_expr = new FieldExpr();
               field_expr->set_pos(static_cast<int>(idx));
               field_expr->set_name(alias_upper + "." + target_name);
+              field_expr->set_relation_name(alias_upper);
               if (expr->alias() != nullptr) {
                 field_expr->set_alias(expr->alias());
               }

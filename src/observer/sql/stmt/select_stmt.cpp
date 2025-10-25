@@ -683,6 +683,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   vector<string>                 table_aliases;
   table_aliases.reserve(select_sql.relations.size());
   unordered_map<string, Table *> table_map;
+  vector<SelectStmt::FromItem>   from_items;
+  from_items.reserve(select_sql.relations.size());
   for (size_t i = 0; i < select_sql.relations.size(); i++) {
     const RelationSqlNode &r = select_sql.relations[i];
     const char *table_name = r.relation_name.c_str();
@@ -730,8 +732,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         // 注册派生表到BinderContext
         binder_context.add_derived_table(alias_token, view_select_stmt);
 
-        // 将派生表的别名添加到table_aliases（用于后续处理）
-        table_aliases.push_back(alias_token);
+        // 记录 FROM 子句顺序
+        SelectStmt::FromItem item;
+        item.type    = SelectStmt::FromItem::Type::DERIVED;
+        item.alias   = alias_token;
+        item.derived = view_select_stmt;
+        from_items.emplace_back(std::move(item));
 
         // 注意：由于这是派生表，不添加到tables和table_map中
         // （tables只包含物理表，派生表通过binder_context.derived_tables()访问）
@@ -756,6 +762,11 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
     common::str_to_upper(alias_token);
     table_aliases.push_back(alias_token);
+    SelectStmt::FromItem item;
+    item.type  = SelectStmt::FromItem::Type::TABLE;
+    item.table = table;
+    item.alias = alias_token;
+    from_items.emplace_back(std::move(item));
     // 别名检查：同层不重复
     if (!r.alias.empty()) {
       if (table_map.find(r.alias) != table_map.end()) {
@@ -837,6 +848,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   SelectStmt *select_stmt = select_stmt_guard.get();
   select_stmt->tables_.swap(tables);
   select_stmt->table_aliases_.swap(table_aliases);
+  select_stmt->from_items_.swap(from_items);
   select_stmt->query_expressions_.swap(bound_expressions);
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);

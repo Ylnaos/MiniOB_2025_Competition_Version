@@ -202,6 +202,7 @@ RC LogicalPlanGenerator::create_single_select_plan(
   last_oper = &table_oper;
   unique_ptr<LogicalOperator> predicate_oper;
   unique_ptr<LogicalOperator> having_pred;
+  const vector<Table *> &tables = select_stmt->tables();
 
   RC rc = create_plan(select_stmt->filter_stmt(), predicate_oper);
   if (OB_FAIL(rc)) {
@@ -219,23 +220,39 @@ RC LogicalPlanGenerator::create_single_select_plan(
     }
   }
 
-  const vector<Table *> &tables  = select_stmt->tables();
-  const vector<string>  &aliases = select_stmt->table_aliases();
-  for (size_t idx = 0; idx < tables.size(); idx++) {
-    Table *table = tables[idx];
-
-    auto table_get_ptr = new TableGetLogicalOperator(table, ReadWriteMode::READ_ONLY);
-    if (idx < aliases.size()) {
-      table_get_ptr->set_alias(aliases[idx]);
-    }
-    unique_ptr<LogicalOperator> table_get_oper(table_get_ptr);
-    if (table_oper == nullptr) {
-      table_oper = std::move(table_get_oper);
+  const vector<SelectStmt::FromItem> &from_items = select_stmt->from_items();
+  for (const auto &item : from_items) {
+    unique_ptr<LogicalOperator> source_oper;
+    if (item.type == SelectStmt::FromItem::Type::TABLE) {
+      auto table_get_ptr = new TableGetLogicalOperator(item.table, ReadWriteMode::READ_ONLY);
+      if (!item.alias.empty()) {
+        table_get_ptr->set_alias(item.alias);
+      }
+      source_oper.reset(table_get_ptr);
     } else {
-      JoinLogicalOperator *join_oper = new JoinLogicalOperator;
+      if (item.derived == nullptr) {
+        LOG_WARN("derived table item without SelectStmt");
+        return RC::INTERNAL;
+      }
+      unique_ptr<LogicalOperator> derived_plan;
+      RC rc = create_plan(item.derived, derived_plan);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to create logical plan for derived table. alias=%s rc=%s",
+            item.alias.c_str(), strrc(rc));
+        return rc;
+      }
+      auto subquery_oper = make_unique<SubqueryLogicalOperator>();
+      subquery_oper->set_subquery_plan(std::move(derived_plan));
+      source_oper = std::move(subquery_oper);
+    }
+
+    if (table_oper == nullptr) {
+      table_oper = std::move(source_oper);
+    } else {
+      auto *join_oper = new JoinLogicalOperator;
       join_oper->add_child(std::move(table_oper));
-      join_oper->add_child(std::move(table_get_oper));
-      table_oper = unique_ptr<LogicalOperator>(join_oper);
+      join_oper->add_child(std::move(source_oper));
+      table_oper.reset(join_oper);
     }
   }
 

@@ -31,6 +31,23 @@ class Table;
 class SelectStmt : public Stmt
 {
 public:
+  /**
+   * @brief FROM 子句的数据源描述
+   */
+  struct FromItem
+  {
+    enum class Type
+    {
+      TABLE,   ///< 物理表
+      DERIVED  ///< 派生表（视图/子查询）
+    };
+
+    Type        type       = Type::TABLE;
+    Table      *table      = nullptr;        ///< 当 type 为 TABLE 时有效
+    string      alias;                       ///< 使用的大写别名
+    SelectStmt *derived    = nullptr;        ///< 当 type 为 DERIVED 时有效
+  };
+
   SelectStmt() = default;
   ~SelectStmt() override;
 
@@ -42,6 +59,7 @@ public:
 public:
   const vector<Table *> &tables() const { return tables_; }
   const vector<string> &table_aliases() const { return table_aliases_; }
+  const vector<FromItem> &from_items() const { return from_items_; }
   FilterStmt            *filter_stmt() const { return filter_stmt_; }
   unique_ptr<Expression> &where_expr() { return where_expr_; }
   // HAVING 表达式（AND 链接后的整体表达式）；为空表示无 HAVING
@@ -82,4 +100,5 @@ private:
   SelectStmt                    *inner_view_stmt_ = nullptr;  // 内层视图查询(包含聚合时使用)
   vector<SetOperation>           set_operations_;
   unordered_map<string, unique_ptr<SelectStmt>> derived_table_stmts_;  // 派生表（视图作为表）
+  vector<FromItem> from_items_;                                        ///< 记录 FROM 子句中各项的顺序与类型
 };
