@@ -14,12 +14,63 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/log/log.h"
 #include "common/lang/ranges.h"
+#include "event/sql_debug.h"
 #include "sql/operator/group_by_physical_operator.h"
 #include "sql/expr/expression_tuple.h"
 #include "sql/expr/composite_tuple.h"
 
+#include <sstream>
+#include <utility>
+
 using namespace std;
 using namespace common;
+
+namespace {
+
+template <typename... Args>
+void exec_trace(const char *fmt, Args &&... args)
+{
+  LOG_INFO(fmt, std::forward<Args>(args)...);
+  sql_debug(fmt, std::forward<Args>(args)...);
+}
+
+const char *aggregate_type_to_string(AggregateExpr::Type type)
+{
+  switch (type) {
+    case AggregateExpr::Type::COUNT:
+      return "COUNT";
+    case AggregateExpr::Type::SUM:
+      return "SUM";
+    case AggregateExpr::Type::AVG:
+      return "AVG";
+    case AggregateExpr::Type::MAX:
+      return "MAX";
+    case AggregateExpr::Type::MIN:
+      return "MIN";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+std::string expression_debug_name(const Expression &expr)
+{
+  const char *alias = expr.alias();
+  if (alias != nullptr && alias[0] != '\0') {
+    return alias;
+  }
+  const char *name = expr.name();
+  if (name != nullptr && name[0] != '\0') {
+    return name;
+  }
+  return "<anonymous>";
+}
+
+std::string dump_value(const Value &value)
+{
+  return value.to_string();
+}
+
+}  // namespace
 
 GroupByPhysicalOperator::GroupByPhysicalOperator(vector<Expression *> &&expressions)
 {
@@ -43,6 +94,10 @@ void GroupByPhysicalOperator::create_aggregator_list(AggregatorList &aggregator_
         aggregate_expr->name(), static_cast<int>(aggregate_expr->aggregate_type()),
         aggregate_expr->child() ? aggregate_expr->child()->name() : "(null)");
     aggregator_list.emplace_back(aggregate_expr->create_aggregator());
+    Expression *child_expr = aggregate_expr->child() ? aggregate_expr->child().get() : nullptr;
+    exec_trace("[GroupBy][CreateAggregator] expr=%s type=%s child=%s", expression_debug_name(*aggregate_expr).c_str(),
+        aggregate_type_to_string(aggregate_expr->aggregate_type()),
+        child_expr ? expression_debug_name(*child_expr).c_str() : "(null)");
   });
   LOG_DEBUG("aggregator list created, size=%zu", aggregator_list.size());
 }
@@ -64,8 +119,9 @@ RC GroupByPhysicalOperator::aggregate(AggregatorList &aggregator_list, const Tup
       LOG_WARN("failed to get value from expression. rc=%s", strrc(rc));
       return rc;
     }
-    LOG_DEBUG("aggregate tuple cell[%d]: type=%d", i, value.attr_type());
-
+    auto *aggregate_expr = static_cast<AggregateExpr *>(aggregate_expressions_[i]);
+    exec_trace("[GroupBy][BeforeAcc] expr=%s type=%s value=%s", expression_debug_name(*aggregate_expr).c_str(),
+        aggregate_type_to_string(aggregate_expr->aggregate_type()), dump_value(value).c_str());
     rc = aggregator->accumulate(value);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to accumulate value. rc=%s", strrc(rc));
@@ -98,6 +154,11 @@ RC GroupByPhysicalOperator::evaluate(GroupValueType &group_value)
       return rc;
     }
     values.emplace_back(value);
+    ASSERT(values.size() <= aggregate_expressions_.size(), "aggregate result size overflow");
+    auto *aggregate_expr = static_cast<AggregateExpr *>(aggregate_expressions_[values.size() - 1]);
+    exec_trace("[GroupBy][FinalizeValue] expr=%s type=%s result=%s",
+        expression_debug_name(*aggregate_expr).c_str(), aggregate_type_to_string(aggregate_expr->aggregate_type()),
+        dump_value(value).c_str());
   }
 
   evaluated_tuple.set_cells(values);

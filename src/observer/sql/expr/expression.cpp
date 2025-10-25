@@ -59,6 +59,39 @@ namespace {
 namespace fs = std::filesystem;
 constexpr size_t VECTOR_MAX_DIM = 16383;
 
+template <typename... Args>
+void exec_trace(const char *fmt, Args &&... args)
+{
+  LOG_INFO(fmt, std::forward<Args>(args)...);
+  sql_debug(fmt, std::forward<Args>(args)...);
+}
+
+const char *arithmetic_type_to_string(ArithmeticExpr::Type type)
+{
+  switch (type) {
+    case ArithmeticExpr::Type::ADD:
+      return "ADD";
+    case ArithmeticExpr::Type::SUB:
+      return "SUB";
+    case ArithmeticExpr::Type::MUL:
+      return "MUL";
+    case ArithmeticExpr::Type::DIV:
+      return "DIV";
+    case ArithmeticExpr::Type::NEGATIVE:
+      return "NEG";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+std::string dump_value(const Value &value)
+{
+  if (value.attr_type() == AttrType::UNDEFINED) {
+    return "<UNDEFINED>";
+  }
+  return value.to_string();
+}
+
 template <typename JiebaType>
 auto invoke_cut(const JiebaType &jieba, const string &text, vector<string> &out, bool hmm, int)
     -> decltype(jieba.Cut(text, out, hmm), void())
@@ -1393,9 +1426,13 @@ RC ArithmeticExpr::calc_value(const Value &left_value, const Value &right_value,
 {
   RC rc = RC::SUCCESS;
 
+  exec_trace("[Arithmetic][Input] type=%s left=%s right=%s", arithmetic_type_to_string(arithmetic_type_),
+      dump_value(left_value).c_str(), dump_value(right_value).c_str());
+
   // 处理 NULL 值
   if (left_value.is_null() || (arithmetic_type_ != Type::NEGATIVE && right_value.is_null())) {
     value.set_null();
+    exec_trace("[Arithmetic][Result] type=%s result=NULL(operand is null)", arithmetic_type_to_string(arithmetic_type_));
     return RC::SUCCESS;
   }
 
@@ -1404,6 +1441,7 @@ RC ArithmeticExpr::calc_value(const Value &left_value, const Value &right_value,
     float divisor = right_value.get_float();
     if (divisor > -0.000001 && divisor < 0.000001) {
       value.set_null();
+      exec_trace("[Arithmetic][Result] type=%s result=NULL(divisor=0)", arithmetic_type_to_string(arithmetic_type_));
       return RC::SUCCESS;
     }
   }
@@ -1436,6 +1474,10 @@ RC ArithmeticExpr::calc_value(const Value &left_value, const Value &right_value,
       rc = RC::INTERNAL;
       LOG_WARN("unsupported arithmetic type. %d", arithmetic_type_);
     } break;
+  }
+
+  if (RC::SUCCESS == rc) {
+    exec_trace("[Arithmetic][Result] type=%s value=%s", arithmetic_type_to_string(arithmetic_type_), dump_value(value).c_str());
   }
   return rc;
 }

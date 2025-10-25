@@ -16,7 +16,21 @@ See the Mulan PSL v2 for more details. */
 #include "event/sql_debug.h"
 #include "storage/table/table.h"
 
+#include <sstream>
+#include <utility>
+
 using namespace std;
+
+namespace {
+
+template <typename... Args>
+void exec_trace(const char *fmt, Args &&... args)
+{
+  LOG_INFO(fmt, std::forward<Args>(args)...);
+  sql_debug(fmt, std::forward<Args>(args)...);
+}
+
+}  // namespace
 
 RC TableScanPhysicalOperator::open(Trx *trx)
 {
@@ -34,9 +48,11 @@ RC TableScanPhysicalOperator::next()
 
   bool filter_result = false;
   while (OB_SUCC(rc = record_scanner_->next(current_record_))) {
-    LOG_TRACE("got a record. rid=%s", current_record_.rid().to_string().c_str());
-    
+    const string rid_string = current_record_.rid().to_string();
     tuple_.set_record(&current_record_);
+    const string tuple_string = tuple_.to_string();
+    exec_trace("[TableScan][Row] table=%s rid=%s data=%s", table_->name(), rid_string.c_str(), tuple_string.c_str());
+
     rc = filter(tuple_, filter_result);
     if (rc != RC::SUCCESS) {
       LOG_TRACE("record filtered failed=%s", strrc(rc));
@@ -44,10 +60,10 @@ RC TableScanPhysicalOperator::next()
     }
 
     if (filter_result) {
-      sql_debug("get a tuple: %s", tuple_.to_string().c_str());
+      exec_trace("[TableScan][Pass] table=%s rid=%s data=%s", table_->name(), rid_string.c_str(), tuple_string.c_str());
       break;
     } else {
-      sql_debug("a tuple is filtered: %s", tuple_.to_string().c_str());
+      exec_trace("[TableScan][Skip] table=%s rid=%s data=%s", table_->name(), rid_string.c_str(), tuple_string.c_str());
     }
   }
   return rc;

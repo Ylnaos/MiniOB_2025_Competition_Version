@@ -11,8 +11,84 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/table_scan_vec_physical_operator.h"
 #include "event/sql_debug.h"
 #include "storage/table/table.h"
+#include "storage/table/table_meta.h"
+#include "storage/field/field_meta.h"
+#include "common/type/attr_type.h"
+#include "common/value.h"
+
+#include <algorithm>
+#include <sstream>
+#include <utility>
 
 using namespace std;
+
+namespace {
+
+template <typename... Args>
+void exec_trace(const char *fmt, Args &&... args)
+{
+  LOG_INFO(fmt, std::forward<Args>(args)...);
+  sql_debug(fmt, std::forward<Args>(args)...);
+}
+
+const FieldMeta *find_field_by_id(const TableMeta &meta, int field_id)
+{
+  const int field_count = meta.field_num();
+  for (int i = 0; i < field_count; ++i) {
+    const FieldMeta *field = meta.field(i);
+    if (field != nullptr && field->field_id() == field_id) {
+      return field;
+    }
+  }
+  return nullptr;
+}
+
+std::string dump_column_samples(const Column &column, int sample_limit = 5)
+{
+  std::ostringstream oss;
+  const int row_count = column.count();
+  oss << "rows=" << row_count;
+  if (row_count == 0) {
+    return oss.str();
+  }
+
+  const int limit = std::min(row_count, sample_limit);
+  oss << ", samples=[";
+  for (int i = 0; i < limit; ++i) {
+    Value value = column.get_value(i);
+    oss << value.to_string();
+    if (i + 1 < limit) {
+      oss << ", ";
+    }
+  }
+  if (row_count > limit) {
+    oss << ", ...";
+  }
+  oss << "]";
+  return oss.str();
+}
+
+std::string dump_chunk(const Table &table, Chunk &chunk, int sample_limit = 5)
+{
+  std::ostringstream oss;
+  const TableMeta    &meta = table.table_meta();
+  oss << "rows=" << chunk.rows() << ", column_num=" << chunk.column_num() << ", columns=[";
+  for (int col = 0; col < chunk.column_num(); ++col) {
+    if (col > 0) {
+      oss << "; ";
+    }
+    const int        field_id   = chunk.column_ids(col);
+    const FieldMeta *field_meta = find_field_by_id(meta, field_id);
+    const char      *field_name = field_meta != nullptr ? field_meta->name() : "<unknown>";
+    const Column    &column     = chunk.column(col);
+    oss << field_name << "(" << attr_type_to_string(column.attr_type()) << ")="
+        << dump_column_samples(column, sample_limit);
+  }
+  oss << "]";
+  return oss.str();
+}
+
+}  // namespace
 
 RC TableScanVecPhysicalOperator::open(Trx *trx)
 {
@@ -41,7 +117,9 @@ RC TableScanVecPhysicalOperator::next(Chunk &chunk)
     select_.assign(all_columns_.rows(), 1);
     if (predicates_.empty()) {
       chunk.reference(all_columns_);
+      exec_trace("[TableScanVec][Chunk] table=%s %s", table_->name(), dump_chunk(*table_, chunk).c_str());
     } else {
+      exec_trace("[TableScanVec][RawChunk] table=%s %s", table_->name(), dump_chunk(*table_, all_columns_).c_str());
       rc = filter(all_columns_);
       if (rc != RC::SUCCESS) {
         LOG_TRACE("filtered failed=%s", strrc(rc));
@@ -58,6 +136,7 @@ RC TableScanVecPhysicalOperator::next(Chunk &chunk)
         }
       }
       chunk.reference(filterd_columns_);
+      exec_trace("[TableScanVec][FilteredChunk] table=%s %s", table_->name(), dump_chunk(*table_, chunk).c_str());
     }
   }
   return rc;
