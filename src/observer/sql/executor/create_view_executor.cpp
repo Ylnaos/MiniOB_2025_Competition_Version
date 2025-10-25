@@ -22,9 +22,21 @@ RC CreateViewExecutor::execute(SQLStageEvent *sql_event)
 
   auto *stmt = static_cast<CreateViewStmt *>(sql_event->stmt());
   if (nullptr == stmt) {
+    LOG_DEBUG("DEBUG_LOG: CreateViewExecutor失败 - stmt为空");
     return RC::INVALID_ARGUMENT;
   }
 
-  return db->create_view(stmt->view_name().c_str(), stmt->view_select_sql().c_str(), stmt->view_fields());
+  LOG_DEBUG("DEBUG_LOG: CreateViewExecutor开始执行视图创建 - 视图名=%s, 查询SQL=%s, 字段数=%zu",
+            stmt->view_name().c_str(), stmt->view_select_sql().c_str(), stmt->view_fields().size());
+
+  for (size_t i = 0; i < stmt->view_fields().size(); i++) {
+    LOG_DEBUG("DEBUG_LOG: CreateViewExecutor视图字段[%zu] - %s", i, stmt->view_fields()[i].c_str());
+  }
+
+  RC rc = db->create_view(stmt->view_name().c_str(), stmt->view_select_sql().c_str(), stmt->view_fields());
+
+  LOG_DEBUG("DEBUG_LOG: CreateViewExecutor视图创建完成 - RC=%s, 视图名=%s", strrc(rc), stmt->view_name().c_str());
+
+  return rc;
 }
 

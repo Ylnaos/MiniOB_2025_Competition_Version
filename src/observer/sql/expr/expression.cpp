@@ -1789,10 +1789,41 @@ UnboundAggregateExpr::UnboundAggregateExpr(const char *aggregate_name, unique_pt
 {}
 
 ////////////////////////////////////////////////////////////////////////////////
-AggregateExpr::AggregateExpr(Type type, Expression *child) : aggregate_type_(type), child_(child) {}
+AggregateExpr::AggregateExpr(Type type, Expression *child) : aggregate_type_(type), child_(child)
+{
+  const char* type_name = "";
+  switch (type) {
+    case Type::SUM: type_name = "SUM"; break;
+    case Type::COUNT: type_name = "COUNT"; break;
+    case Type::AVG: type_name = "AVG"; break;
+    case Type::MAX: type_name = "MAX"; break;
+    case Type::MIN: type_name = "MIN"; break;
+    default: type_name = "UNKNOWN"; break;
+  }
+
+  LOG_DEBUG("DEBUG_LOG: AggregateExpr创建 - 类型=%s, 子表达式=%s, 地址=%p",
+            type_name,
+            child ? child->name() : "(null)",
+            this);
+}
 
 AggregateExpr::AggregateExpr(Type type, unique_ptr<Expression> child) : aggregate_type_(type), child_(std::move(child))
-{}
+{
+  const char* type_name = "";
+  switch (type) {
+    case Type::SUM: type_name = "SUM"; break;
+    case Type::COUNT: type_name = "COUNT"; break;
+    case Type::AVG: type_name = "AVG"; break;
+    case Type::MAX: type_name = "MAX"; break;
+    case Type::MIN: type_name = "MIN"; break;
+    default: type_name = "UNKNOWN"; break;
+  }
+
+  LOG_DEBUG("DEBUG_LOG: AggregateExpr创建(unique_ptr版本) - 类型=%s, 子表达式=%s, 地址=%p",
+            type_name,
+            child_ ? child_->name() : "(null)",
+            this);
+}
 
 RC AggregateExpr::get_column(Chunk &chunk, Column &column)
 {
@@ -1820,24 +1851,31 @@ bool AggregateExpr::equal(const Expression &other) const
 unique_ptr<Aggregator> AggregateExpr::create_aggregator() const
 {
   unique_ptr<Aggregator> aggregator;
+  const char* type_name = "";
+
   switch (aggregate_type_) {
     case Type::SUM: {
+      type_name = "SUM";
       aggregator = make_unique<SumAggregator>();
       break;
     }
     case Type::COUNT: {
+      type_name = "COUNT";
       aggregator = make_unique<CountAggregator>();
       break;
     }
     case Type::AVG: {
+      type_name = "AVG";
       aggregator = make_unique<AvgAggregator>();
       break;
     }
     case Type::MAX: {
+      type_name = "MAX";
       aggregator = make_unique<MaxAggregator>();
       break;
     }
     case Type::MIN: {
+      type_name = "MIN";
       aggregator = make_unique<MinAggregator>();
       break;
     }
@@ -1846,12 +1884,19 @@ unique_ptr<Aggregator> AggregateExpr::create_aggregator() const
       break;
     }
   }
+
+  LOG_DEBUG("DEBUG_LOG: AggregateExpr创建聚合器 - 表达式=%p, 类型=%s, 子表达式=%s, 聚合器地址=%p",
+            this, type_name, child_ ? child_->name() : "(null)", aggregator.get());
+
   return aggregator;
 }
 
 RC AggregateExpr::get_value(const Tuple &tuple, Value &value) const
 {
-  return tuple.find_cell(TupleCellSpec(name()), value);
+  RC rc = tuple.find_cell(TupleCellSpec(name()), value);
+  LOG_DEBUG("DEBUG_LOG: AggregateExpr获取值 - 表达式=%p, 名称=%s, 值类型=%d, 值=%s, RC=%s",
+            this, name(), value.attr_type(), value.to_string().c_str(), strrc(rc));
+  return rc;
 }
 
 RC AggregateExpr::type_from_string(const char *type_str, AggregateExpr::Type &type)

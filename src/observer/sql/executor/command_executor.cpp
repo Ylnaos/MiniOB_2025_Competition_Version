@@ -35,6 +35,10 @@ RC CommandExecutor::execute(SQLStageEvent *sql_event)
 {
   Stmt *stmt = sql_event->stmt();
 
+  // 强制输出CommandExecutor执行信息
+  printf("=== FORCE OUTPUT: CommandExecutor::execute stmt_type=%d ===\n", static_cast<int>(stmt->type()));
+  fflush(stdout);
+
   RC rc = RC::SUCCESS;
   switch (stmt->type()) {
     case StmtType::CREATE_INDEX: {

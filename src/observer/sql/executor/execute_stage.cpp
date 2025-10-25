@@ -25,12 +25,25 @@ See the Mulan PSL v2 for more details. */
 
 using namespace common;
 
+// 全局计数器，追踪查询执行
+static int execute_stage_query_count = 0;
+
 RC ExecuteStage::handle_request(SQLStageEvent *sql_event)
 {
+  execute_stage_query_count++;
+
+  // 强制输出到控制台，确保能看到调试信息
+  printf("=== FORCE OUTPUT: ExecuteStage::handle_request开始 [%d] ===\n", execute_stage_query_count);
+  fflush(stdout);
+
+  LOG_INFO("DATA_FLOW: ExecuteStage::handle_request开始 - 执行次数=%d", execute_stage_query_count);
+
   RC rc = RC::SUCCESS;
 
   const unique_ptr<PhysicalOperator> &physical_operator = sql_event->physical_operator();
   if (physical_operator != nullptr) {
+    LOG_INFO("DATA_FLOW: ExecuteStage使用物理操作符执行 - 操作符=%p, 类型=%d",
+              physical_operator.get(), static_cast<int>(physical_operator->type()));
     return handle_request_with_physical_operator(sql_event);
   }
 
@@ -38,10 +51,14 @@ RC ExecuteStage::handle_request(SQLStageEvent *sql_event)
 
   Stmt *stmt = sql_event->stmt();
   if (stmt != nullptr) {
+    LOG_INFO("DATA_FLOW: ExecuteStage使用命令执行器 - stmt=%p, 类型=%d",
+              stmt, static_cast<int>(stmt->type()));
     CommandExecutor command_executor;
     rc = command_executor.execute(sql_event);
     session_event->sql_result()->set_return_code(rc);
+    LOG_INFO("DATA_FLOW: ExecuteStage命令执行完成 - RC=%s", strrc(rc));
   } else {
+    LOG_INFO("DATA_FLOW: ExecuteStage执行失败 - stmt为空");
     return RC::INTERNAL;
   }
   return rc;
@@ -54,7 +71,12 @@ RC ExecuteStage::handle_request_with_physical_operator(SQLStageEvent *sql_event)
   unique_ptr<PhysicalOperator> &physical_operator = sql_event->physical_operator();
   ASSERT(physical_operator != nullptr, "physical operator should not be null");
 
+  LOG_INFO("DATA_FLOW: ExecuteStage设置物理操作符到结果集 - 操作符=%p, 类型=%d",
+            physical_operator.get(), static_cast<int>(physical_operator->type()));
+
   SqlResult *sql_result = sql_event->session_event()->sql_result();
   sql_result->set_operator(std::move(physical_operator));
+
+  LOG_INFO("DATA_FLOW: ExecuteStage物理操作符设置完成");
   return rc;
 }
