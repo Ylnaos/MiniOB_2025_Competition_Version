@@ -49,6 +49,7 @@ public:
   RC close();
   RC next_tuple(Tuple *&tuple);
   RC next_chunk(Chunk &chunk);
+  void reset();
 
 private:
   Session                     *session_ = nullptr;  ///< 当前所属会话

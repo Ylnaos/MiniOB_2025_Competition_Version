@@ -82,3 +82,11 @@ void SqlResult::set_operator(unique_ptr<PhysicalOperator> oper)
   operator_ = std::move(oper);
   operator_->tuple_schema(tuple_schema_);
 }
+
+void SqlResult::reset()
+{
+  operator_.reset();
+  tuple_schema_ = TupleSchema();
+  return_code_  = RC::SUCCESS;
+  state_string_.clear();
+}
