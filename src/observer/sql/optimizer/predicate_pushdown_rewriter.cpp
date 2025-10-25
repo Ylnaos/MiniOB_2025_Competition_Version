@@ -94,11 +94,11 @@ RC PredicatePushdownRewriter::get_exprs_can_pushdown(
   RC rc = RC::SUCCESS;
   if (expr->type() == ExprType::CONJUNCTION) {
     ConjunctionExpr *conjunction_expr = static_cast<ConjunctionExpr *>(expr.get());
-    // 或 操作的比较，太复杂，现在不考虑
+    // OR 操作不做谓词下推，保留在上层 Predicate 算子中处理
+    // 这样可以避免复杂的下推逻辑，同时保证查询能够正常执行
     if (conjunction_expr->conjunction_type() == ConjunctionExpr::Type::OR) {
-      LOG_WARN("unsupported or operation");
-      rc = RC::UNIMPLEMENTED;
-      return rc;
+      LOG_TRACE("OR operation cannot be pushed down, keeping it in upper predicate operator");
+      return RC::SUCCESS;  // 不下推，但返回成功让查询继续执行
     }
 
     vector<unique_ptr<Expression>> &child_exprs = conjunction_expr->children();
