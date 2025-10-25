@@ -358,11 +358,14 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             LOG_WARN("Failed to create inner SelectStmt for aggregate view '%s'", view->name());
             return rc;
           }
-          SelectStmt *inner_select = static_cast<SelectStmt *>(inner_stmt);
+          unique_ptr<SelectStmt> inner_select_guard(static_cast<SelectStmt *>(inner_stmt));
+          SelectStmt *inner_select = inner_select_guard.get();
 
           // 2. 创建外层SelectStmt,将内层查询设置为子查询数据源
-          SelectStmt *outer_select = new SelectStmt();
+          unique_ptr<SelectStmt> outer_select_guard(new SelectStmt());
+          SelectStmt *outer_select = outer_select_guard.get();
           outer_select->set_inner_view_stmt(inner_select);
+          inner_select_guard.release(); // 所有权交给 outer_select
 
           // 3. 处理外层的表达式：将UNBOUND_AGGREGATION转换为AggregateExpr
           // 这是必需的，因为执行器需要明确的AggregateExpr类型
@@ -396,8 +399,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
               AggregateExpr::Type agg_type;
               RC rc2 = AggregateExpr::type_from_string(uagg->aggregate_name(), agg_type);
               if (OB_FAIL(rc2)) {
-                delete inner_select;
-                delete outer_select;
                 return rc2;
               }
               // 将 count(*) 的子表达式从 STAR 改写为常量 1
@@ -438,8 +439,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 if (OB_FAIL(bind_rc) || tmp.size() != 1) {
                   LOG_WARN("Failed to bind STAR expanded column for aggregate view. rc=%s, size=%zu",
                       strrc(bind_rc), tmp.size());
-                  delete inner_select;
-                  delete outer_select;
                   return bind_rc == RC::SUCCESS ? RC::INVALID_ARGUMENT : bind_rc;
                 }
                 final_exprs.emplace_back(std::move(tmp[0]));
@@ -451,8 +450,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                 if (OB_FAIL(bind_rc) || tmp.size() != 1) {
                   LOG_WARN("Failed to bind aggregate child expression for view. rc=%s, size=%zu",
                       strrc(bind_rc), tmp.size());
-                  delete inner_select;
-                  delete outer_select;
                   return bind_rc == RC::SUCCESS ? RC::INVALID_ARGUMENT : bind_rc;
                 }
                 // 用绑定后的表达式替换聚合函数的子表达式
@@ -465,7 +462,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           }
           outer_select->query_expressions().swap(final_exprs);
 
-          stmt = outer_select;
+          stmt = outer_select_guard.release();
           return RC::SUCCESS;
         }
 
