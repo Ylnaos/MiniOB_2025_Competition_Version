@@ -205,18 +205,50 @@ public:
   FieldExpr() = default;
   FieldExpr(const Table *table, const FieldMeta *field, const string &relation_name = string())
       : field_(table, field), relation_name_(relation_name)
-  {}
-  FieldExpr(const Field &field, const string &relation_name = string()) : field_(field), relation_name_(relation_name) {}
+  {
+    if (field != nullptr) {
+      cached_type_   = field->type();
+      cached_length_ = field->len();
+    }
+  }
+  FieldExpr(const Field &field, const string &relation_name = string()) : field_(field), relation_name_(relation_name)
+  {
+    const FieldMeta *meta = field_.meta();
+    if (meta != nullptr) {
+      cached_type_   = meta->type();
+      cached_length_ = meta->len();
+    }
+  }
 
   virtual ~FieldExpr() = default;
 
   bool equal(const Expression &other) const override;
 
-  unique_ptr<Expression> copy() const override { return make_unique<FieldExpr>(field_, relation_name_); }
+  unique_ptr<Expression> copy() const override
+  {
+    auto copied = make_unique<FieldExpr>(field_, relation_name_);
+    copied->set_pos(pos());
+    copied->set_cached_type_info(cached_type_, cached_length_);
+    return copied;
+  }
 
   ExprType type() const override { return ExprType::FIELD; }
-  AttrType value_type() const override { return field_.attr_type(); }
-  int      value_length() const override { return field_.meta()->len(); }
+  AttrType value_type() const override
+  {
+    if (cached_type_ != AttrType::UNDEFINED) {
+      return cached_type_;
+    }
+    const FieldMeta *meta = field_.meta();
+    return meta != nullptr ? meta->type() : AttrType::UNDEFINED;
+  }
+  int value_length() const override
+  {
+    if (cached_length_ >= 0) {
+      return cached_length_;
+    }
+    const FieldMeta *meta = field_.meta();
+    return meta != nullptr ? meta->len() : -1;
+  }
 
   Field &field() { return field_; }
 
@@ -224,6 +256,26 @@ public:
 
   void set_relation_name(const string &relation_name) { relation_name_ = relation_name; }
   const string &relation_name() const { return relation_name_; }
+
+  void set_cached_type_info(AttrType type, int length = -1)
+  {
+    cached_type_   = type;
+    cached_length_ = length;
+  }
+
+  void set_table(const Table *table)
+  {
+    field_.set_table(table);
+  }
+
+  void set_field(const FieldMeta *field)
+  {
+    field_.set_field(field);
+    if (field != nullptr) {
+      cached_type_   = field->type();
+      cached_length_ = field->len();
+    }
+  }
 
   const char *table_name() const { return field_.table_name(); }
   const char *field_name() const { return field_.field_name(); }
@@ -235,6 +287,8 @@ public:
 private:
   Field field_;
   string relation_name_;
+  AttrType cached_type_   = AttrType::UNDEFINED;
+  int      cached_length_ = -1;
 };
 
 /**

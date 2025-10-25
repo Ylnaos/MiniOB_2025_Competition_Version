@@ -469,6 +469,7 @@ RC ExpressionBinder::bind_star_expression(
       field_expr->set_pos(static_cast<int>(idx));
       field_expr->set_name(alias + "." + candidate_name);
       field_expr->set_relation_name(alias);
+      field_expr->set_cached_type_info(output_expr->value_type(), output_expr->value_length());
       LOG_DEBUG("Wildcard bind field from derived table: %s.%s at position %zu",
                 alias.c_str(), candidate_name.c_str(), idx);
       bound_expressions.emplace_back(field_expr);
@@ -528,6 +529,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
         if (expr->alias() != nullptr) {
           field_expr->set_alias(expr->alias());
         }
+        field_expr->set_cached_type_info(inner_expr->value_type(), inner_expr->value_length());
         LOG_DEBUG("Bind field '%s' from inner view at position %zu", candidate_name.c_str(), idx);
         bound_expressions.emplace_back(field_expr);
         return RC::SUCCESS;
@@ -591,6 +593,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
           if (expr->alias() != nullptr) {
             field_expr->set_alias(expr->alias());
           }
+          field_expr->set_cached_type_info(output_expr->value_type(), output_expr->value_length());
           LOG_DEBUG("Bind unqualified field '%s' from single derived table '%s' at position %zu",
                     target_name.c_str(), derived_alias.c_str(), idx);
           bound_expressions.emplace_back(field_expr);
@@ -643,6 +646,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
             field_expr->set_pos(static_cast<int>(idx));
             field_expr->set_name(alias_upper + "." + candidate_name);
             field_expr->set_relation_name(alias_upper);
+            field_expr->set_cached_type_info(output_expr->value_type(), output_expr->value_length());
             LOG_DEBUG("Bind field from derived table: %s.%s at position %zu",
                       alias_upper.c_str(), candidate_name.c_str(), idx);
             bound_expressions.emplace_back(field_expr);
@@ -680,6 +684,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
               if (expr->alias() != nullptr) {
                 field_expr->set_alias(expr->alias());
               }
+              field_expr->set_cached_type_info(output_expr->value_type(), output_expr->value_length());
               LOG_DEBUG("Bind field '%s' from derived table '%s' at position %zu",
                         target_name.c_str(), alias_upper.c_str(), idx);
               bound_expressions.emplace_back(field_expr);

@@ -398,6 +398,26 @@ static TokenCharType classify_token_char(const string &token, size_t offset, int
     if (std::isalnum(ch)) {
       return TokenCharType::ASCII_ALNUM;
     }
+    // 处理形如 2.2 之类的小数点：当小数点两侧都是 ASCII 数字时，将其视为同一记号的一部分
+    if (ch == '.') {
+      bool prev_digit = false;
+      if (offset > 0) {
+        unsigned char prev = static_cast<unsigned char>(token[offset - 1]);
+        if ((prev & 0x80u) == 0) {
+          prev_digit = std::isdigit(prev);
+        }
+      }
+      bool next_digit = false;
+      if (offset + 1 < token.size()) {
+        unsigned char next = static_cast<unsigned char>(token[offset + 1]);
+        if ((next & 0x80u) == 0) {
+          next_digit = std::isdigit(next);
+        }
+      }
+      if (prev_digit && next_digit) {
+        return TokenCharType::ASCII_ALNUM;
+      }
+    }
     return TokenCharType::ASCII_OTHER;
   }
   return TokenCharType::NON_ASCII;
@@ -746,7 +766,12 @@ RC FieldExpr::get_column(Chunk &chunk, Column &column)
   if (pos_ != -1) {
     column.reference(chunk.column(pos_));
   } else {
-    column.reference(chunk.column(field().meta()->field_id()));
+    const FieldMeta *meta = field().meta();
+    if (meta == nullptr) {
+      LOG_WARN("FieldExpr::get_column missing meta info and no position");
+      return RC::INTERNAL;
+    }
+    column.reference(chunk.column(meta->field_id()));
   }
   return RC::SUCCESS;
 }
