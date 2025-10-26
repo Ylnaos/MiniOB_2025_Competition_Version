@@ -1829,7 +1829,7 @@
                 "trace_as_input": true,
                 "trace_as_metadata": true,
                 "type": "str",
-                "value": ""
+                "value": "${EMBEDDING_BASE_URL}"
               },
               "code": {
                 "advanced": true,
@@ -1871,7 +1871,7 @@
                 "tool_mode": false,
                 "trace_as_metadata": true,
                 "type": "str",
-                "value": ""
+                "value": "${EMBEDDING_NAME}"
               }
             },
             "tool_mode": false
@@ -2014,7 +2014,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "str",
-                "value": ""
+                "value": "${LLM_API_KEY}"
               },
               "base_url": {
                 "_input_type": "MessageTextInput",
@@ -2114,7 +2114,7 @@
                 "tool_mode": false,
                 "trace_as_metadata": true,
                 "type": "int",
-                "value": 1500
+                "value": 512
               },
               "model_name": {
                 "_input_type": "MessageTextInput",
@@ -2226,7 +2226,7 @@
                 "title_case": false,
                 "tool_mode": false,
                 "type": "slider",
-                "value": 0.7
+                "value": 0
               },
               "tool_model_enabled": {
                 "_input_type": "BoolInput",
@@ -2450,7 +2450,7 @@
                 "trace_as_input": true,
                 "trace_as_metadata": true,
                 "type": "str",
-                "value": ""
+                "value": "${OB_DOC_PATH}"
               },
               "recursive": {
                 "_input_type": "BoolInput",
@@ -2635,7 +2635,7 @@
                 "tool_mode": false,
                 "trace_as_metadata": true,
                 "type": "int",
-                "value": 200
+                "value": 64
               },
               "chunk_size": {
                 "_input_type": "IntInput",
@@ -2653,7 +2653,7 @@
                 "tool_mode": false,
                 "trace_as_metadata": true,
                 "type": "int",
-                "value": 1000
+                "value": 500
               },
               "code": {
                 "advanced": true,

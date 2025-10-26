@@ -821,7 +821,7 @@
                 "title_case": false,
                 "trace_as_metadata": true,
                 "type": "int",
-                "value": 200
+                "value": 64
               },
               "chunk_size": {
                 "advanced": false,
@@ -836,7 +836,7 @@
                 "title_case": false,
                 "trace_as_metadata": true,
                 "type": "int",
-                "value": 1000
+                "value": 500
               },
               "code": {
                 "advanced": true,

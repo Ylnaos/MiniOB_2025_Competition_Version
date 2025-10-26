@@ -7,7 +7,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "Directory",
-            "id": "Directory-p0Mj2",
+            "id": "Directory-3w0jU",
             "name": "dataframe",
             "output_types": [
               "DataFrame"
@@ -15,7 +15,7 @@
           },
           "targetHandle": {
             "fieldName": "data_inputs",
-            "id": "SplitText-UOI9h",
+            "id": "SplitText-lf5eA",
             "inputTypes": [
               "Data",
               "DataFrame",
@@ -24,12 +24,12 @@
             "type": "other"
           }
         },
-        "id": "reactflow__edge-Directory-p0Mj2{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-p0Mj2œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-SplitText-UOI9h{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-UOI9hœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}",
+        "id": "xy-edge__Directory-3w0jU{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-3w0jUœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-SplitText-lf5eA{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-lf5eAœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "Directory-p0Mj2",
-        "sourceHandle": "{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-p0Mj2œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "SplitText-UOI9h",
-        "targetHandle": "{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-UOI9hœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}"
+        "source": "Directory-3w0jU",
+        "sourceHandle": "{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-3w0jUœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "SplitText-lf5eA",
+        "targetHandle": "{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-lf5eAœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -37,7 +37,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "SplitText",
-            "id": "SplitText-UOI9h",
+            "id": "SplitText-lf5eA",
             "name": "dataframe",
             "output_types": [
               "DataFrame"
@@ -45,7 +45,7 @@
           },
           "targetHandle": {
             "fieldName": "ingest_data",
-            "id": "MiniOB-W40MP",
+            "id": "MiniOB-jdpJG",
             "inputTypes": [
               "Data",
               "DataFrame"
@@ -53,12 +53,12 @@
             "type": "other"
           }
         },
-        "id": "reactflow__edge-SplitText-UOI9h{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-UOI9hœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-MiniOB-W40MP{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-W40MPœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}",
+        "id": "xy-edge__SplitText-lf5eA{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-lf5eAœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-MiniOB-jdpJG{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-jdpJGœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "SplitText-UOI9h",
-        "sourceHandle": "{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-UOI9hœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "MiniOB-W40MP",
-        "targetHandle": "{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-W40MPœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}"
+        "source": "SplitText-lf5eA",
+        "sourceHandle": "{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-lf5eAœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "MiniOB-jdpJG",
+        "targetHandle": "{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-jdpJGœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -66,7 +66,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "OllamaEmbeddings",
-            "id": "OllamaEmbeddings-qGQGG",
+            "id": "OllamaEmbeddings-cmvMO",
             "name": "embeddings",
             "output_types": [
               "Embeddings"
@@ -74,19 +74,19 @@
           },
           "targetHandle": {
             "fieldName": "embedding_model",
-            "id": "MiniOB-W40MP",
+            "id": "MiniOB-jdpJG",
             "inputTypes": [
               "Embeddings"
             ],
             "type": "other"
           }
         },
-        "id": "reactflow__edge-OllamaEmbeddings-qGQGG{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-qGQGGœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}-MiniOB-W40MP{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-W40MPœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}",
+        "id": "xy-edge__OllamaEmbeddings-cmvMO{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-cmvMOœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}-MiniOB-jdpJG{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-jdpJGœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "OllamaEmbeddings-qGQGG",
-        "sourceHandle": "{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-qGQGGœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}",
-        "target": "MiniOB-W40MP",
-        "targetHandle": "{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-W40MPœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}"
+        "source": "OllamaEmbeddings-cmvMO",
+        "sourceHandle": "{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-cmvMOœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}",
+        "target": "MiniOB-jdpJG",
+        "targetHandle": "{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-jdpJGœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -94,7 +94,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "ChatQwenModel",
-            "id": "ChatQwenModel-MRkvk",
+            "id": "ChatQwenModel-VOgaA",
             "name": "text_output",
             "output_types": [
               "Message"
@@ -102,19 +102,19 @@
           },
           "targetHandle": {
             "fieldName": "input_value",
-            "id": "TestOutput-Cb00i",
+            "id": "TestOutput-e7EBS",
             "inputTypes": [
               "Message"
             ],
             "type": "str"
           }
         },
-        "id": "reactflow__edge-ChatQwenModel-MRkvk{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-MRkvkœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-TestOutput-Cb00i{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-Cb00iœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__ChatQwenModel-VOgaA{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-VOgaAœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-TestOutput-e7EBS{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-e7EBSœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "ChatQwenModel-MRkvk",
-        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-MRkvkœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "TestOutput-Cb00i",
-        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-Cb00iœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "ChatQwenModel-VOgaA",
+        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-VOgaAœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "TestOutput-e7EBS",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-e7EBSœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       },
       {
         "animated": false,
@@ -122,7 +122,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "Prompt",
-            "id": "Prompt-pp1xM",
+            "id": "Prompt-pn9UD",
             "name": "prompt",
             "output_types": [
               "Message"
@@ -130,19 +130,19 @@
           },
           "targetHandle": {
             "fieldName": "input_value",
-            "id": "ChatQwenModel-MRkvk",
+            "id": "ChatQwenModel-VOgaA",
             "inputTypes": [
               "Message"
             ],
             "type": "str"
           }
         },
-        "id": "reactflow__edge-Prompt-pp1xM{œdataTypeœ:œPromptœ,œidœ:œPrompt-pp1xMœ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}-ChatQwenModel-MRkvk{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-MRkvkœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__Prompt-pn9UD{œdataTypeœ:œPromptœ,œidœ:œPrompt-pn9UDœ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}-ChatQwenModel-VOgaA{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-VOgaAœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "Prompt-pp1xM",
-        "sourceHandle": "{œdataTypeœ:œPromptœ,œidœ:œPrompt-pp1xMœ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "ChatQwenModel-MRkvk",
-        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-MRkvkœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "Prompt-pn9UD",
+        "sourceHandle": "{œdataTypeœ:œPromptœ,œidœ:œPrompt-pn9UDœ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "ChatQwenModel-VOgaA",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-VOgaAœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       },
       {
         "animated": false,
@@ -150,7 +150,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "ChatInput",
-            "id": "ChatInput-c6TvP",
+            "id": "ChatInput-tBfSE",
             "name": "message",
             "output_types": [
               "Message"
@@ -158,19 +158,19 @@
           },
           "targetHandle": {
             "fieldName": "question",
-            "id": "Prompt-pp1xM",
+            "id": "Prompt-pn9UD",
             "inputTypes": [
               "Message"
             ],
             "type": "str"
           }
         },
-        "id": "reactflow__edge-ChatInput-c6TvP{œdataTypeœ:œChatInputœ,œidœ:œChatInput-c6TvPœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-Prompt-pp1xM{œfieldNameœ:œquestionœ,œidœ:œPrompt-pp1xMœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__ChatInput-tBfSE{œdataTypeœ:œChatInputœ,œidœ:œChatInput-tBfSEœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-Prompt-pn9UD{œfieldNameœ:œquestionœ,œidœ:œPrompt-pn9UDœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "ChatInput-c6TvP",
-        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-c6TvPœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "Prompt-pp1xM",
-        "targetHandle": "{œfieldNameœ:œquestionœ,œidœ:œPrompt-pp1xMœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "ChatInput-tBfSE",
+        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-tBfSEœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "Prompt-pn9UD",
+        "targetHandle": "{œfieldNameœ:œquestionœ,œidœ:œPrompt-pn9UDœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       },
       {
         "animated": false,
@@ -178,7 +178,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "parser",
-            "id": "parser-WChO0",
+            "id": "parser-Yici2",
             "name": "parsed_text",
             "output_types": [
               "Message"
@@ -186,19 +186,77 @@
           },
           "targetHandle": {
             "fieldName": "context",
-            "id": "Prompt-pp1xM",
+            "id": "Prompt-pn9UD",
             "inputTypes": [
               "Message"
             ],
             "type": "str"
           }
         },
-        "id": "reactflow__edge-parser-WChO0{œdataTypeœ:œparserœ,œidœ:œparser-WChO0œ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}-Prompt-pp1xM{œfieldNameœ:œcontextœ,œidœ:œPrompt-pp1xMœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__parser-Yici2{œdataTypeœ:œparserœ,œidœ:œparser-Yici2œ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}-Prompt-pn9UD{œfieldNameœ:œcontextœ,œidœ:œPrompt-pn9UDœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "parser-WChO0",
-        "sourceHandle": "{œdataTypeœ:œparserœ,œidœ:œparser-WChO0œ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "Prompt-pp1xM",
-        "targetHandle": "{œfieldNameœ:œcontextœ,œidœ:œPrompt-pp1xMœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "parser-Yici2",
+        "sourceHandle": "{œdataTypeœ:œparserœ,œidœ:œparser-Yici2œ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "Prompt-pn9UD",
+        "targetHandle": "{œfieldNameœ:œcontextœ,œidœ:œPrompt-pn9UDœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+      },
+      {
+        "animated": false,
+        "className": "",
+        "data": {
+          "sourceHandle": {
+            "dataType": "SplitText",
+            "id": "SplitText-lf5eA",
+            "name": "dataframe",
+            "output_types": [
+              "DataFrame"
+            ]
+          },
+          "targetHandle": {
+            "fieldName": "input_value",
+            "id": "ChatOutput-aBUdb",
+            "inputTypes": [
+              "Data",
+              "DataFrame",
+              "Message"
+            ],
+            "type": "other"
+          }
+        },
+        "id": "xy-edge__SplitText-lf5eA{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-lf5eAœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-ChatOutput-aBUdb{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-aBUdbœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}",
+        "selected": false,
+        "source": "SplitText-lf5eA",
+        "sourceHandle": "{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-lf5eAœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "ChatOutput-aBUdb",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-aBUdbœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}"
+      },
+      {
+        "animated": false,
+        "className": "",
+        "data": {
+          "sourceHandle": {
+            "dataType": "ChatOutput",
+            "id": "ChatOutput-aBUdb",
+            "name": "message",
+            "output_types": [
+              "Message"
+            ]
+          },
+          "targetHandle": {
+            "fieldName": "base_url",
+            "id": "OllamaEmbeddings-cmvMO",
+            "inputTypes": [
+              "Message"
+            ],
+            "type": "str"
+          }
+        },
+        "id": "xy-edge__ChatOutput-aBUdb{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-aBUdbœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-OllamaEmbeddings-cmvMO{œfieldNameœ:œbase_urlœ,œidœ:œOllamaEmbeddings-cmvMOœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "selected": false,
+        "source": "ChatOutput-aBUdb",
+        "sourceHandle": "{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-aBUdbœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "OllamaEmbeddings-cmvMO",
+        "targetHandle": "{œfieldNameœ:œbase_urlœ,œidœ:œOllamaEmbeddings-cmvMOœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       },
       {
         "animated": false,
@@ -206,7 +264,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "ChatInput",
-            "id": "ChatInput-c6TvP",
+            "id": "ChatInput-tBfSE",
             "name": "message",
             "output_types": [
               "Message"
@@ -214,19 +272,19 @@
           },
           "targetHandle": {
             "fieldName": "search_query",
-            "id": "MiniOB-W40MP",
+            "id": "MiniOB-jdpJG",
             "inputTypes": [
               "Message"
             ],
             "type": "query"
           }
         },
-        "id": "reactflow__edge-ChatInput-c6TvP{œdataTypeœ:œChatInputœ,œidœ:œChatInput-c6TvPœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-MiniOB-W40MP{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-W40MPœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}",
+        "id": "xy-edge__ChatInput-tBfSE{œdataTypeœ:œChatInputœ,œidœ:œChatInput-tBfSEœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-MiniOB-jdpJG{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-jdpJGœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}",
         "selected": false,
-        "source": "ChatInput-c6TvP",
-        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-c6TvPœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "MiniOB-W40MP",
-        "targetHandle": "{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-W40MPœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}"
+        "source": "ChatInput-tBfSE",
+        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-tBfSEœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "MiniOB-jdpJG",
+        "targetHandle": "{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-jdpJGœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}"
       },
       {
         "animated": false,
@@ -234,7 +292,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "MiniOB",
-            "id": "MiniOB-W40MP",
+            "id": "MiniOB-jdpJG",
             "name": "dataframe",
             "output_types": [
               "DataFrame"
@@ -242,7 +300,7 @@
           },
           "targetHandle": {
             "fieldName": "input_data",
-            "id": "parser-WChO0",
+            "id": "parser-Yici2",
             "inputTypes": [
               "DataFrame",
               "Data"
@@ -250,12 +308,12 @@
             "type": "other"
           }
         },
-        "id": "reactflow__edge-MiniOB-W40MP{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-W40MPœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-parser-WChO0{œfieldNameœ:œinput_dataœ,œidœ:œparser-WChO0œ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}",
+        "id": "xy-edge__MiniOB-jdpJG{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-jdpJGœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-parser-Yici2{œfieldNameœ:œinput_dataœ,œidœ:œparser-Yici2œ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "MiniOB-W40MP",
-        "sourceHandle": "{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-W40MPœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "parser-WChO0",
-        "targetHandle": "{œfieldNameœ:œinput_dataœ,œidœ:œparser-WChO0œ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}"
+        "source": "MiniOB-jdpJG",
+        "sourceHandle": "{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-jdpJGœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "parser-Yici2",
+        "targetHandle": "{œfieldNameœ:œinput_dataœ,œidœ:œparser-Yici2œ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -263,7 +321,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "ChatQwenModel",
-            "id": "ChatQwenModel-MRkvk",
+            "id": "ChatQwenModel-VOgaA",
             "name": "text_output",
             "output_types": [
               "Message"
@@ -271,7 +329,7 @@
           },
           "targetHandle": {
             "fieldName": "input_value",
-            "id": "ChatOutput-x0tEn",
+            "id": "ChatOutput-NWtMx",
             "inputTypes": [
               "Data",
               "DataFrame",
@@ -280,12 +338,12 @@
             "type": "str"
           }
         },
-        "id": "reactflow__edge-ChatQwenModel-MRkvk{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-MRkvkœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-ChatOutput-x0tEn{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-x0tEnœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__ChatQwenModel-VOgaA{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-VOgaAœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-ChatOutput-NWtMx{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-NWtMxœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "ChatQwenModel-MRkvk",
-        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-MRkvkœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "ChatOutput-x0tEn",
-        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-x0tEnœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}"
+        "source": "ChatQwenModel-VOgaA",
+        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-VOgaAœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "ChatOutput-NWtMx",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-NWtMxœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}"
       }
     ],
     "nodes": [
@@ -293,7 +351,7 @@
         "data": {
           "description": "Create a prompt template with dynamic variables.",
           "display_name": "Prompt",
-          "id": "Prompt-pp1xM",
+          "id": "Prompt-pn9UD",
           "node": {
             "base_classes": [
               "Message"
@@ -454,7 +512,7 @@
         },
         "dragging": false,
         "height": 433,
-        "id": "Prompt-pp1xM",
+        "id": "Prompt-pn9UD",
         "measured": {
           "height": 433,
           "width": 320
@@ -475,7 +533,7 @@
         "data": {
           "description": "Display a chat message in the Playground.",
           "display_name": "Chat Output",
-          "id": "ChatOutput-x0tEn",
+          "id": "ChatOutput-NWtMx",
           "node": {
             "base_classes": [
               "Message"
@@ -761,7 +819,7 @@
         },
         "dragging": false,
         "height": 234,
-        "id": "ChatOutput-x0tEn",
+        "id": "ChatOutput-NWtMx",
         "measured": {
           "height": 234,
           "width": 320
@@ -780,7 +838,7 @@
       },
       {
         "data": {
-          "id": "parser-WChO0",
+          "id": "parser-Yici2",
           "node": {
             "base_classes": [
               "Message"
@@ -943,7 +1001,7 @@
           "type": "parser"
         },
         "dragging": false,
-        "id": "parser-WChO0",
+        "id": "parser-Yici2",
         "measured": {
           "height": 358,
           "width": 320
@@ -957,7 +1015,7 @@
       },
       {
         "data": {
-          "id": "MiniOB-W40MP",
+          "id": "MiniOB-jdpJG",
           "node": {
             "base_classes": [
               "Data",
@@ -1264,7 +1322,7 @@
           "type": "MiniOB"
         },
         "dragging": false,
-        "id": "MiniOB-W40MP",
+        "id": "MiniOB-jdpJG",
         "measured": {
           "height": 334,
           "width": 320
@@ -1278,7 +1336,7 @@
       },
       {
         "data": {
-          "id": "TestOutput-Cb00i",
+          "id": "TestOutput-e7EBS",
           "node": {
             "base_classes": [
               "Data"
@@ -1369,7 +1427,7 @@
           "type": "TestOutput"
         },
         "dragging": false,
-        "id": "TestOutput-Cb00i",
+        "id": "TestOutput-e7EBS",
         "measured": {
           "height": 203,
           "width": 320
@@ -1383,7 +1441,7 @@
       },
       {
         "data": {
-          "id": "ChatInput-c6TvP",
+          "id": "ChatInput-tBfSE",
           "node": {
             "base_classes": [
               "Message"
@@ -1684,7 +1742,7 @@
           "type": "ChatInput"
         },
         "dragging": false,
-        "id": "ChatInput-c6TvP",
+        "id": "ChatInput-tBfSE",
         "measured": {
           "height": 202,
           "width": 320
@@ -1698,7 +1756,7 @@
       },
       {
         "data": {
-          "id": "OllamaEmbeddings-qGQGG",
+          "id": "OllamaEmbeddings-cmvMO",
           "node": {
             "base_classes": [
               "Embeddings"
@@ -1716,7 +1774,7 @@
             ],
             "frozen": false,
             "icon": "Ollama",
-            "last_updated": "2025-10-26T07:51:28.363Z",
+            "last_updated": "2025-10-26T06:35:46.003Z",
             "legacy": false,
             "metadata": {
               "keywords": [
@@ -1761,7 +1819,7 @@
                 ],
                 "list": false,
                 "list_add_label": "Add More",
-                "load_from_db": true,
+                "load_from_db": false,
                 "name": "base_url",
                 "placeholder": "",
                 "required": true,
@@ -1771,7 +1829,7 @@
                 "trace_as_input": true,
                 "trace_as_metadata": true,
                 "type": "str",
-                "value": "http://localhost:11434"
+                "value": "${EMBEDDING_BASE_URL}"
               },
               "code": {
                 "advanced": true,
@@ -1822,7 +1880,7 @@
           "type": "OllamaEmbeddings"
         },
         "dragging": false,
-        "id": "OllamaEmbeddings-qGQGG",
+        "id": "OllamaEmbeddings-cmvMO",
         "measured": {
           "height": 284,
           "width": 320
@@ -1836,7 +1894,7 @@
       },
       {
         "data": {
-          "id": "ChatQwenModel-MRkvk",
+          "id": "ChatQwenModel-VOgaA",
           "node": {
             "base_classes": [
               "LanguageModel",
@@ -1866,7 +1924,7 @@
             ],
             "frozen": false,
             "icon": "Qwen",
-            "last_updated": "2025-10-26T07:51:28.364Z",
+            "last_updated": "2025-10-26T05:27:49.280Z",
             "legacy": false,
             "metadata": {
               "code_hash": "112daed5634e",
@@ -1956,7 +2014,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "str",
-                "value": ""
+                "value": "${LLM_API_KEY}"
               },
               "base_url": {
                 "_input_type": "MessageTextInput",
@@ -2233,7 +2291,7 @@
           "type": "ChatQwenModel"
         },
         "dragging": false,
-        "id": "ChatQwenModel-MRkvk",
+        "id": "ChatQwenModel-VOgaA",
         "measured": {
           "height": 425,
           "width": 320
@@ -2242,12 +2300,12 @@
           "x": 2531.2351512162813,
           "y": -106.73711016337322
         },
-        "selected": false,
+        "selected": true,
         "type": "genericNode"
       },
       {
         "data": {
-          "id": "Directory-p0Mj2",
+          "id": "Directory-3w0jU",
           "node": {
             "base_classes": [
               "DataFrame"
@@ -2498,7 +2556,7 @@
           "type": "Directory"
         },
         "dragging": false,
-        "id": "Directory-p0Mj2",
+        "id": "Directory-3w0jU",
         "measured": {
           "height": 366,
           "width": 320
@@ -2512,7 +2570,7 @@
       },
       {
         "data": {
-          "id": "SplitText-UOI9h",
+          "id": "SplitText-lf5eA",
           "node": {
             "base_classes": [
               "DataFrame"
@@ -2716,7 +2774,7 @@
           "type": "SplitText"
         },
         "dragging": false,
-        "id": "SplitText-UOI9h",
+        "id": "SplitText-lf5eA",
         "measured": {
           "height": 410,
           "width": 320
@@ -2727,20 +2785,328 @@
         },
         "selected": false,
         "type": "genericNode"
+      },
+      {
+        "data": {
+          "id": "ChatOutput-aBUdb",
+          "node": {
+            "base_classes": [
+              "Message"
+            ],
+            "beta": false,
+            "conditional_paths": [],
+            "custom_fields": {},
+            "description": "Display a chat message in the Playground.",
+            "display_name": "Chat Output",
+            "documentation": "https://docs.langflow.org/components-io#chat-output",
+            "edited": false,
+            "field_order": [
+              "input_value",
+              "should_store_message",
+              "sender",
+              "sender_name",
+              "session_id",
+              "data_template",
+              "background_color",
+              "chat_icon",
+              "text_color",
+              "clean_data"
+            ],
+            "frozen": false,
+            "icon": "MessagesSquare",
+            "legacy": false,
+            "metadata": {},
+            "minimized": true,
+            "output_types": [],
+            "outputs": [
+              {
+                "allows_loop": false,
+                "cache": true,
+                "display_name": "Output Message",
+                "group_outputs": false,
+                "method": "message_response",
+                "name": "message",
+                "selected": "Message",
+                "tool_mode": true,
+                "types": [
+                  "Message"
+                ],
+                "value": "__UNDEFINED__"
+              }
+            ],
+            "pinned": false,
+            "template": {
+              "_type": "Component",
+              "background_color": {
+                "_input_type": "MessageTextInput",
+                "advanced": true,
+                "display_name": "Background Color",
+                "dynamic": false,
+                "info": "The background color of the icon.",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "background_color",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "type": "str",
+                "value": ""
+              },
+              "chat_icon": {
+                "_input_type": "MessageTextInput",
+                "advanced": true,
+                "display_name": "Icon",
+                "dynamic": false,
+                "info": "The icon of the message.",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "chat_icon",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "type": "str",
+                "value": ""
+              },
+              "clean_data": {
+                "_input_type": "BoolInput",
+                "advanced": true,
+                "display_name": "Basic Clean Data",
+                "dynamic": false,
+                "info": "Whether to clean the data",
+                "list": false,
+                "list_add_label": "Add More",
+                "name": "clean_data",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_metadata": true,
+                "type": "bool",
+                "value": true
+              },
+              "code": {
+                "advanced": true,
+                "dynamic": true,
+                "fileTypes": [],
+                "file_path": "",
+                "info": "",
+                "list": false,
+                "load_from_db": false,
+                "multiline": true,
+                "name": "code",
+                "password": false,
+                "placeholder": "",
+                "required": true,
+                "show": true,
+                "title_case": false,
+                "type": "code",
+                "value": "from collections.abc import Generator\nfrom typing import Any\n\nimport orjson\nfrom fastapi.encoders import jsonable_encoder\n\nfrom langflow.base.io.chat import ChatComponent\nfrom langflow.helpers.data import safe_convert\nfrom langflow.inputs.inputs import BoolInput, DropdownInput, HandleInput, MessageTextInput\nfrom langflow.schema.data import Data\nfrom langflow.schema.dataframe import DataFrame\nfrom langflow.schema.message import Message\nfrom langflow.schema.properties import Source\nfrom langflow.template.field.base import Output\nfrom langflow.utils.constants import (\n    MESSAGE_SENDER_AI,\n    MESSAGE_SENDER_NAME_AI,\n    MESSAGE_SENDER_USER,\n)\n\n\nclass ChatOutput(ChatComponent):\n    display_name = \"Chat Output\"\n    description = \"Display a chat message in the Playground.\"\n    documentation: str = \"https://docs.langflow.org/components-io#chat-output\"\n    icon = \"MessagesSquare\"\n    name = \"ChatOutput\"\n    minimized = True\n\n    inputs = [\n        HandleInput(\n            name=\"input_value\",\n            display_name=\"Inputs\",\n            info=\"Message to be passed as output.\",\n            input_types=[\"Data\", \"DataFrame\", \"Message\"],\n            required=True,\n        ),\n        BoolInput(\n            name=\"should_store_message\",\n            display_name=\"Store Messages\",\n            info=\"Store the message in the history.\",\n            value=True,\n            advanced=True,\n        ),\n        DropdownInput(\n            name=\"sender\",\n            display_name=\"Sender Type\",\n            options=[MESSAGE_SENDER_AI, MESSAGE_SENDER_USER],\n            value=MESSAGE_SENDER_AI,\n            advanced=True,\n            info=\"Type of sender.\",\n        ),\n        MessageTextInput(\n            name=\"sender_name\",\n            display_name=\"Sender Name\",\n            info=\"Name of the sender.\",\n            value=MESSAGE_SENDER_NAME_AI,\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"session_id\",\n            display_name=\"Session ID\",\n            info=\"The session ID of the chat. If empty, the current session ID parameter will be used.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"data_template\",\n            display_name=\"Data Template\",\n            value=\"{text}\",\n            advanced=True,\n            info=\"Template to convert Data to Text. If left empty, it will be dynamically set to the Data's text key.\",\n        ),\n        MessageTextInput(\n            name=\"background_color\",\n            display_name=\"Background Color\",\n            info=\"The background color of the icon.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"chat_icon\",\n            display_name=\"Icon\",\n            info=\"The icon of the message.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"text_color\",\n            display_name=\"Text Color\",\n            info=\"The text color of the name\",\n            advanced=True,\n        ),\n        BoolInput(\n            name=\"clean_data\",\n            display_name=\"Basic Clean Data\",\n            value=True,\n            info=\"Whether to clean the data\",\n            advanced=True,\n        ),\n    ]\n    outputs = [\n        Output(\n            display_name=\"Output Message\",\n            name=\"message\",\n            method=\"message_response\",\n        ),\n    ]\n\n    def _build_source(self, id_: str | None, display_name: str | None, source: str | None) -> Source:\n        source_dict = {}\n        if id_:\n            source_dict[\"id\"] = id_\n        if display_name:\n            source_dict[\"display_name\"] = display_name\n        if source:\n            # Handle case where source is a ChatOpenAI object\n            if hasattr(source, \"model_name\"):\n                source_dict[\"source\"] = source.model_name\n            elif hasattr(source, \"model\"):\n                source_dict[\"source\"] = str(source.model)\n            else:\n                source_dict[\"source\"] = str(source)\n        return Source(**source_dict)\n\n    async def message_response(self) -> Message:\n        # First convert the input to string if needed\n        text = self.convert_to_string()\n\n        # Get source properties\n        source, icon, display_name, source_id = self.get_properties_from_source_component()\n        background_color = self.background_color\n        text_color = self.text_color\n        if self.chat_icon:\n            icon = self.chat_icon\n\n        # Create or use existing Message object\n        if isinstance(self.input_value, Message):\n            message = self.input_value\n            # Update message properties\n            message.text = text\n        else:\n            message = Message(text=text)\n\n        # Set message properties\n        message.sender = self.sender\n        message.sender_name = self.sender_name\n        message.session_id = self.session_id\n        message.flow_id = self.graph.flow_id if hasattr(self, \"graph\") else None\n        message.properties.source = self._build_source(source_id, display_name, source)\n        message.properties.icon = icon\n        message.properties.background_color = background_color\n        message.properties.text_color = text_color\n\n        # Store message if needed\n        if self.session_id and self.should_store_message:\n            stored_message = await self.send_message(message)\n            self.message.value = stored_message\n            message = stored_message\n\n        self.status = message\n        return message\n\n    def _serialize_data(self, data: Data) -> str:\n        \"\"\"Serialize Data object to JSON string.\"\"\"\n        # Convert data.data to JSON-serializable format\n        serializable_data = jsonable_encoder(data.data)\n        # Serialize with orjson, enabling pretty printing with indentation\n        json_bytes = orjson.dumps(serializable_data, option=orjson.OPT_INDENT_2)\n        # Convert bytes to string and wrap in Markdown code blocks\n        return \"```json\\n\" + json_bytes.decode(\"utf-8\") + \"\\n```\"\n\n    def _validate_input(self) -> None:\n        \"\"\"Validate the input data and raise ValueError if invalid.\"\"\"\n        if self.input_value is None:\n            msg = \"Input data cannot be None\"\n            raise ValueError(msg)\n        if isinstance(self.input_value, list) and not all(\n            isinstance(item, Message | Data | DataFrame | str) for item in self.input_value\n        ):\n            invalid_types = [\n                type(item).__name__\n                for item in self.input_value\n                if not isinstance(item, Message | Data | DataFrame | str)\n            ]\n            msg = f\"Expected Data or DataFrame or Message or str, got {invalid_types}\"\n            raise TypeError(msg)\n        if not isinstance(\n            self.input_value,\n            Message | Data | DataFrame | str | list | Generator | type(None),\n        ):\n            type_name = type(self.input_value).__name__\n            msg = f\"Expected Data or DataFrame or Message or str, Generator or None, got {type_name}\"\n            raise TypeError(msg)\n\n    def convert_to_string(self) -> str | Generator[Any, None, None]:\n        \"\"\"Convert input data to string with proper error handling.\"\"\"\n        self._validate_input()\n        if isinstance(self.input_value, list):\n            return \"\\n\".join([safe_convert(item, clean_data=self.clean_data) for item in self.input_value])\n        if isinstance(self.input_value, Generator):\n            return self.input_value\n        return safe_convert(self.input_value)\n"
+              },
+              "data_template": {
+                "_input_type": "MessageTextInput",
+                "advanced": true,
+                "display_name": "Data Template",
+                "dynamic": false,
+                "info": "Template to convert Data to Text. If left empty, it will be dynamically set to the Data's text key.",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "data_template",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "type": "str",
+                "value": "{text}"
+              },
+              "input_value": {
+                "_input_type": "HandleInput",
+                "advanced": false,
+                "display_name": "Inputs",
+                "dynamic": false,
+                "info": "Message to be passed as output.",
+                "input_types": [
+                  "Data",
+                  "DataFrame",
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "name": "input_value",
+                "placeholder": "",
+                "required": true,
+                "show": true,
+                "title_case": false,
+                "trace_as_metadata": true,
+                "type": "other",
+                "value": ""
+              },
+              "sender": {
+                "_input_type": "DropdownInput",
+                "advanced": true,
+                "combobox": false,
+                "dialog_inputs": {},
+                "display_name": "Sender Type",
+                "dynamic": false,
+                "info": "Type of sender.",
+                "name": "sender",
+                "options": [
+                  "Machine",
+                  "User"
+                ],
+                "options_metadata": [],
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "toggle": false,
+                "tool_mode": false,
+                "trace_as_metadata": true,
+                "type": "str",
+                "value": "Machine"
+              },
+              "sender_name": {
+                "_input_type": "MessageTextInput",
+                "advanced": true,
+                "display_name": "Sender Name",
+                "dynamic": false,
+                "info": "Name of the sender.",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "sender_name",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "type": "str",
+                "value": "AI"
+              },
+              "session_id": {
+                "_input_type": "MessageTextInput",
+                "advanced": true,
+                "display_name": "Session ID",
+                "dynamic": false,
+                "info": "The session ID of the chat. If empty, the current session ID parameter will be used.",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "session_id",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "type": "str",
+                "value": ""
+              },
+              "should_store_message": {
+                "_input_type": "BoolInput",
+                "advanced": true,
+                "display_name": "Store Messages",
+                "dynamic": false,
+                "info": "Store the message in the history.",
+                "list": false,
+                "list_add_label": "Add More",
+                "name": "should_store_message",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_metadata": true,
+                "type": "bool",
+                "value": true
+              },
+              "text_color": {
+                "_input_type": "MessageTextInput",
+                "advanced": true,
+                "display_name": "Text Color",
+                "dynamic": false,
+                "info": "The text color of the name",
+                "input_types": [
+                  "Message"
+                ],
+                "list": false,
+                "list_add_label": "Add More",
+                "load_from_db": false,
+                "name": "text_color",
+                "placeholder": "",
+                "required": false,
+                "show": true,
+                "title_case": false,
+                "tool_mode": false,
+                "trace_as_input": true,
+                "trace_as_metadata": true,
+                "type": "str",
+                "value": ""
+              }
+            },
+            "tool_mode": false
+          },
+          "showNode": false,
+          "type": "ChatOutput"
+        },
+        "dragging": false,
+        "id": "ChatOutput-aBUdb",
+        "measured": {
+          "height": 48,
+          "width": 192
+        },
+        "position": {
+          "x": 333.56079609579047,
+          "y": -656.4359529724741
+        },
+        "selected": false,
+        "type": "genericNode"
       }
     ],
     "viewport": {
-      "x": 66.89262118384704,
-      "y": 420.5424164304024,
-      "zoom": 0.2
+      "x": -1620.1192847162756,
+      "y": 184.0171050214717,
+      "zoom": 0.7999999999999997
     }
   },
   "description": "Load your data for chat context with Retrieval Augmented Generation.",
   "endpoint_name": null,
-  "id": "21b4a531-166e-49f4-9347-e1cfdf68ec3f",
+  "id": "3530c192-8d87-4581-8ab7-25e51b9a8ce1",
   "is_component": false,
   "last_tested_version": "1.5.1",
-  "name": "model (4)",
+  "name": "model",
   "tags": [
     "openai",
     "astradb",
