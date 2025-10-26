@@ -476,35 +476,33 @@ class MiniOBVectorStore(VectorStore):
     # 内部工具方法
     # ------------------------------
     def __vector_literal(self, vec: List[float]) -> str:
-        # 以 JSON 风格输出为 SQL 向量字面量: [v1,v2,...]
-        # 保留 8 位小数，足够用于距离排序
-        return "[" + ",".join(f"{float(x):.8f}" for x in vec) + "]"
+        # 使用原生向量字面量 [v1,v2,...]，MiniOB 语法支持
+        inner = ",".join(f"{float(x):.8f}" for x in vec)
+        return "[" + inner + "]"
 
-    def __escape_text(self, text: str, limit: int = 3500) -> str:
-        # 生成单行、可安全插入 SQL 的 TEXT：
+    def __escape_text(self, text: str, limit_bytes: int = 3500) -> str:
+        # 生成单行、可安全插入 SQL 的 TEXT，按字节限制，避免超过 TEXT(4096B)
         if text is None:
             text = ""
-        # 替换可能影响解析的分隔符与换行
         s = text.replace("|", " ").replace("\r", " ").replace("\n", " ")
-        # 压缩多空格
         s = " ".join(s.split())
-        # 截断以避免超长
-        if limit and len(s) > limit:
-            s = s[:limit]
-        # 转义单引号
+        if limit_bytes and len(s.encode('utf-8')) > limit_bytes:
+            # 逐步截断至字节数不超过限制
+            while len(s.encode('utf-8')) > limit_bytes and s:
+                s = s[:-1]
         s = s.replace("'", "''")
         return s
 
     def __ensure_initialized(self) -> None:
         # 检查表是否存在：若不存在则创建；随后创建/确保存在向量索引
         try:
-            _ = self.connector.exec(f"desc {self.__table}")
+            _ = self.connector.exec(f"DESC {self.__table}")
         except Exception:
-            # 建表：仅需 2 列，TEXT 与 VECTOR(dim)
+            # 建表：VECTOR 不带维度（解析器内部默认维度）
             create_sql = (
-                f"create table {self.__table} ("
-                f"content text, "
-                f"embedding vector({self.__embedding_dimension})"
+                f"CREATE TABLE {self.__table} ("
+                f"content TEXT, "
+                f"embedding VECTOR"
                 f")"
             )
             self.__log_func(f"Creating table: {create_sql}")
@@ -514,14 +512,14 @@ class MiniOBVectorStore(VectorStore):
         # 创建向量索引（若未存在）
         try:
             index_sql = (
-                f"create vector index if not exists {self.__index} "
-                f"on {self.__table} (embedding) "
-                f"with (type = ivfflat, distance = cosine_distance, lists = 64, probes = 8)"
+                f"CREATE VECTOR INDEX {self.__index} "
+                f"ON {self.__table} {{ embedding }} "
+                f"WITH {{ TYPE = IVFFLAT, DISTANCE = COSINE_DISTANCE, LISTS = 64, PROBES = 8 }}"
             )
             self.__log_func(f"Ensuring vector index: {index_sql}")
             _ = self.connector.exec(index_sql)
         except Exception as e:
-            # 索引已存在或不支持时，跳过但记录
+            # 索引已存在或语法不支持时，跳过但记录
             self.__log_func(f"Create vector index ignored: {e}")
 
     def similarity_search(
@@ -548,8 +546,8 @@ class MiniOBVectorStore(VectorStore):
         # 说明：PlainCommunicator 的查询结果以第一行表头，其后每行一条记录，\n 分隔
         # 为避免文本内换行破坏解析，插入前已做单行化处理
         sql = (
-            f"select content from {self.__table} "
-            f"order by distance(embedding, {vec_lit}, 'COSINE') limit {int(k)}"
+            f"SELECT content FROM {self.__table} "
+            f"ORDER BY DISTANCE(embedding, {vec_lit}, 'COSINE') LIMIT {int(k)}"
         )
         raw = self.connector.exec(sql)
 
