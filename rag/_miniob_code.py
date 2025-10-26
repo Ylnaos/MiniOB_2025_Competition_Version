@@ -192,7 +192,9 @@ class MiniObConnector(object):
             self.__socket = sock
             if sock is not None:
                 self.log_func("Socket connection established successfully")
-                self.__socket.setblocking(False)
+                # 使用阻塞模式以避免 sendall 在非阻塞套接字上抛出 EAGAIN（[Errno 11]）
+                # 读取仍通过 poll + recv 保障超时控制
+                self.__socket.setblocking(True)
 
                 self.__poller = select.poll()
                 self.__poller.register(
@@ -375,7 +377,12 @@ class MiniObConnector(object):
             )
 
         start_time = time.time()
-        self.log_func(f"Executing SQL: {sql}")
+        try:
+            self.log_func(
+                f"Executing SQL (length={len(sql)}): head='{sql[:256]}' tail='{sql[-256:]}'"
+            )
+        except Exception:
+            pass
 
         try:
             data = str.encode(sql, self.__charset)
@@ -480,16 +487,40 @@ class MiniOBVectorStore(VectorStore):
         inner = ",".join(f"{float(x):.8f}" for x in vec)
         return "[" + inner + "]"
 
-    def __escape_text(self, text: str, limit_bytes: int = 3500) -> str:
-        # 生成单行、可安全插入 SQL 的 TEXT，按字节限制，避免超过 TEXT(4096B)
+    def __escape_text(self, text: str, limit_bytes: int = 1000) -> str:
+        """将任意文本规范化为单行可插入 SQL 的安全文本。
+
+        处理策略：
+        - 去除管道/回车/换行，压缩连续空白为单空格；
+        - 过滤隐形/控制字符：\x00-\x1F, \x7F 以及常见零宽字符区段；
+        - 限制 UTF-8 字节长度（默认 1000B），按字节安全截断；
+        - 单引号转义为两连（SQL 标准）。
+        """
+        import re
+
         if text is None:
             text = ""
-        s = text.replace("|", " ").replace("\r", " ").replace("\n", " ")
+
+        s = str(text)
+        # 标准化空白并移除竖线分隔符，避免和服务端“ | ”列分隔冲突
+        s = s.replace("|", " ").replace("\r", " ").replace("\n", " ")
+
+        # 去除控制/不可见字符（含零宽、双向控制等）
+        s = re.sub(r"[\x00-\x08\x0B-\x1F\x7F]", " ", s)
+        s = re.sub(r"[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069]", " ", s)
+
+        # 压缩空白
         s = " ".join(s.split())
-        if limit_bytes and len(s.encode('utf-8')) > limit_bytes:
-            # 逐步截断至字节数不超过限制
-            while len(s.encode('utf-8')) > limit_bytes and s:
-                s = s[:-1]
+
+        # 按字节限制安全截断
+        if limit_bytes:
+            b = s.encode("utf-8", errors="ignore")
+            if len(b) > limit_bytes:
+                b = b[:limit_bytes]
+                # 以忽略错误的方式解码，确保不产生半个多字节字符
+                s = b.decode("utf-8", errors="ignore")
+
+        # SQL 单引号转义
         s = s.replace("'", "''")
         return s
 
@@ -608,8 +639,8 @@ class MiniOBVectorStore(VectorStore):
                 row_count=len(page_contents),
             )
 
-        # 批量写入，避免超过 4MB 包大小，分批 50 行
-        batch_size = 50
+        # 保守写入：逐行插入，最大程度降低 SQL 解析压力
+        batch_size = 1
         total = len(page_contents)
         inserted = 0
         for start in range(0, total, batch_size):
@@ -626,9 +657,38 @@ class MiniOBVectorStore(VectorStore):
                 f"insert into {self.__table} (content, embedding) values "
                 + ",".join(values_sql)
             )
-            res = self.connector.exec(insert_sql)
-            self.__log_func(f"Inserted {len(values_sql)} rows. Result: {res}")
-            inserted += len(values_sql)
+            # 为便于线上定位问题，打印长度与首尾片段
+            try:
+                self.__log_func(
+                    f"Insert SQL length={len(insert_sql)} head='{insert_sql[:256]}' tail='{insert_sql[-256:]}'"
+                )
+            except Exception:
+                pass
+
+            try:
+                res = self.connector.exec(insert_sql)
+                self.__log_func(f"Inserted {len(values_sql)} rows. Result: {res}")
+                inserted += len(values_sql)
+            except MiniOBQueryException as e:
+                # 回退策略：进一步缩短内容后重试一次
+                try:
+                    short_text = self.__escape_text(page_contents[start], limit_bytes=512)
+                    fallback_sql = (
+                        f"insert into {self.__table} (content, embedding) values ('{short_text}', {vec_lit})"
+                    )
+                    self.__log_func(
+                        f"Retry insert with shorter content. length={len(fallback_sql)}"
+                    )
+                    res = self.connector.exec(fallback_sql)
+                    self.__log_func(
+                        f"Fallback insert succeeded for row {start}. Result: {res}"
+                    )
+                    inserted += 1
+                except Exception as e2:
+                    # 记录并继续后续数据，避免整批失败
+                    self.__log_func(
+                        f"Insert failed and fallback failed for row {start}: {e2}"
+                    )
 
         # 可选：触发表统计优化
         try:

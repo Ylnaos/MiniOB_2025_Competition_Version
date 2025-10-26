@@ -1,0 +1,16 @@
+
+Welcome to the OceanBase database implementation course.
+
+Copyright (c) 2021 OceanBase and/or its affiliates.
+
+Learn more about OceanBase at https://github.com/oceanbase/oceanbase
+Learn more about MiniOB at https://github.com/oceanbase/miniob
+
+Successfully load ./etc/observer.ini
+Failed to open meta file for read. file name=miniob/db/sys/csq_1.table, errmsg=Permission denied
+Failed to open table. filename=csq_1.table
+Failed to open db: sys. error=IOERR_OPEN
+Failed to open system db. rc=IOERR_OPEN
+failed to init handler. rc=IOERR_OPEN
+failed to init global objects
+Shutdown due to failed to init!
