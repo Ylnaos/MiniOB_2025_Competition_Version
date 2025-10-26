@@ -483,9 +483,26 @@ class MiniOBVectorStore(VectorStore):
     # 内部工具方法
     # ------------------------------
     def __vector_literal(self, vec: List[float]) -> str:
-        # 使用原生向量字面量 [v1,v2,...]，MiniOB 语法支持
-        inner = ",".join(f"{float(x):.8f}" for x in vec)
-        return "[" + inner + "]"
+        """将 Python 浮点数组序列化为 MiniOB 期望的向量字面量字符串：'[v1,v2,...]'.
+
+        注意：根据 miniob 当前语法，向量值既可使用 [1,2,3] 字面量，
+        也可使用字符串形式 '[1,2,3]'（会在服务端解析为向量）。
+        距离函数与索引均使用 L2_DISTANCE。
+        """
+        # 尽量短的字符串，按文档语义最多保留两位小数并去掉多余0
+        def fmt(v: float) -> str:
+            try:
+                f = float(v)
+            except Exception:
+                return str(v)
+            s = f"{f:.2f}"
+            s = s.rstrip('0').rstrip('.')
+            if s == "-0":
+                s = "0"
+            return s
+
+        inner = ",".join(fmt(x) for x in vec)
+        return "'[" + inner + "]'"
 
     def __escape_text(self, text: str, limit_bytes: int = 1000) -> str:
         """将任意文本规范化为单行可插入 SQL 的安全文本。
@@ -520,8 +537,8 @@ class MiniOBVectorStore(VectorStore):
                 # 以忽略错误的方式解码，确保不产生半个多字节字符
                 s = b.decode("utf-8", errors="ignore")
 
-        # SQL 单引号转义
-        s = s.replace("'", "''")
+        # miniob 的字符串词法不支持内嵌引号转义，这里直接清除单双引号以避免语法错误
+        s = s.replace("'", " ").replace('"', " ")
         return s
 
     def __ensure_initialized(self) -> None:
@@ -529,11 +546,11 @@ class MiniOBVectorStore(VectorStore):
         try:
             _ = self.connector.exec(f"DESC {self.__table}")
         except Exception:
-            # 建表：VECTOR 不带维度（解析器内部默认维度）
+            # 建表：embedding 使用明确维度的 VECTOR(size)
             create_sql = (
                 f"CREATE TABLE {self.__table} ("
                 f"content TEXT, "
-                f"embedding VECTOR"
+                f"embedding VECTOR({self.__embedding_dimension})"
                 f")"
             )
             self.__log_func(f"Creating table: {create_sql}")
@@ -544,8 +561,8 @@ class MiniOBVectorStore(VectorStore):
         try:
             index_sql = (
                 f"CREATE VECTOR INDEX {self.__index} "
-                f"ON {self.__table} {{ embedding }} "
-                f"WITH {{ TYPE = IVFFLAT, DISTANCE = COSINE_DISTANCE, LISTS = 64, PROBES = 8 }}"
+                f"ON {self.__table}(embedding) "
+                f"WITH(TYPE=IVFFLAT, DISTANCE=L2_DISTANCE, LISTS=64, PROBES=8)"
             )
             self.__log_func(f"Ensuring vector index: {index_sql}")
             _ = self.connector.exec(index_sql)
@@ -578,7 +595,7 @@ class MiniOBVectorStore(VectorStore):
         # 为避免文本内换行破坏解析，插入前已做单行化处理
         sql = (
             f"SELECT content FROM {self.__table} "
-            f"ORDER BY DISTANCE(embedding, {vec_lit}, 'COSINE') LIMIT {int(k)}"
+            f"ORDER BY L2_DISTANCE(embedding, {vec_lit}) LIMIT {int(k)}"
         )
         raw = self.connector.exec(sql)
 
@@ -647,7 +664,7 @@ class MiniOBVectorStore(VectorStore):
             values_sql = []
             for i in range(start, min(start + batch_size, total)):
                 text = self.__escape_text(page_contents[i])
-                vec_lit = self.__vector_literal(embeddings[i])
+                vec_lit = self.__vector_literal(embeddings[i])  # -> '\'[v1,v2,...]\''
                 values_sql.append(f"('{text}', {vec_lit})")
 
             if not values_sql:
@@ -673,9 +690,7 @@ class MiniOBVectorStore(VectorStore):
                 # 回退策略：进一步缩短内容后重试一次
                 try:
                     short_text = self.__escape_text(page_contents[start], limit_bytes=512)
-                    fallback_sql = (
-                        f"insert into {self.__table} (content, embedding) values ('{short_text}', {vec_lit})"
-                    )
+                    fallback_sql = f"insert into {self.__table} (content, embedding) values ('{short_text}', {vec_lit})"
                     self.__log_func(
                         f"Retry insert with shorter content. length={len(fallback_sql)}"
                     )
