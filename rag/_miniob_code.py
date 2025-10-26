@@ -520,8 +520,10 @@ class MiniOBVectorStore(VectorStore):
                 # 以忽略错误的方式解码，确保不产生半个多字节字符
                 s = b.decode("utf-8", errors="ignore")
 
-        # SQL 单引号转义
-        s = s.replace("'", "''")
+        # 为适配 MiniOB 词法对字符串的解析（优先支持双引号字符串），
+        # 这里统一用双引号包裹文本，因此需要去除或替换内部双引号，避免打断字面量。
+        # 说明：若业务确有双引号，可替换为空格以保证语法安全。
+        s = s.replace('"', ' ')
         return s
 
     def __ensure_initialized(self) -> None:
@@ -648,7 +650,8 @@ class MiniOBVectorStore(VectorStore):
             for i in range(start, min(start + batch_size, total)):
                 text = self.__escape_text(page_contents[i])
                 vec_lit = self.__vector_literal(embeddings[i])
-                values_sql.append(f"('{text}', {vec_lit})")
+                # 使用双引号包裹文本，避免单引号在词法阶段被误解析
+                values_sql.append(f'("{text}", {vec_lit})')
 
             if not values_sql:
                 continue
@@ -674,7 +677,7 @@ class MiniOBVectorStore(VectorStore):
                 try:
                     short_text = self.__escape_text(page_contents[start], limit_bytes=512)
                     fallback_sql = (
-                        f"insert into {self.__table} (content, embedding) values ('{short_text}', {vec_lit})"
+                        f'insert into {self.__table} (content, embedding) values ("{short_text}", {vec_lit})'
                     )
                     self.__log_func(
                         f"Retry insert with shorter content. length={len(fallback_sql)}"
