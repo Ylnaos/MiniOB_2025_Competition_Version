@@ -1,0 +1,214 @@
+{
+  "langflow_version": "61a323d97ded7132c54c97d18e522f69dc6a5fed",
+  "name": "miniob_rag_model",
+  "nodes": [
+    {
+      "id": "directory_loader",
+      "type": "Directory",
+      "label": "DirectoryLoader",
+      "data": {
+        "path": "${OB_DOC_PATH}",
+        "recursive": true,
+        "file_extensions": [
+          ".md",
+          ".txt",
+          ".rst",
+          ".html"
+        ]
+      },
+      "position": [
+        50,
+        40
+      ]
+    },
+    {
+      "id": "split_text",
+      "type": "SplitText",
+      "label": "SplitText",
+      "data": {
+        "chunk_size": 500,
+        "chunk_overlap": 64,
+        "split_by": "characters"
+      },
+      "position": [
+        300,
+        40
+      ]
+    },
+    {
+      "id": "ollama_embeddings",
+      "type": "OllamaEmbeddings",
+      "label": "OllamaEmbeddings",
+      "data": {
+        "model": "${EMBEDDING_NAME}",
+        "base_url": "${EMBEDDING_BASE_URL}",
+        "batch_size": 16
+      },
+      "position": [
+        550,
+        40
+      ]
+    },
+    {
+      "id": "vector_index",
+      "type": "VectorStore",
+      "label": "InMemoryVectorStore",
+      "data": {
+        "store_type": "inmemory",
+        "onnx_optim": false
+      },
+      "position": [
+        800,
+        40
+      ]
+    },
+    {
+      "id": "chat_input",
+      "type": "HTTPRequest",
+      "label": "Chat Input (GET Question)",
+      "data": {
+        "method": "GET",
+        "url": "${QA_SERVER_GET_QUESTION_URL}",
+        "headers": {},
+        "timeout": 10
+      },
+      "position": [
+        50,
+        240
+      ]
+    },
+    {
+      "id": "miniob_node",
+      "type": "Python",
+      "label": "MiniOB Connector (Python)",
+      "data": {
+        "description": "Custom MiniOB node: performs vector/SQL retrieval against MiniOB.\nEnvironment: MINIOB_SERVER_SOCKET (Unix socket path).\nBehavior: Accepts question text + query embedding and returns top-k candidates and support_facts.",
+        "socket_path_env": "${MINIOB_SERVER_SOCKET}",
+        "k": 5,
+        "timeout": 10,
+        "code": "import os, json\ntry:\n    import pymysql\nexcept Exception:\n    pymysql = None\n\nLABELS = {\n    '标识符长度限制': ['集群名','租户名','用户名','标识符长度','最大长度'],\n    'ODP(OceanBase Database Proxy) 连接限制': ['ODP','OceanBase Database Proxy','连接限制'],\n    '单个表的限制': ['单个表','行长度','列数','索引个数','最大限制'],\n    '字符串类型限制': ['VARCHAR','字符串','字符','最大长度'],\n    '功能使用限制': ['物理备库','功能使用限制','限制'],\n}\n\ndef _connect():\n    sock = os.getenv('MINIOB_SERVER_SOCKET','')\n    if not sock: raise RuntimeError('缺少 MINIOB_SERVER_SOCKET')\n    if pymysql is None: raise RuntimeError('未安装 pymysql')\n    return pymysql.connect(host='localhost', user='root', password='', unix_socket=sock, autocommit=True)\n\ndef _ensure(conn):\n    with conn.cursor() as c:\n        c.execute(\"CREATE TABLE IF NOT EXISTS ob_docs (id INT, path STRING(512) NULL, title STRING(256) NULL, content TEXT NULL, embedding VECTOR(1024) NULL)\")\n        c.execute(\"CREATE VECTOR INDEX IF NOT EXISTS idx_ob_docs_vec ON ob_docs { embedding } WITH { TYPE = IVFFLAT, DISTANCE = COSINE_DISTANCE, LISTS = 100, PROBES = 10 }\")\n\ndef _search(conn, qvec, k):\n    vec_lit = json.dumps(qvec, ensure_ascii=False)\n    sql = (\"SELECT path, title, content, DISTANCE(embedding, TO_VECTOR(%s), 'COSINE') AS score FROM ob_docs ORDER BY score ASC LIMIT %s\")\n    with conn.cursor() as c:\n        c.execute(sql, (vec_lit, int(k)))\n        rows = c.fetchall()\n    cands = []\n    for r in rows:\n        cands.append({'path': r[0], 'title': r[1], 'content': r[2], 'score': float(r[3]) if r[3] is not None else 1e9})\n    return cands\n\ndef _classify(question, contexts):\n    q = (question or '').lower()\n    out = []\n    for lab, keys in LABELS.items():\n        if any(k.lower() in q for k in keys): out.append(lab)\n    if not out:\n        joined = ('\\n'.join(contexts)).lower()\n        for lab, keys in LABELS.items():\n            if any(k.lower() in joined for k in keys): out.append(lab)\n    seen, res = set(), []\n    for x in out:\n        if x not in seen: seen.add(x); res.append(x)\n    return res\n\n# Langflow 入口\n# params: { 'question': str, 'embedding': [float], 'k': int }\n\ndef run(question: str, embedding: list, k: int = 5, **kwargs):\n    conn = _connect()\n    _ensure(conn)\n    cands = _search(conn, embedding, k or 5)\n    contexts = [ (c.get('title') or '') + ' ' + (c.get('content') or '') for c in cands ]\n    facts = _classify(question, contexts)\n    return {'candidates': cands, 'support_facts': facts}"
+      },
+      "position": [
+        300,
+        240
+      ]
+    },
+    {
+      "id": "parser",
+      "type": "Python",
+      "label": "Parser",
+      "data": {
+        "code": "# 解析 MiniOB 结果为上下文与支持事实\n# 入参: results: dict = { 'candidates': [...], 'support_facts': [...] }\n\nimport json\n\ndef run(results: dict, **kwargs):\n    cands = (results or {}).get('candidates') or []\n    support = (results or {}).get('support_facts') or []\n    parts = []\n    for c in cands:\n        t = (c.get('title') or '').strip()\n        x = (c.get('content') or '').strip()\n        if t: parts.append(t)\n        if x: parts.append(x)\n    context = '\\n\\n---\\n\\n'.join(parts[:10])\n    # 在上下文末尾附带标签，提示大模型原样抄写\n    context += '\\n\\nSUPPORT_FACTS_TAGS: ' + json.dumps(support, ensure_ascii=False)\n    return { 'context': context, 'support_facts': support }"
+      },
+      "position": [
+        550,
+        240
+      ]
+    },
+    {
+      "id": "prompt",
+      "type": "Prompt",
+      "label": "Prompt",
+      "data": {
+        "template": "你是严谨的数据库文档助手, 仅基于下方上下文回答。\n- 引用上下文中的事实, 不臆断。\n- 答案最后必须严格原样复制一行: support_facts: 与 SUPPORT_FACTS_TAGS 中的列表一致。\n\nContext:\n{context}\n\nQuestion:\n{input}\n\nAnswer:"
+      },
+      "position": [
+        800,
+        240
+      ]
+    },
+    {
+      "id": "qwen_llm",
+      "type": "LLM",
+      "label": "Qwen (LLM)",
+      "data": {
+        "model": "${LLM_NAME}",
+        "base_url": "${LLM_BASE_URL}",
+        "api_key_env": "${LLM_API_KEY}",
+        "temperature": 0,
+        "max_tokens": 512
+      },
+      "position": [
+        1050,
+        240
+      ]
+    },
+    {
+      "id": "test_output",
+      "type": "HTTPRequest",
+      "label": "Test Output (POST Answer)",
+      "data": {
+        "method": "POST",
+        "url": "${QA_SERVER_POST_ANSWER_URL}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body_template": "{ \"answer\": \"{output}\", \"support_facts\": {support_facts} }",
+        "timeout": 10
+      },
+      "position": [
+        1300,
+        240
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "directory_loader",
+      "target": "split_text",
+      "label": "docs"
+    },
+    {
+      "source": "split_text",
+      "target": "ollama_embeddings",
+      "label": "chunks"
+    },
+    {
+      "source": "chat_input",
+      "target": "miniob_node",
+      "label": "question"
+    },
+    {
+      "source": "miniob_node",
+      "target": "parser",
+      "label": "raw_results"
+    },
+    {
+      "source": "parser",
+      "target": "prompt",
+      "label": "context"
+    },
+    {
+      "source": "chat_input",
+      "target": "prompt",
+      "label": "input"
+    },
+    {
+      "source": "prompt",
+      "target": "qwen_llm",
+      "label": "prompt_text"
+    },
+    {
+      "source": "qwen_llm",
+      "target": "test_output",
+      "label": "answer"
+    },
+    {
+      "source": "ollama_embeddings",
+      "target": "miniob_node",
+      "label": "embedding"
+    }
+  ],
+  "env_vars": [
+    "OB_DOC_PATH",
+    "EMBEDDING_NAME",
+    "EMBEDDING_BASE_URL",
+    "LLM_NAME",
+    "LLM_API_KEY",
+    "LLM_BASE_URL",
+    "QA_SERVER_GET_QUESTION_URL",
+    "QA_SERVER_POST_ANSWER_URL",
+    "MINIOB_SERVER_SOCKET"
+  ],
+  "notes": "This model.json is a template for Langflow 61a323d... commit. The MiniOB node is a custom node: if your Langflow instance lacks it, implement a Python custom node using the implementation_hint in miniob_node.data. Adjust node types/names if your Langflow build expects different component keys."
+}

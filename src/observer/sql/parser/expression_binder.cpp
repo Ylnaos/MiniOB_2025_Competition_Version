@@ -492,7 +492,8 @@ RC ExpressionBinder::bind_unbound_field_expression(
   const char *field_name = unbound_field_expr->field_name();
 
   SelectStmt *inner_view_stmt = context_.inner_view_stmt();
-  if (context_.query_tables().empty() && inner_view_stmt != nullptr) {
+  if ((context_.query_tables().empty() || context_.query_tables().size() == 1) && inner_view_stmt != nullptr) {
+    // 允许引用 inner view 的列名或在外层生成的别名
     if (!is_blank(table_name)) {
       LOG_INFO("inner view binding does not support qualified column: %s.%s", table_name, field_name);
       return RC::SCHEMA_TABLE_NOT_EXIST;
