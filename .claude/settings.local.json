@@ -27,7 +27,8 @@
       "Bash(git checkout:*)",
       "Bash(winpty docker exec miniob2025 bash -c \"cat /root/miniob/etc/observer.ini | grep -A 2 -i log\")",
       "Bash(md5sum:*)",
-      "Bash(copy:*)"
+      "Bash(copy:*)",
+      "Bash(git stash:*)"
     ],
     "deny": [],
     "ask": []
