@@ -531,11 +531,11 @@ class MiniOBVectorStore(VectorStore):
         try:
             _ = self.connector.exec(f"DESC {self.__table}")
         except Exception:
-            # 建表：VECTOR 不带维度（解析器内部默认维度）
+            # 建表：VECTOR 指定维度（BGE-M3标准为1024维）
             create_sql = (
                 f"CREATE TABLE {self.__table} ("
                 f"content TEXT, "
-                f"embedding VECTOR"
+                f"embedding VECTOR({self.__embedding_dimension})"
                 f")"
             )
             self.__log_func(f"Creating table: {create_sql}")
@@ -546,8 +546,8 @@ class MiniOBVectorStore(VectorStore):
         try:
             index_sql = (
                 f"CREATE VECTOR INDEX {self.__index} "
-                f"ON {self.__table} {{ embedding }} "
-                f"WITH {{ TYPE = IVFFLAT, DISTANCE = COSINE_DISTANCE, LISTS = 64, PROBES = 8 }}"
+                f"ON {self.__table} (embedding) "
+                f"WITH (TYPE=IVFFLAT, DISTANCE=COSINE_DISTANCE, LISTS=64, PROBES=8)"
             )
             self.__log_func(f"Ensuring vector index: {index_sql}")
             _ = self.connector.exec(index_sql)
@@ -580,7 +580,7 @@ class MiniOBVectorStore(VectorStore):
         # 为避免文本内换行破坏解析，插入前已做单行化处理
         sql = (
             f"SELECT content FROM {self.__table} "
-            f"ORDER BY DISTANCE(embedding, {vec_lit}, 'COSINE') LIMIT {int(k)}"
+            f"ORDER BY COSINE_DISTANCE(embedding, {vec_lit}) LIMIT {int(k)}"
         )
         raw = self.connector.exec(sql)
 
