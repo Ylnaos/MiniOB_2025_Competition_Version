@@ -243,35 +243,6 @@
           },
           "targetHandle": {
             "fieldName": "input_value",
-            "id": "ChatOutput-5Gx29",
-            "inputTypes": [
-              "Data",
-              "DataFrame",
-              "Message"
-            ],
-            "type": "str"
-          }
-        },
-        "id": "xy-edge__ChatQwenModel-Yd5Td{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-Yd5Tdœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-ChatOutput-5Gx29{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-5Gx29œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}",
-        "selected": false,
-        "source": "ChatQwenModel-Yd5Td",
-        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-Yd5Tdœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "ChatOutput-5Gx29",
-        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-5Gx29œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}"
-      },
-      {
-        "animated": false,
-        "data": {
-          "sourceHandle": {
-            "dataType": "ChatOutput",
-            "id": "ChatOutput-5Gx29",
-            "name": "message",
-            "output_types": [
-              "Message"
-            ]
-          },
-          "targetHandle": {
-            "fieldName": "input_value",
             "id": "TestOutput-XDUWN",
             "inputTypes": [
               "Message"
@@ -279,10 +250,10 @@
             "type": "str"
           }
         },
-        "id": "xy-edge__ChatOutput-5Gx29{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-5Gx29œ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-TestOutput-XDUWN{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-XDUWNœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__ChatQwenModel-Yd5Td{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-Yd5Tdœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-TestOutput-XDUWN{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-XDUWNœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "ChatOutput-5Gx29",
-        "sourceHandle": "{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-5Gx29œ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "source": "ChatQwenModel-Yd5Td",
+        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-Yd5Tdœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
         "target": "TestOutput-XDUWN",
         "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-XDUWNœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       }
@@ -460,8 +431,8 @@
           "width": 320
         },
         "position": {
-          "x": 2070.3679084825735,
-          "y": 614.9598781129731
+          "x": 1995.7953090701576,
+          "y": 656.8251970813468
         },
         "positionAbsolute": {
           "x": 1977.9097981422992,
@@ -501,7 +472,7 @@
             "frozen": false,
             "icon": "MessagesSquare",
             "legacy": false,
-            "lf_version": "1.6.4",
+            "lf_version": "1.5.0.post2",
             "metadata": {
               "code_hash": "6f74e04e39d5",
               "module": "langflow.components.input_output.chat_output.ChatOutput"
@@ -767,8 +738,8 @@
           "width": 320
         },
         "position": {
-          "x": 2988.1651513939455,
-          "y": 940.2011301830668
+          "x": 2904.5928978490256,
+          "y": 876.5811277016043
         },
         "positionAbsolute": {
           "x": 2734.385670401691,
@@ -949,8 +920,8 @@
           "width": 320
         },
         "position": {
-          "x": 1634.744242506119,
-          "y": 569.285913156423
+          "x": 1595.4955059732686,
+          "y": 571.9024955919464
         },
         "selected": false,
         "type": "genericNode"
@@ -1296,7 +1267,6 @@
             ],
             "frozen": false,
             "icon": "code",
-            "last_updated": "2025-10-28T11:32:11.625Z",
             "legacy": false,
             "lf_version": "1.6.4",
             "metadata": {},
@@ -1378,8 +1348,8 @@
           "width": 320
         },
         "position": {
-          "x": 3473.374605095726,
-          "y": 1000.6699776279102
+          "x": 3342.9905344252775,
+          "y": 1057.1529625660276
         },
         "selected": false,
         "type": "genericNode"
@@ -1693,8 +1663,8 @@
           "width": 320
         },
         "position": {
-          "x": 765.7964586406156,
-          "y": 949.9213188531851
+          "x": 803.096134571702,
+          "y": 884.9002809531578
         },
         "selected": false,
         "type": "genericNode"
@@ -1719,7 +1689,7 @@
             ],
             "frozen": false,
             "icon": "Ollama",
-            "last_updated": "2025-10-28T11:26:38.676Z",
+            "last_updated": "2025-10-28T09:50:47.386Z",
             "legacy": false,
             "lf_version": "1.6.4",
             "metadata": {
@@ -1872,7 +1842,7 @@
             ],
             "frozen": false,
             "icon": "Qwen",
-            "last_updated": "2025-10-28T11:40:56.946Z",
+            "last_updated": "2025-10-28T09:58:25.657Z",
             "legacy": false,
             "lf_version": "1.6.4",
             "metadata": {
@@ -2246,8 +2216,8 @@
           "width": 320
         },
         "position": {
-          "x": 2513.434269738249,
-          "y": 612.0850726116726
+          "x": 2444.09483519688,
+          "y": 731.1395734279853
         },
         "selected": false,
         "type": "genericNode"
@@ -2737,9 +2707,9 @@
       }
     ],
     "viewport": {
-      "x": -1933.9377554218713,
-      "y": -317.07788207506974,
-      "zoom": 0.7643558149926846
+      "x": 299.74142251707246,
+      "y": -26.664264772287197,
+      "zoom": 0.7643558149926851
     }
   },
   "description": "Load your data for chat context with Retrieval Augmented Generation.",
