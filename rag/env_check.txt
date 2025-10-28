@@ -1,9 +1,0 @@
-=== Environment Variable Usage Check ===
-
---- OllamaEmbeddings-3XcN7 ---
-
---- ChatQwenModel-IG1WG ---
-
---- Directory-QsHxu ---
-  path: ''
-

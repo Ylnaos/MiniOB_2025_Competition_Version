@@ -192,9 +192,7 @@ class MiniObConnector(object):
             self.__socket = sock
             if sock is not None:
                 self.log_func("Socket connection established successfully")
-                # 使用阻塞模式以避免 sendall 在非阻塞套接字上抛出 EAGAIN（[Errno 11]）
-                # 读取仍通过 poll + recv 保障超时控制
-                self.__socket.setblocking(True)
+                self.__socket.setblocking(False)
 
                 self.__poller = select.poll()
                 self.__poller.register(
@@ -377,12 +375,7 @@ class MiniObConnector(object):
             )
 
         start_time = time.time()
-        try:
-            self.log_func(
-                f"Executing SQL (length={len(sql)}): head='{sql[:256]}' tail='{sql[-256:]}'"
-            )
-        except Exception:
-            pass
+        self.log_func(f"Executing SQL: {sql}")
 
         try:
             data = str.encode(sql, self.__charset)
@@ -473,87 +466,101 @@ class MiniOBVectorStore(VectorStore):
                 operation="EMBEDDING_DIMENSION_CHECK",
                 details={"embedding_model": type(self.__embedding).__name__},
             ) from e
-
-        # 初始化元数据：建表与向量索引（若未存在）
-        self.__table = "rag_docs"
-        self.__index = "idx_rag_docs_embedding"
+        # 初始化 MiniOB 表与向量索引。避免使用 IF NOT EXISTS，采用探测+捕获异常的方式。
+        self.__table: str = "rag_docs"
+        self.__index: str = "rag_vec_idx"
+        # 默认维度以嵌入模型为准，后续可能根据表内样本自动对齐
+        self.__dim: int = int(self.__embedding_dimension)
         self.__ensure_initialized()
 
-    # ------------------------------
-    # 内部工具方法
-    # ------------------------------
-    def __vector_literal(self, vec: List[float]) -> str:
-        # 使用原生向量字面量 [v1,v2,...]，MiniOB 语法支持
-        inner = ",".join(f"{float(x):.8f}" for x in vec)
-        return "[" + inner + "]"
+    # ---- 内部工具方法 ----
+    def __log(self, msg: str) -> None:
+        try:
+            self.__log_func(msg)
+        except Exception:
+            pass
 
-    def __escape_text(self, text: str, limit_bytes: int = 1000) -> str:
-        """将任意文本规范化为单行可插入 SQL 的安全文本。
+    def __sql_escape_text(self, s: str) -> str:
+        """转义 SQL 文本字面量，最小必要：单引号转义为两个单引号。"""
+        if s is None:
+            return ""
+        return s.replace("'", "''")
 
-        处理策略：
-        - 去除管道/回车/换行，压缩连续空白为单空格；
-        - 过滤隐形/控制字符：\x00-\x1F, \x7F 以及常见零宽字符区段；
-        - 限制 UTF-8 字节长度（默认 1000B），按字节安全截断；
-        - 单引号转义为两连（SQL 标准）。
+    def __format_vector_literal(self, vec: List[float], max_decimals: int = 4) -> str:
+        """将向量格式化为 MiniOB 可解析的字面量字符串，如 '[0.12,1.0,-3.5]'。
+        说明：服务器侧会做进一步规范化（如保留位数）。
         """
-        import re
-
-        if text is None:
-            text = ""
-
-        s = str(text)
-        # 标准化空白并移除竖线分隔符，避免和服务端“ | ”列分隔冲突
-        s = s.replace("|", " ").replace("\r", " ").replace("\n", " ")
-
-        # 去除控制/不可见字符（含零宽、双向控制等）
-        s = re.sub(r"[\x00-\x08\x0B-\x1F\x7F]", " ", s)
-        s = re.sub(r"[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069]", " ", s)
-
-        # 压缩空白
-        s = " ".join(s.split())
-
-        # 按字节限制安全截断
-        if limit_bytes:
-            b = s.encode("utf-8", errors="ignore")
-            if len(b) > limit_bytes:
-                b = b[:limit_bytes]
-                # 以忽略错误的方式解码，确保不产生半个多字节字符
-                s = b.decode("utf-8", errors="ignore")
-
-        # 为适配 MiniOB 词法对字符串的解析（优先支持双引号字符串），
-        # 这里统一用双引号包裹文本，因此需要去除或替换内部双引号，避免打断字面量。
-        # 说明：若业务确有双引号，可替换为空格以保证语法安全。
-        s = s.replace('"', ' ')
-        return s
+        if not vec:
+            return "[]"
+        fmt = f"{{:.{max_decimals}f}}"
+        parts = []
+        for v in vec:
+            # 兼容 int/float
+            try:
+                fv = float(v)
+            except Exception:
+                fv = 0.0
+            parts.append(fmt.format(fv).rstrip("0").rstrip(".") or "0")
+        return "[" + ",".join(parts) + "]"
 
     def __ensure_initialized(self) -> None:
-        # 检查表是否存在：若不存在则创建；随后创建/确保存在向量索引
+        """探测/创建表与向量索引。避免使用 IF NOT EXISTS。"""
+        table = self.__table
+        index = self.__index
+        # 1) 探测表是否存在
         try:
-            _ = self.connector.exec(f"DESC {self.__table}")
-        except Exception:
-            # 建表：VECTOR 指定维度（BGE-M3标准为1024维）
+            self.connector.exec(f"DESC {table}")
+            self.__log(f"Table {table} exists.")
+        except Exception as e:
+            # 2) 建表：包含内容与向量列，向量维度与嵌入模型一致
             create_sql = (
-                f"CREATE TABLE {self.__table} ("
+                f"CREATE TABLE {table} ("  # 避免 IF NOT EXISTS
                 f"content TEXT, "
-                f"embedding VECTOR({self.__embedding_dimension})"
+                f"embedding VECTOR({self.__dim})"
                 f")"
             )
-            self.__log_func(f"Creating table: {create_sql}")
-            res = self.connector.exec(create_sql)
-            self.__log_func(f"Create table result: {res}")
+            self.__log(f"Creating table: {create_sql}")
+            try:
+                self.connector.exec(create_sql)
+                self.__log("Create table success.")
+            except Exception as ce:
+                raise MiniOBException(
+                    message=f"Create table failed: {ce}",
+                    operation="CREATE_TABLE",
+                    details={"sql": create_sql},
+                ) from ce
 
-        # 创建向量索引（若未存在）
+        # 2.5) 若表已存在（或刚建好为空），尝试从样本数据推断表内向量维度，以避免后续 ORDER BY L2/COSINE 维度不一致
+        try:
+            sample_sql = f"SELECT embedding FROM {table} LIMIT 1"
+            raw = self.connector.exec(sample_sql, total_timeout_seconds=5)
+            lines = [ln for ln in (raw or "").splitlines() if ln.strip()]
+            if len(lines) >= 2:
+                vec_text = lines[1].strip()
+                if vec_text.startswith("[") and vec_text.endswith("]"):
+                    body = vec_text[1:-1].strip()
+                    if body:
+                        dim_detect = body.count(",") + 1
+                        if dim_detect > 0:
+                            self.__dim = dim_detect
+                            self.__log(f"Detected dimension from table sample: {self.__dim}")
+        except Exception as _:
+            # 表为空或老版本 to_string 差异，忽略
+            pass
+
+        # 3) 创建向量索引（若已存在将抛错，捕获后忽略）
         try:
             index_sql = (
-                f"CREATE VECTOR INDEX {self.__index} "
-                f"ON {self.__table} (embedding) "
-                f"WITH (TYPE=IVFFLAT, DISTANCE=COSINE_DISTANCE, LISTS=64, PROBES=8)"
+                f"CREATE VECTOR INDEX {index} "
+                f"ON {table} (embedding) "
+                f"WITH(TYPE=IVFFLAT, DISTANCE=L2_DISTANCE, LISTS=64, PROBES=8)"
             )
-            self.__log_func(f"Ensuring vector index: {index_sql}")
-            _ = self.connector.exec(index_sql)
-        except Exception as e:
-            # 索引已存在或语法不支持时，跳过但记录
-            self.__log_func(f"Create vector index ignored: {e}")
+            self.__log(f"Ensuring vector index: {index_sql}")
+            self.connector.exec(index_sql)
+            self.__log("Vector index created.")
+        except Exception as ie:
+            # 可能已经存在或语法差异，忽略
+            self.__log(f"Create vector index ignored: {ie}")
 
     def similarity_search(
         self,
@@ -562,49 +569,64 @@ class MiniOBVectorStore(VectorStore):
         search_method: str = "Vector Search",
     ) -> list[Document]:
         self.__log_func(f"Performing similarity search for query: '{query}' with k={k}")
-        result_docs: list[Document] = []
+        result: list[Document] = []
 
-        if not query:
-            return result_docs
+        if not query or not query.strip():
+            return result
 
         try:
-            qvec = self.__embedding.embed_query(query)
+            qvec: List[float] = self.__embedding.embed_query(query)
+            if isinstance(qvec, list):
+                # 若表内维度更小，按表维度截断；若更大则保留，部分实现可在服务端做截断
+                if self.__dim > 0 and len(qvec) != self.__dim:
+                    qvec = qvec[: self.__dim]
         except Exception as e:
             raise MiniOBException(
                 message=f"Failed to embed query: {e}",
                 operation="EMBED_QUERY",
             ) from e
 
-        vec_lit = self.__vector_literal(qvec)
-        # 说明：PlainCommunicator 的查询结果以第一行表头，其后每行一条记录，\n 分隔
-        # 为避免文本内换行破坏解析，插入前已做单行化处理
+        vec_lit = self.__format_vector_literal(qvec)
+
+        # 采用基于距离的排序检索。若存在向量索引，优化器会重写为 VECTOR_INDEX_SCAN。
         sql = (
-            f"SELECT content FROM {self.__table} "
-            f"ORDER BY COSINE_DISTANCE(embedding, {vec_lit}) LIMIT {int(k)}"
+            f"SELECT content, L2_DISTANCE(embedding, '{vec_lit}') AS score "
+            f"FROM {self.__table} "
+            f"ORDER BY L2_DISTANCE(embedding, '{vec_lit}') ASC "
+            f"LIMIT {max(1, int(k))}"
         )
-        raw = self.connector.exec(sql)
+        self.__log(f"Search SQL: {sql}")
 
-        lines = [ln for ln in raw.splitlines() if ln and not ln.startswith('#')]
-        if not lines:
-            return result_docs
-        # 第 1 行是列名
-        header = [h.strip() for h in lines[0].split(' | ')]
         try:
-            cidx = header.index('content')
-        except ValueError:
-            cidx = 0
+            raw = self.connector.exec(sql, total_timeout_seconds=60)
+        except Exception as e:
+            raise MiniOBQueryException(
+                message=f"Search SQL failed: {e}", sql=sql
+            ) from e
 
-        for ln in lines[1:]:
-            # 只有 1 列时不含分隔符
-            if ' | ' in ln:
-                parts = ln.split(' | ')
-                content = parts[cidx]
-            else:
-                content = ln
-            result_docs.append(Document(page_content=content, metadata={}))
+        # 解析返回：第一行为表头，如 "content | score"；数据行以 " | " 分隔。
+        if not raw:
+            return result
+        lines = [ln for ln in raw.splitlines() if ln.strip()]
+        if not lines:
+            return result
 
-        self.__log_func(f"Similarity search completed. Found {len(result_docs)} documents")
-        return result_docs
+        header = lines[0]
+        # 后续每行，使用最后一个分隔符将 content 与 score 分割，避免 content 中包含 ' | ' 造成歧义
+        for line in lines[1:]:
+            pos = line.rfind(" | ")
+            if pos <= 0:
+                continue
+            content = line[:pos]
+            # score_str = line[pos+3:]  # 如需可解析为浮点用作元数据
+            result.append(Document(page_content=content, metadata={"source": self.__table}))
+
+        self.__log_func(f"Similarity search completed. Found {len(result)} documents")
+        return result
+
+    # 兼容 Langflow/LangChain 的统一搜索入口
+    def search(self, query: str, search_type: str = "similarity", k: int = 4, **kwargs: Any) -> list[Document]:
+        return self.similarity_search(query=query, k=k, search_method=search_type)
 
     def add_documents(
         self,
@@ -641,69 +663,26 @@ class MiniOBVectorStore(VectorStore):
                 row_count=len(page_contents),
             )
 
-        # 保守写入：逐行插入，最大程度降低 SQL 解析压力
-        batch_size = 1
-        total = len(page_contents)
-        inserted = 0
-        for start in range(0, total, batch_size):
-            values_sql = []
-            for i in range(start, min(start + batch_size, total)):
-                text = self.__escape_text(page_contents[i])
-                vec_lit = self.__vector_literal(embeddings[i])
-                # 使用双引号包裹文本，避免单引号在词法阶段被误解析
-                values_sql.append(f'("{text}", {vec_lit})')
-
-            if not values_sql:
+        # 插入数据到 MiniOB。避免使用批量插入，逐行确保兼容性。
+        inserted_ids: List[str] = []
+        for text, vec in zip(page_contents, embeddings):
+            if isinstance(vec, list) and self.__dim > 0 and len(vec) != self.__dim:
+                vec = vec[: self.__dim]
+            text_escaped = self.__sql_escape_text(text)
+            vec_lit = self.__format_vector_literal(vec)
+            sql = (
+                f"INSERT INTO {self.__table} (content, embedding) "
+                f"VALUES ('{text_escaped}', '{vec_lit}')"
+            )
+            try:
+                self.connector.exec(sql, total_timeout_seconds=120)
+                inserted_ids.append("")  # MiniOB 暂无返回行 id，这里占位即可
+            except Exception as e:
+                # 单条失败不中断整体流程，记录并继续
+                self.__log(f"Insert failed, skip one row: {e}")
                 continue
 
-            insert_sql = (
-                f"insert into {self.__table} (content, embedding) values "
-                + ",".join(values_sql)
-            )
-            # 为便于线上定位问题，打印长度与首尾片段
-            try:
-                self.__log_func(
-                    f"Insert SQL length={len(insert_sql)} head='{insert_sql[:256]}' tail='{insert_sql[-256:]}'"
-                )
-            except Exception:
-                pass
-
-            try:
-                res = self.connector.exec(insert_sql)
-                self.__log_func(f"Inserted {len(values_sql)} rows. Result: {res}")
-                inserted += len(values_sql)
-            except MiniOBQueryException as e:
-                # 回退策略：进一步缩短内容后重试一次
-                try:
-                    short_text = self.__escape_text(page_contents[start], limit_bytes=512)
-                    fallback_sql = (
-                        f'insert into {self.__table} (content, embedding) values ("{short_text}", {vec_lit})'
-                    )
-                    self.__log_func(
-                        f"Retry insert with shorter content. length={len(fallback_sql)}"
-                    )
-                    res = self.connector.exec(fallback_sql)
-                    self.__log_func(
-                        f"Fallback insert succeeded for row {start}. Result: {res}"
-                    )
-                    inserted += 1
-                except Exception as e2:
-                    # 记录并继续后续数据，避免整批失败
-                    self.__log_func(
-                        f"Insert failed and fallback failed for row {start}: {e2}"
-                    )
-
-        # 可选：触发表统计优化
-        try:
-            _ = self.connector.exec(f"analyze table {self.__table}")
-        except Exception:
-            pass
-
-        return [str(i) for i in range(inserted)]
-
-    # Langflow 组件适配：component 调用的是 vector_store.search(...)
-    def search(self, query: str, search_type: str = "similarity", k: int = 4):
-        return self.similarity_search(query=query, k=k)
+        return inserted_ids
 
     @classmethod
     def from_texts(
@@ -780,30 +759,8 @@ class MiniOBVectorStoreComponent(LCVectorStoreComponent):
     ]
     
     def _already_build(self) -> bool:
-        # 判断是否已构建：表存在且行数>0 即视为已构建
-        try:
-            # 触发连接与表/索引检查
-            vs = MiniOBVectorStore(
-                embedding=self.embedding_model if self.embedding_model else None,
-                server_address=self.server_address if self.server_address else "127.0.0.1",
-                server_port=self.server_port if self.server_port else 6789,
-                server_socket=self.server_socket if self.server_socket else "",
-                time_limit=self.time_limit if self.time_limit else 10.0,
-                charset=self.charset if self.charset else "utf-8",
-                log_func=self.log,
-            )
-            raw = vs.connector.exec("select count(*) from rag_docs limit 1")
-            # 解析结果：第一行表头，第二行数值
-            lines = [ln for ln in raw.splitlines() if ln and not ln.startswith('#')]
-            if len(lines) >= 2:
-                try:
-                    cnt = int(lines[1].split(' | ')[-1].strip())
-                    return cnt > 0
-                except Exception:
-                    return False
-            return False
-        except Exception:
-            return False
+        # : check if the document has been built
+        return False
 
     def _add_documents_to_vector_store(self, vector_store: MiniOBVectorStore) -> None:
         self.log("Preparing to add documents to vector store...")
@@ -905,3 +862,4 @@ class MiniOBVectorStoreComponent(LCVectorStoreComponent):
 
         self.log(f"Found {len(data)} documents for query: '{query}'")
         return data
+TODO
