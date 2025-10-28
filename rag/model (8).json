@@ -7,7 +7,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "Directory",
-            "id": "Directory-TGIZ5",
+            "id": "Directory-kKuza",
             "name": "dataframe",
             "output_types": [
               "DataFrame"
@@ -15,7 +15,7 @@
           },
           "targetHandle": {
             "fieldName": "data_inputs",
-            "id": "SplitText-7hapY",
+            "id": "SplitText-Rwd8t",
             "inputTypes": [
               "Data",
               "DataFrame",
@@ -24,12 +24,12 @@
             "type": "other"
           }
         },
-        "id": "reactflow__edge-Directory-TGIZ5{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-TGIZ5œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-SplitText-7hapY{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-7hapYœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}",
+        "id": "reactflow__edge-Directory-kKuza{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-kKuzaœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-SplitText-Rwd8t{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-Rwd8tœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "Directory-TGIZ5",
-        "sourceHandle": "{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-TGIZ5œ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "SplitText-7hapY",
-        "targetHandle": "{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-7hapYœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}"
+        "source": "Directory-kKuza",
+        "sourceHandle": "{œdataTypeœ:œDirectoryœ,œidœ:œDirectory-kKuzaœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "SplitText-Rwd8t",
+        "targetHandle": "{œfieldNameœ:œdata_inputsœ,œidœ:œSplitText-Rwd8tœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -37,7 +37,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "SplitText",
-            "id": "SplitText-7hapY",
+            "id": "SplitText-Rwd8t",
             "name": "dataframe",
             "output_types": [
               "DataFrame"
@@ -45,7 +45,7 @@
           },
           "targetHandle": {
             "fieldName": "ingest_data",
-            "id": "MiniOB-NpwFB",
+            "id": "MiniOB-H7uKN",
             "inputTypes": [
               "Data",
               "DataFrame"
@@ -53,12 +53,12 @@
             "type": "other"
           }
         },
-        "id": "reactflow__edge-SplitText-7hapY{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-7hapYœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-MiniOB-NpwFB{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-NpwFBœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}",
+        "id": "reactflow__edge-SplitText-Rwd8t{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-Rwd8tœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-MiniOB-H7uKN{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-H7uKNœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "SplitText-7hapY",
-        "sourceHandle": "{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-7hapYœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "MiniOB-NpwFB",
-        "targetHandle": "{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-NpwFBœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}"
+        "source": "SplitText-Rwd8t",
+        "sourceHandle": "{œdataTypeœ:œSplitTextœ,œidœ:œSplitText-Rwd8tœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "MiniOB-H7uKN",
+        "targetHandle": "{œfieldNameœ:œingest_dataœ,œidœ:œMiniOB-H7uKNœ,œinputTypesœ:[œDataœ,œDataFrameœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -66,7 +66,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "OllamaEmbeddings",
-            "id": "OllamaEmbeddings-WRolM",
+            "id": "OllamaEmbeddings-PEjBI",
             "name": "embeddings",
             "output_types": [
               "Embeddings"
@@ -74,19 +74,19 @@
           },
           "targetHandle": {
             "fieldName": "embedding_model",
-            "id": "MiniOB-NpwFB",
+            "id": "MiniOB-H7uKN",
             "inputTypes": [
               "Embeddings"
             ],
             "type": "other"
           }
         },
-        "id": "reactflow__edge-OllamaEmbeddings-WRolM{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-WRolMœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}-MiniOB-NpwFB{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-NpwFBœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}",
+        "id": "reactflow__edge-OllamaEmbeddings-PEjBI{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-PEjBIœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}-MiniOB-H7uKN{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-H7uKNœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "OllamaEmbeddings-WRolM",
-        "sourceHandle": "{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-WRolMœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}",
-        "target": "MiniOB-NpwFB",
-        "targetHandle": "{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-NpwFBœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}"
+        "source": "OllamaEmbeddings-PEjBI",
+        "sourceHandle": "{œdataTypeœ:œOllamaEmbeddingsœ,œidœ:œOllamaEmbeddings-PEjBIœ,œnameœ:œembeddingsœ,œoutput_typesœ:[œEmbeddingsœ]}",
+        "target": "MiniOB-H7uKN",
+        "targetHandle": "{œfieldNameœ:œembedding_modelœ,œidœ:œMiniOB-H7uKNœ,œinputTypesœ:[œEmbeddingsœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -94,7 +94,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "ChatInput",
-            "id": "ChatInput-Kpdte",
+            "id": "ChatInput-dZGaB",
             "name": "message",
             "output_types": [
               "Message"
@@ -102,19 +102,19 @@
           },
           "targetHandle": {
             "fieldName": "search_query",
-            "id": "MiniOB-NpwFB",
+            "id": "MiniOB-H7uKN",
             "inputTypes": [
               "Message"
             ],
             "type": "query"
           }
         },
-        "id": "reactflow__edge-ChatInput-Kpdte{œdataTypeœ:œChatInputœ,œidœ:œChatInput-Kpdteœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-MiniOB-NpwFB{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-NpwFBœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}",
+        "id": "reactflow__edge-ChatInput-dZGaB{œdataTypeœ:œChatInputœ,œidœ:œChatInput-dZGaBœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-MiniOB-H7uKN{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-H7uKNœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}",
         "selected": false,
-        "source": "ChatInput-Kpdte",
-        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-Kpdteœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "MiniOB-NpwFB",
-        "targetHandle": "{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-NpwFBœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}"
+        "source": "ChatInput-dZGaB",
+        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-dZGaBœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "MiniOB-H7uKN",
+        "targetHandle": "{œfieldNameœ:œsearch_queryœ,œidœ:œMiniOB-H7uKNœ,œinputTypesœ:[œMessageœ],œtypeœ:œqueryœ}"
       },
       {
         "animated": false,
@@ -122,7 +122,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "MiniOB",
-            "id": "MiniOB-NpwFB",
+            "id": "MiniOB-H7uKN",
             "name": "dataframe",
             "output_types": [
               "DataFrame"
@@ -130,7 +130,7 @@
           },
           "targetHandle": {
             "fieldName": "input_data",
-            "id": "parser-TSppi",
+            "id": "parser-9gfI2",
             "inputTypes": [
               "DataFrame",
               "Data"
@@ -138,40 +138,12 @@
             "type": "other"
           }
         },
-        "id": "reactflow__edge-MiniOB-NpwFB{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-NpwFBœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-parser-TSppi{œfieldNameœ:œinput_dataœ,œidœ:œparser-TSppiœ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}",
+        "id": "reactflow__edge-MiniOB-H7uKN{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-H7uKNœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}-parser-9gfI2{œfieldNameœ:œinput_dataœ,œidœ:œparser-9gfI2œ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}",
         "selected": false,
-        "source": "MiniOB-NpwFB",
-        "sourceHandle": "{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-NpwFBœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
-        "target": "parser-TSppi",
-        "targetHandle": "{œfieldNameœ:œinput_dataœ,œidœ:œparser-TSppiœ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}"
-      },
-      {
-        "animated": false,
-        "className": "",
-        "data": {
-          "sourceHandle": {
-            "dataType": "parser",
-            "id": "parser-TSppi",
-            "name": "parsed_text",
-            "output_types": [
-              "Message"
-            ]
-          },
-          "targetHandle": {
-            "fieldName": "context",
-            "id": "Prompt-zz1Yd",
-            "inputTypes": [
-              "Message"
-            ],
-            "type": "str"
-          }
-        },
-        "id": "reactflow__edge-parser-TSppi{œdataTypeœ:œparserœ,œidœ:œparser-TSppiœ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}-Prompt-zz1Yd{œfieldNameœ:œcontextœ,œidœ:œPrompt-zz1Ydœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
-        "selected": false,
-        "source": "parser-TSppi",
-        "sourceHandle": "{œdataTypeœ:œparserœ,œidœ:œparser-TSppiœ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "Prompt-zz1Yd",
-        "targetHandle": "{œfieldNameœ:œcontextœ,œidœ:œPrompt-zz1Ydœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "MiniOB-H7uKN",
+        "sourceHandle": "{œdataTypeœ:œMiniOBœ,œidœ:œMiniOB-H7uKNœ,œnameœ:œdataframeœ,œoutput_typesœ:[œDataFrameœ]}",
+        "target": "parser-9gfI2",
+        "targetHandle": "{œfieldNameœ:œinput_dataœ,œidœ:œparser-9gfI2œ,œinputTypesœ:[œDataFrameœ,œDataœ],œtypeœ:œotherœ}"
       },
       {
         "animated": false,
@@ -179,7 +151,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "ChatInput",
-            "id": "ChatInput-Kpdte",
+            "id": "ChatInput-dZGaB",
             "name": "message",
             "output_types": [
               "Message"
@@ -187,19 +159,47 @@
           },
           "targetHandle": {
             "fieldName": "question",
-            "id": "Prompt-zz1Yd",
+            "id": "Prompt-zKh25",
             "inputTypes": [
               "Message"
             ],
             "type": "str"
           }
         },
-        "id": "reactflow__edge-ChatInput-Kpdte{œdataTypeœ:œChatInputœ,œidœ:œChatInput-Kpdteœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-Prompt-zz1Yd{œfieldNameœ:œquestionœ,œidœ:œPrompt-zz1Ydœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "reactflow__edge-ChatInput-dZGaB{œdataTypeœ:œChatInputœ,œidœ:œChatInput-dZGaBœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-Prompt-zKh25{œfieldNameœ:œquestionœ,œidœ:œPrompt-zKh25œ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "ChatInput-Kpdte",
-        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-Kpdteœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "Prompt-zz1Yd",
-        "targetHandle": "{œfieldNameœ:œquestionœ,œidœ:œPrompt-zz1Ydœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "ChatInput-dZGaB",
+        "sourceHandle": "{œdataTypeœ:œChatInputœ,œidœ:œChatInput-dZGaBœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "Prompt-zKh25",
+        "targetHandle": "{œfieldNameœ:œquestionœ,œidœ:œPrompt-zKh25œ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+      },
+      {
+        "animated": false,
+        "className": "",
+        "data": {
+          "sourceHandle": {
+            "dataType": "parser",
+            "id": "parser-9gfI2",
+            "name": "parsed_text",
+            "output_types": [
+              "Message"
+            ]
+          },
+          "targetHandle": {
+            "fieldName": "context",
+            "id": "Prompt-zKh25",
+            "inputTypes": [
+              "Message"
+            ],
+            "type": "str"
+          }
+        },
+        "id": "reactflow__edge-parser-9gfI2{œdataTypeœ:œparserœ,œidœ:œparser-9gfI2œ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}-Prompt-zKh25{œfieldNameœ:œcontextœ,œidœ:œPrompt-zKh25œ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "selected": false,
+        "source": "parser-9gfI2",
+        "sourceHandle": "{œdataTypeœ:œparserœ,œidœ:œparser-9gfI2œ,œnameœ:œparsed_textœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "Prompt-zKh25",
+        "targetHandle": "{œfieldNameœ:œcontextœ,œidœ:œPrompt-zKh25œ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       },
       {
         "animated": false,
@@ -207,7 +207,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "Prompt",
-            "id": "Prompt-zz1Yd",
+            "id": "Prompt-zKh25",
             "name": "prompt",
             "output_types": [
               "Message"
@@ -215,19 +215,19 @@
           },
           "targetHandle": {
             "fieldName": "input_value",
-            "id": "ChatQwenModel-fSPD4",
+            "id": "ChatQwenModel-Yd5Td",
             "inputTypes": [
               "Message"
             ],
             "type": "str"
           }
         },
-        "id": "reactflow__edge-Prompt-zz1Yd{œdataTypeœ:œPromptœ,œidœ:œPrompt-zz1Ydœ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}-ChatQwenModel-fSPD4{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-fSPD4œ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "reactflow__edge-Prompt-zKh25{œdataTypeœ:œPromptœ,œidœ:œPrompt-zKh25œ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}-ChatQwenModel-Yd5Td{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-Yd5Tdœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "Prompt-zz1Yd",
-        "sourceHandle": "{œdataTypeœ:œPromptœ,œidœ:œPrompt-zz1Ydœ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "ChatQwenModel-fSPD4",
-        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-fSPD4œ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "Prompt-zKh25",
+        "sourceHandle": "{œdataTypeœ:œPromptœ,œidœ:œPrompt-zKh25œ,œnameœ:œpromptœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "ChatQwenModel-Yd5Td",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatQwenModel-Yd5Tdœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       },
       {
         "animated": false,
@@ -235,7 +235,7 @@
         "data": {
           "sourceHandle": {
             "dataType": "ChatQwenModel",
-            "id": "ChatQwenModel-fSPD4",
+            "id": "ChatQwenModel-Yd5Td",
             "name": "text_output",
             "output_types": [
               "Message"
@@ -243,7 +243,7 @@
           },
           "targetHandle": {
             "fieldName": "input_value",
-            "id": "ChatOutput-YgUCV",
+            "id": "ChatOutput-5Gx29",
             "inputTypes": [
               "Data",
               "DataFrame",
@@ -252,20 +252,19 @@
             "type": "str"
           }
         },
-        "id": "reactflow__edge-ChatQwenModel-fSPD4{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-fSPD4œ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-ChatOutput-YgUCV{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-YgUCVœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__ChatQwenModel-Yd5Td{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-Yd5Tdœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}-ChatOutput-5Gx29{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-5Gx29œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "ChatQwenModel-fSPD4",
-        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-fSPD4œ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "ChatOutput-YgUCV",
-        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-YgUCVœ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}"
+        "source": "ChatQwenModel-Yd5Td",
+        "sourceHandle": "{œdataTypeœ:œChatQwenModelœ,œidœ:œChatQwenModel-Yd5Tdœ,œnameœ:œtext_outputœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "ChatOutput-5Gx29",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œChatOutput-5Gx29œ,œinputTypesœ:[œDataœ,œDataFrameœ,œMessageœ],œtypeœ:œstrœ}"
       },
       {
         "animated": false,
-        "className": "",
         "data": {
           "sourceHandle": {
             "dataType": "ChatOutput",
-            "id": "ChatOutput-YgUCV",
+            "id": "ChatOutput-5Gx29",
             "name": "message",
             "output_types": [
               "Message"
@@ -273,19 +272,19 @@
           },
           "targetHandle": {
             "fieldName": "input_value",
-            "id": "TestOutput-tWCju",
+            "id": "TestOutput-XDUWN",
             "inputTypes": [
               "Message"
             ],
             "type": "str"
           }
         },
-        "id": "reactflow__edge-ChatOutput-YgUCV{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-YgUCVœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-TestOutput-tWCju{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-tWCjuœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
+        "id": "xy-edge__ChatOutput-5Gx29{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-5Gx29œ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}-TestOutput-XDUWN{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-XDUWNœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}",
         "selected": false,
-        "source": "ChatOutput-YgUCV",
-        "sourceHandle": "{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-YgUCVœ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
-        "target": "TestOutput-tWCju",
-        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-tWCjuœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
+        "source": "ChatOutput-5Gx29",
+        "sourceHandle": "{œdataTypeœ:œChatOutputœ,œidœ:œChatOutput-5Gx29œ,œnameœ:œmessageœ,œoutput_typesœ:[œMessageœ]}",
+        "target": "TestOutput-XDUWN",
+        "targetHandle": "{œfieldNameœ:œinput_valueœ,œidœ:œTestOutput-XDUWNœ,œinputTypesœ:[œMessageœ],œtypeœ:œstrœ}"
       }
     ],
     "nodes": [
@@ -293,7 +292,7 @@
         "data": {
           "description": "Create a prompt template with dynamic variables.",
           "display_name": "Prompt",
-          "id": "Prompt-zz1Yd",
+          "id": "Prompt-zKh25",
           "node": {
             "base_classes": [
               "Message"
@@ -310,21 +309,16 @@
             "display_name": "Prompt",
             "documentation": "",
             "edited": false,
-            "error": null,
             "field_order": [
               "template",
               "tool_placeholder"
             ],
             "frozen": false,
-            "full_path": null,
             "icon": "braces",
-            "is_composition": null,
-            "is_input": null,
-            "is_output": null,
             "legacy": false,
+            "lf_version": "1.6.4",
             "metadata": {},
             "minimized": false,
-            "name": "",
             "output_types": [],
             "outputs": [
               {
@@ -346,8 +340,6 @@
               }
             ],
             "pinned": false,
-            "priority": null,
-            "replacement": null,
             "template": {
               "_type": "Component",
               "code": {
@@ -429,7 +421,7 @@
                 "tool_mode": false,
                 "trace_as_input": true,
                 "type": "prompt",
-                "value": "You are a knowledgeable and reliable AI assistant.  \nUse the information from the provided context to answer the question as accurately, completely, and clearly as possible.  \nIf the context is irrelevant or insufficient, use your own knowledge to give a helpful and well-reasoned answer.  \nAvoid saying “I don’t know” unless absolutely necessary.  \nCite facts or terms mentioned in the context whenever possible to increase factual consistency.\n\nContext:\n{context}\n\nQuestion:\n{question}\n\nAnswer:\n"
+                "value": "{context}\n\n---\n\nGiven the context above, answer the question as best as possible.\n\nQuestion: {question}\n\nAnswer: "
               },
               "tool_placeholder": {
                 "_input_type": "MessageTextInput",
@@ -462,14 +454,14 @@
         },
         "dragging": false,
         "height": 433,
-        "id": "Prompt-zz1Yd",
+        "id": "Prompt-zKh25",
         "measured": {
           "height": 433,
           "width": 320
         },
         "position": {
-          "x": 1995.7953090701576,
-          "y": 656.8251970813468
+          "x": 2070.3679084825735,
+          "y": 614.9598781129731
         },
         "positionAbsolute": {
           "x": 1977.9097981422992,
@@ -483,7 +475,7 @@
         "data": {
           "description": "Display a chat message in the Playground.",
           "display_name": "Chat Output",
-          "id": "ChatOutput-YgUCV",
+          "id": "ChatOutput-5Gx29",
           "node": {
             "base_classes": [
               "Message"
@@ -509,7 +501,7 @@
             "frozen": false,
             "icon": "MessagesSquare",
             "legacy": false,
-            "lf_version": "1.5.0.post2",
+            "lf_version": "1.6.4",
             "metadata": {
               "code_hash": "6f74e04e39d5",
               "module": "langflow.components.input_output.chat_output.ChatOutput"
@@ -769,14 +761,14 @@
         },
         "dragging": false,
         "height": 234,
-        "id": "ChatOutput-YgUCV",
+        "id": "ChatOutput-5Gx29",
         "measured": {
           "height": 234,
           "width": 320
         },
         "position": {
-          "x": 2825.2325935664726,
-          "y": 928.4705574248117
+          "x": 2988.1651513939455,
+          "y": 940.2011301830668
         },
         "positionAbsolute": {
           "x": 2734.385670401691,
@@ -788,7 +780,7 @@
       },
       {
         "data": {
-          "id": "parser-TSppi",
+          "id": "parser-9gfI2",
           "node": {
             "base_classes": [
               "Message"
@@ -811,7 +803,7 @@
             "icon": "braces",
             "key": "parser",
             "legacy": false,
-            "lf_version": "1.5.0.post1",
+            "lf_version": "1.6.4",
             "metadata": {},
             "minimized": false,
             "output_types": [],
@@ -951,21 +943,21 @@
           "type": "parser"
         },
         "dragging": false,
-        "id": "parser-TSppi",
+        "id": "parser-9gfI2",
         "measured": {
           "height": 358,
           "width": 320
         },
         "position": {
-          "x": 1595.4955059732686,
-          "y": 571.9024955919464
+          "x": 1634.744242506119,
+          "y": 569.285913156423
         },
         "selected": false,
         "type": "genericNode"
       },
       {
         "data": {
-          "id": "MiniOB-NpwFB",
+          "id": "MiniOB-H7uKN",
           "node": {
             "base_classes": [
               "Data",
@@ -994,6 +986,7 @@
             "frozen": false,
             "icon": "database",
             "legacy": false,
+            "lf_version": "1.6.4",
             "metadata": {},
             "minimized": false,
             "output_types": [],
@@ -1088,7 +1081,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "code",
-                "value": "import json\nimport os\nimport select\nimport socket\nimport subprocess\nimport time\nfrom typing import Any, Optional, Dict\nfrom typing import List\n\nfrom langchain_core.documents import Document\nfrom langchain_core.embeddings import Embeddings\nfrom langchain_core.vectorstores import VST, VectorStore\nfrom langflow.base.vectorstores.model import (\n    LCVectorStoreComponent,\n    check_cached_vector_store,\n)\nfrom langflow.base.vectorstores.vector_store_connection_decorator import (\n    vector_store_connection,\n)\nfrom langflow.helpers import docs_to_data\nfrom langflow.inputs import StrInput, IntInput, FloatInput\nfrom langflow.io import HandleInput\nfrom langflow.schema.data import Data\nfrom langflow.serialization import serialize\n\n\nclass MiniOBException(Exception):\n    \"\"\"Base exception class for MiniOB operations.\"\"\"\n\n    def __init__(\n        self, message: str = None, operation: str = None, details: Dict[str, Any] = None\n    ) -> None:\n        self.operation = operation\n        self.details = details or {}\n\n        if message:\n            full_message = message\n        else:\n            full_message = \"MiniOB operation failed\"\n\n        if operation:\n            full_message = f\"[{operation}] {full_message}\"\n\n        if details:\n            detail_str = \", \".join([f\"{k}={v}\" for k, v in details.items()])\n            full_message = f\"{full_message} (Details: {detail_str})\"\n\n        super().__init__(full_message)\n\n\nclass MiniOBConnectionException(MiniOBException):\n    \"\"\"Exception raised when connection to MiniOB server fails.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        server_address: str = None,\n        server_port: int = None,\n        server_socket: str = None,\n        error_code: str = None,\n    ) -> None:\n        details = {}\n        if server_address:\n            details[\"server_address\"] = server_address\n        if server_port:\n            details[\"server_port\"] = server_port\n        if server_socket:\n            details[\"server_socket\"] = server_socket\n        if error_code:\n            details[\"error_code\"] = error_code\n\n        super().__init__(\n            message or \"Failed to connect to MiniOB server\",\n            operation=\"CONNECTION\",\n            details=details,\n        )\n\n\nclass MiniOBQueryException(MiniOBException):\n    \"\"\"Exception raised when SQL query execution fails.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        sql: str = None,\n        result: str = None,\n        execution_time: float = None,\n    ) -> None:\n        details = {}\n        if sql:\n            details[\"sql\"] = sql[:200] + \"...\" if len(sql) > 200 else sql\n        if result:\n            details[\"result\"] = result\n        if execution_time:\n            details[\"execution_time_seconds\"] = execution_time\n\n        super().__init__(\n            message or \"SQL query execution failed\",\n            operation=\"QUERY_EXECUTION\",\n            details=details,\n        )\n\n\nclass MiniOBDataException(MiniOBException):\n    \"\"\"Exception raised when data processing fails.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        data_type: str = None,\n        expected_format: str = None,\n        actual_format: str = None,\n        row_count: int = None,\n    ) -> None:\n        details = {}\n        if data_type:\n            details[\"data_type\"] = data_type\n        if expected_format:\n            details[\"expected_format\"] = expected_format\n        if actual_format:\n            details[\"actual_format\"] = actual_format\n        if row_count is not None:\n            details[\"row_count\"] = row_count\n\n        super().__init__(\n            message or \"Data processing failed\",\n            operation=\"DATA_PROCESSING\",\n            details=details,\n        )\n\n\nclass MiniOBTimeoutException(MiniOBException):\n    \"\"\"Exception raised when operations timeout.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        timeout_seconds: float = None,\n        operation_type: str = None,\n    ) -> None:\n        details = {}\n        if timeout_seconds:\n            details[\"timeout_seconds\"] = timeout_seconds\n        if operation_type:\n            details[\"operation_type\"] = operation_type\n\n        super().__init__(\n            message or \"Operation timed out\", operation=\"TIMEOUT\", details=details\n        )\n\n\nclass MiniObConnector(object):\n    def __init__(\n        self,\n        server_address: str,\n        server_port: int,\n        server_socket: str,\n        time_limit: float,\n        charset: str,\n        log_func=None,\n    ):\n        if server_port < 0 or server_port > 65535:\n            raise MiniOBConnectionException(\n                message=f\"Invalid server port: {server_port}\",\n                server_address=server_address,\n                server_port=server_port,\n                error_code=\"INVALID_PORT\",\n            )\n\n        self.log_func = log_func or (lambda msg: None)\n\n        self.__server_address = server_address\n        self.__server_port = server_port\n        self.__server_socket = os.getenv(\"MINIOB_SERVER_SOCKET\", \"\")\n        self.__buffer_size = 8192\n        self.__charset = charset\n        self.__socket = None\n\n        self.__time_limit = time_limit\n        if not self.__time_limit:\n            self.__time_limit = 10.0\n\n        self.log_func(f\"Initializing MiniOB connector...\")\n        try:\n            if len(self.__server_socket) > 0:\n                self.log_func(f\"Using Unix socket: {self.__server_socket}\")\n                sock = self.__init_unix_socket(self.__server_socket)\n            else:\n                self.log_func(f\"Using TCP connection: {server_address}:{server_port}\")\n                sock = self.__init_tcp_socket(self.__server_address, self.__server_port)\n\n            self.__socket = sock\n            if sock is not None:\n                self.log_func(\"Socket connection established successfully\")\n                self.__socket.setblocking(False)\n\n                self.__poller = select.poll()\n                self.__poller.register(\n                    self.__socket,\n                    select.POLLIN | select.POLLPRI | select.POLLHUP | select.POLLERR,\n                )\n                self.log_func(\"Socket poller configured successfully\")\n            else:\n                self.log_func(\"Failed to establish socket connection\")\n                raise MiniOBConnectionException(\n                    message=\"Socket connection returned None\",\n                    server_address=server_address,\n                    server_port=server_port,\n                    server_socket=server_socket,\n                    error_code=\"NULL_SOCKET\",\n                )\n        except Exception as e:\n            if isinstance(e, MiniOBConnectionException):\n                raise\n            else:\n                raise MiniOBConnectionException(\n                    message=f\"Failed to initialize connection: {str(e)}\",\n                    server_address=server_address,\n                    server_port=server_port,\n                    server_socket=server_socket,\n                    error_code=\"INIT_FAILED\",\n                ) from e\n\n    @staticmethod\n    def __init_tcp_socket(server_address: str, server_port: int):\n        try:\n            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n            s.connect((server_address, server_port))\n            return s\n        except socket.error as e:\n            raise MiniOBConnectionException(\n                message=f\"Failed to establish TCP connection: {str(e)}\",\n                server_address=server_address,\n                server_port=server_port,\n                error_code=\"TCP_CONNECTION_FAILED\",\n            ) from e\n        except Exception as e:\n            raise MiniOBConnectionException(\n                message=f\"Unexpected error during TCP connection: {str(e)}\",\n                server_address=server_address,\n                server_port=server_port,\n                error_code=\"TCP_UNEXPECTED_ERROR\",\n            ) from e\n\n    @staticmethod\n    def __init_unix_socket(server_socket: str):\n        try:\n            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n            sock.connect(server_socket)\n            return sock\n        except socket.error as e:\n            raise MiniOBConnectionException(\n                message=f\"Failed to establish Unix socket connection: {str(e)}\",\n                server_socket=server_socket,\n                error_code=\"UNIX_SOCKET_CONNECTION_FAILED\",\n            ) from e\n        except Exception as e:\n            raise MiniOBConnectionException(\n                message=f\"Unexpected error during Unix socket connection: {str(e)}\",\n                server_socket=server_socket,\n                error_code=\"UNIX_SOCKET_UNEXPECTED_ERROR\",\n            ) from e\n\n    def __recv_response(\n        self,\n        timeout: float,\n        total_timeout_seconds: int,\n    ) -> str:\n        result = b\"\"\n\n        if not timeout:\n            timeout = self.__time_limit\n\n        if timeout is not None:\n            timeout *= 1000\n\n        deadline = time.time() + 3600 * 24\n        if total_timeout_seconds is not None and total_timeout_seconds > 0:\n            deadline = time.time() + total_timeout_seconds\n\n        while time.time() < deadline:\n            events = self.__poller.poll(timeout)\n            if len(events) == 0:\n                raise MiniOBTimeoutException(\n                    message=f\"Poll timeout after {timeout / 1000} second(s)\",\n                    timeout_seconds=timeout / 1000,\n                    operation_type=\"SOCKET_POLL\",\n                )\n\n            (_, event) = events[0]\n            if event & (select.POLLHUP | select.POLLERR):\n                error_details = {\n                    \"POLLHUP\": bool(event & select.POLLHUP),\n                    \"POLLERR\": bool(event & select.POLLERR),\n                    \"event_code\": event,\n                }\n                msg = (\n                    f\"Failed to receive from server. poll return \"\n                    f\"POLLHUP={str(event & select.POLLHUP)} or POLLERR={str(event & select.POLLERR)}\"\n                )\n                self.log_func(msg)\n                raise MiniOBConnectionException(\n                    message=\"Socket connection error during polling\",\n                    error_code=\"SOCKET_POLL_ERROR\",\n                )\n\n            data = self.__socket.recv(self.__buffer_size)\n            if len(data) > 0:\n                try:\n                    if data[0] == 0 and len(result) == 0:\n                        self.log_func(\"Error: receive from server \\\\0 byte\")\n                        ps_ef = subprocess.run(\n                            [\"ps\", \"-ef\"],\n                            stdout=subprocess.PIPE,\n                            stderr=subprocess.PIPE,\n                            universal_newlines=True,\n                        )\n\n                        self.log_func(f\"Process status stdout: {str(ps_ef.stdout)}\")\n                        self.log_func(f\"Process status stderr: {str(ps_ef.stderr)}\")\n                except BaseException as ex:\n                    self.log_func(f\"Exception during data processing: {ex}\")\n\n                result += data\n                self.log_func(\n                    f\"Received from server (size={len(data)}): {data[:100]}...\"\n                )\n\n                if data.endswith(b\"\\0\"):\n\n                    result = result[:-1]\n                    try:\n                        decoded_result = result.decode(encoding=self.__charset)\n                        self.log_func(\n                            f\"Successfully decoded response with length {len(decoded_result)}\"\n                        )\n                        return decoded_result.strip() + \"\\n\"\n                    except UnicodeDecodeError as e:\n                        self.log_func(f\"Unicode decode error: {e}\")\n\n                        decoded_result = result.decode(\n                            encoding=self.__charset, errors=\"replace\"\n                        )\n                        self.log_func(\n                            f\"Decoded with error handling, length: {len(decoded_result)}\"\n                        )\n                        return decoded_result.strip() + \"\\n\"\n            else:\n                self.log_func(f\"Error: receive from server returned zero length data\")\n                raise MiniOBConnectionException(\n                    message=\"Received zero length data from server - connection may be closed\",\n                    error_code=\"ZERO_LENGTH_DATA\",\n                )\n\n        if time.time() >= deadline:\n            self.log_func(\n                f\"Timeout: receive from server timeout after {total_timeout_seconds} seconds\"\n            )\n\n        raise MiniOBTimeoutException(\n            message=f\"Response timeout after {total_timeout_seconds} second(s)\",\n            timeout_seconds=total_timeout_seconds,\n            operation_type=\"RECEIVE_RESPONSE\",\n        )\n\n    def exec(\n        self,\n        sql: str,\n        timeout=None,\n        total_timeout_seconds=None,\n    ) -> str:\n        if not sql:\n            raise MiniOBQueryException(\n                message=\"SQL query cannot be empty or None\", sql=sql or \"None\"\n            )\n\n        start_time = time.time()\n        self.log_func(f\"Executing SQL: {sql}\")\n\n        try:\n            data = str.encode(sql, self.__charset)\n            self.__socket.sendall(data)\n            self.__socket.sendall(b\"\\0\")\n            self.log_func(f\"SQL command sent to server (size={len(data) + 1}): '{sql}'\")\n            self.log_func(\"SQL command sent to server, waiting for response...\")\n\n            result = self.__recv_response(timeout, total_timeout_seconds)\n            execution_time = time.time() - start_time\n\n            self.log_func(f\"SQL response received from server: '{result}'\")\n            self.log_func(f\"SQL execution completed with result: {result}\")\n\n            result_lower = result.lower().strip()\n            if (\n                result_lower.startswith(\"error\")\n                or \"failed\" in result_lower\n                or \"exception\" in result_lower\n            ):\n                raise MiniOBQueryException(\n                    message=\"SQL execution returned error result\",\n                    sql=sql,\n                    result=result,\n                    execution_time=execution_time,\n                )\n\n            return result.strip(\"\\n\")\n\n        except (MiniOBConnectionException, MiniOBTimeoutException):\n\n            raise\n        except Exception as e:\n            execution_time = time.time() - start_time\n            if isinstance(e, MiniOBQueryException):\n                raise\n            else:\n                raise MiniOBQueryException(\n                    message=f\"Unexpected error during SQL execution: {str(e)}\",\n                    sql=sql,\n                    execution_time=execution_time,\n                ) from e\n\n    def close(self):\n        if self.__socket:\n            self.log_func(\"Closing MiniOB connector socket...\")\n            self.__socket.close()\n            self.__socket = None\n            self.log_func(\"MiniOB connector socket closed successfully\")\n        else:\n            self.log_func(\"No socket to close\")\n\n\nclass MiniOBVectorStore(VectorStore):\n    def __init__(\n        self,\n        embedding: Embeddings | None,\n        server_address: str,\n        server_port: int,\n        server_socket: str,\n        time_limit: float,\n        charset: str,\n        log_func=None,\n    ) -> None:\n        self.__embedding: Embeddings | None = embedding\n        self.__log_func = log_func or (lambda msg: None)\n\n        self.connector: MiniObConnector = MiniObConnector(\n            server_address=server_address,\n            server_port=server_port,\n            server_socket=server_socket,\n            time_limit=time_limit,\n            charset=charset,\n            log_func=self.__log_func,\n        )\n\n        if not self.__embedding:\n            raise MiniOBException(\n                message=\"Embedding model is required but was not provided\",\n                operation=\"INITIALIZATION\",\n            )\n\n        try:\n            self.__embedding_dimension: int = len(self.__embedding.embed_query(\"Hello\"))\n        except Exception as e:\n            raise MiniOBException(\n                message=f\"Failed to determine embedding dimension: {str(e)}\",\n                operation=\"EMBEDDING_DIMENSION_CHECK\",\n                details={\"embedding_model\": type(self.__embedding).__name__},\n            ) from e\n        \n        # TODO: initialize miniob data\n\n    def similarity_search(\n        self,\n        query: str,\n        k: int = 4,\n        search_method: str = \"Vector Search\",\n    ) -> list[Document]:\n        self.__log_func(f\"Performing similarity search for query: '{query}' with k={k}\")\n        result = []\n        \n        # TODO: search similar data from miniob\n\n        self.__log_func(f\"Similarity search completed. Found {len(result)} documents\")\n        return result\n\n    def add_documents(\n        self,\n        documents: list[Document],\n        **kwargs: Any,\n    ) -> List[str]:\n        if not documents or len(documents) == 0:\n            self.__log_func(\"No documents provided for insertion\")\n            return []\n\n        self.__log_func(f\"Processing {len(documents)} documents for insertion\")\n        page_contents: List[str] = [document.page_content for document in documents]\n        self.__log_func(\"Generating embeddings for documents...\")\n        try:\n            embeddings: List[List[float]] = self.__embedding.embed_documents(\n                page_contents\n            )\n        except Exception as e:\n            raise MiniOBException(\n                message=f\"Failed to generate embeddings for documents: {str(e)}\",\n                operation=\"GENERATE_EMBEDDINGS\",\n                details={\"document_count\": len(page_contents)},\n            ) from e\n\n        if len(embeddings) != len(page_contents):\n            self.__log_func(\n                f\"Error: Embedding count mismatch. Expected {len(page_contents)}, got {len(embeddings)}\"\n            )\n            raise MiniOBDataException(\n                message=\"Embedding count mismatch with document count\",\n                data_type=\"embeddings\",\n                expected_format=f\"{len(page_contents)} embeddings\",\n                actual_format=f\"{len(embeddings)} embeddings\",\n                row_count=len(page_contents),\n            )\n\n        # TODO: insert data into miniob\n\n        return []\n\n    @classmethod\n    def from_texts(\n        cls: type[VST],\n        texts: list[str],\n        embedding: Embeddings,\n        metadatas: Optional[list[dict]] = None,\n        *,\n        ids: Optional[list[str]] = None,\n        **kwargs: Any,\n    ) -> VST:\n        raise NotImplementedError()\n\n\n@vector_store_connection\nclass MiniOBVectorStoreComponent(LCVectorStoreComponent):\n    display_name = \"MiniOB\"\n    description = \"miniob vector store component.\"\n    documentation: str = \"https://oceanbase.github.io/miniob/\"\n    icon = \"database\"\n    name = \"MiniOB\"\n\n    _cached_vector_store: MiniOBVectorStore | None = None\n\n    inputs = [\n        StrInput(\n            name=\"server_address\",\n            display_name=\"Server Address\",\n            advanced=True,\n            value=\"127.0.0.1\",\n        ),\n        IntInput(\n            name=\"server_port\",\n            display_name=\"Server port\",\n            advanced=True,\n            value=6789,\n        ),\n        StrInput(\n            name=\"server_socket\",\n            display_name=\"Server socket\",\n            advanced=True,\n        ),\n        IntInput(\n            name=\"number_of_results\",\n            display_name=\"Number of Search Results\",\n            advanced=True,\n            value=4,\n        ),\n        FloatInput(\n            name=\"time_limit\",\n            display_name=\"Search Time Limit\",\n            advanced=True,\n            value=10.0,\n        ),\n        StrInput(\n            name=\"charset\",\n            display_name=\"Charset\",\n            advanced=True,\n            value=\"utf-8\",\n        ),\n        HandleInput(\n            name=\"embedding_model\",\n            display_name=\"Embedding Model\",\n            input_types=[\"Embeddings\"],\n            info=\"\",\n            required=True,\n            show=True,\n        ),\n        *LCVectorStoreComponent.inputs,\n    ]\n\n    outputs = [\n        *LCVectorStoreComponent.outputs,\n    ]\n    \n    def _already_build(self) -> bool:\n        # : check if the document has been built\n        return False\n\n    def _add_documents_to_vector_store(self, vector_store: MiniOBVectorStore) -> None:\n        self.log(\"Preparing to add documents to vector store...\")\n        self.ingest_data = self._prepare_ingest_data()\n\n        documents = []\n        for _input in self.ingest_data or []:\n            if isinstance(_input, Data):\n                documents.append(_input.to_lc_document())\n            else:\n                msg = \"Vector Store Inputs must be Data objects.\"\n                self.log(\n                    f\"Error: Invalid input type {type(_input)}, expected Data object\"\n                )\n                raise TypeError(msg)\n\n        self.log(f\"Prepared {len(documents)} documents for ingestion\")\n\n        documents = [\n            Document(\n                page_content=doc.page_content,\n                metadata=serialize(doc.metadata, to_str=True),\n            )\n            for doc in documents\n        ]\n\n        if documents:\n            self.log(f\"Adding {len(documents)} documents to the Vector Store.\")\n            try:\n                vector_store.add_documents(documents)\n                self.log(\n                    f\"Successfully added {len(documents)} documents to Vector Store\"\n                )\n            except Exception as e:\n                self.log(f\"Error adding documents to Vector Store: {str(e)}\")\n                raise\n        else:\n            self.log(\"No documents to add to the Vector Store.\")\n            return None\n\n    @check_cached_vector_store\n    def build_vector_store(self) -> VectorStore:\n        self.log(\"Building MiniOB Vector Store...\")\n        self.log(f\"Connecting to server: {self.server_address}:{self.server_port}\")\n\n        self.log(\n            f\"Configuration: server_address={self.server_address}, server_port={self.server_port}\"\n        )\n        self.log(\n            f\"Configuration: server_socket={self.server_socket}, time_limit={self.time_limit}\"\n        )\n        self.log(\n            f\"Configuration: charset={self.charset}, embedding_model={type(self.embedding_model).__name__ if self.embedding_model else 'None'}\"\n        )\n\n        vector_store = MiniOBVectorStore(\n            embedding=self.embedding_model if self.embedding_model else None,\n            server_address=self.server_address if self.server_address else \"127.0.0.1\",\n            server_port=self.server_port if self.server_port else 6789,\n            server_socket=self.server_socket if self.server_socket else \"\",\n            time_limit=self.time_limit if self.time_limit else 10.0,\n            charset=self.charset if self.charset else \"utf-8\",\n            log_func=self.log,\n        )\n\n        self.log(\"Vector Store created successfully\")\n        if not self._already_build():\n            self._add_documents_to_vector_store(vector_store)\n        self.log(\"Vector Store build completed\")\n        return vector_store\n\n    def search_documents(self, vector_store=None) -> list[Data]:\n        if not vector_store:\n            vector_store = self.build_vector_store()\n\n        query = (self.search_query if self.search_query else \"\").strip()\n        if not query:\n            self.log(\"Warning: Empty search query provided\")\n            return []\n\n        self.log(f\"Searching for documents with query: '{query}'\")\n        self.log(\n            f\"Number of results requested: {self.number_of_results if self.number_of_results else 4}\"\n        )\n\n        vector_store = vector_store or self.build_vector_store()\n\n        data = docs_to_data(\n            vector_store.search(\n                query=query,\n                search_type=\"similarity\",\n                k=self.number_of_results if self.number_of_results else 4,\n            )\n        )\n\n        if not data:\n            self.log(f\"No documents found for query: '{query}'\")\n            return []\n\n        self.log(f\"Found {len(data)} documents for query: '{query}'\")\n        return data\nTODO"
+                "value": "import json\nimport os\nimport select\nimport socket\nimport subprocess\nimport time\nfrom typing import Any, Optional, Dict\nfrom typing import List\n\nfrom langchain_core.documents import Document\nfrom langchain_core.embeddings import Embeddings\nfrom langchain_core.vectorstores import VST, VectorStore\nfrom langflow.base.vectorstores.model import (\n    LCVectorStoreComponent,\n    check_cached_vector_store,\n)\nfrom langflow.base.vectorstores.vector_store_connection_decorator import (\n    vector_store_connection,\n)\nfrom langflow.helpers import docs_to_data\nfrom langflow.inputs import StrInput, IntInput, FloatInput\nfrom langflow.io import HandleInput\nfrom langflow.schema.data import Data\nfrom langflow.serialization import serialize\n\n\nclass MiniOBException(Exception):\n    \"\"\"Base exception class for MiniOB operations.\"\"\"\n\n    def __init__(\n        self, message: str = None, operation: str = None, details: Dict[str, Any] = None\n    ) -> None:\n        self.operation = operation\n        self.details = details or {}\n\n        if message:\n            full_message = message\n        else:\n            full_message = \"MiniOB operation failed\"\n\n        if operation:\n            full_message = f\"[{operation}] {full_message}\"\n\n        if details:\n            detail_str = \", \".join([f\"{k}={v}\" for k, v in details.items()])\n            full_message = f\"{full_message} (Details: {detail_str})\"\n\n        super().__init__(full_message)\n\n\nclass MiniOBConnectionException(MiniOBException):\n    \"\"\"Exception raised when connection to MiniOB server fails.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        server_address: str = None,\n        server_port: int = None,\n        server_socket: str = None,\n        error_code: str = None,\n    ) -> None:\n        details = {}\n        if server_address:\n            details[\"server_address\"] = server_address\n        if server_port:\n            details[\"server_port\"] = server_port\n        if server_socket:\n            details[\"server_socket\"] = server_socket\n        if error_code:\n            details[\"error_code\"] = error_code\n\n        super().__init__(\n            message or \"Failed to connect to MiniOB server\",\n            operation=\"CONNECTION\",\n            details=details,\n        )\n\n\nclass MiniOBQueryException(MiniOBException):\n    \"\"\"Exception raised when SQL query execution fails.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        sql: str = None,\n        result: str = None,\n        execution_time: float = None,\n    ) -> None:\n        details = {}\n        if sql:\n            details[\"sql\"] = sql[:200] + \"...\" if len(sql) > 200 else sql\n        if result:\n            details[\"result\"] = result\n        if execution_time:\n            details[\"execution_time_seconds\"] = execution_time\n\n        super().__init__(\n            message or \"SQL query execution failed\",\n            operation=\"QUERY_EXECUTION\",\n            details=details,\n        )\n\n\nclass MiniOBDataException(MiniOBException):\n    \"\"\"Exception raised when data processing fails.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        data_type: str = None,\n        expected_format: str = None,\n        actual_format: str = None,\n        row_count: int = None,\n    ) -> None:\n        details = {}\n        if data_type:\n            details[\"data_type\"] = data_type\n        if expected_format:\n            details[\"expected_format\"] = expected_format\n        if actual_format:\n            details[\"actual_format\"] = actual_format\n        if row_count is not None:\n            details[\"row_count\"] = row_count\n\n        super().__init__(\n            message or \"Data processing failed\",\n            operation=\"DATA_PROCESSING\",\n            details=details,\n        )\n\n\nclass MiniOBTimeoutException(MiniOBException):\n    \"\"\"Exception raised when operations timeout.\"\"\"\n\n    def __init__(\n        self,\n        message: str = None,\n        timeout_seconds: float = None,\n        operation_type: str = None,\n    ) -> None:\n        details = {}\n        if timeout_seconds:\n            details[\"timeout_seconds\"] = timeout_seconds\n        if operation_type:\n            details[\"operation_type\"] = operation_type\n\n        super().__init__(\n            message or \"Operation timed out\", operation=\"TIMEOUT\", details=details\n        )\n\n\nclass MiniObConnector(object):\n    def __init__(\n        self,\n        server_address: str,\n        server_port: int,\n        server_socket: str,\n        time_limit: float,\n        charset: str,\n        log_func=None,\n    ):\n        if server_port < 0 or server_port > 65535:\n            raise MiniOBConnectionException(\n                message=f\"Invalid server port: {server_port}\",\n                server_address=server_address,\n                server_port=server_port,\n                error_code=\"INVALID_PORT\",\n            )\n\n        self.log_func = log_func or (lambda msg: None)\n\n        self.__server_address = server_address\n        self.__server_port = server_port\n        self.__server_socket = os.getenv(\"MINIOB_SERVER_SOCKET\", \"\")\n        self.__buffer_size = 8192\n        self.__charset = charset\n        self.__socket = None\n\n        self.__time_limit = time_limit\n        if not self.__time_limit:\n            self.__time_limit = 10.0\n\n        self.log_func(f\"Initializing MiniOB connector...\")\n        try:\n            if len(self.__server_socket) > 0:\n                self.log_func(f\"Using Unix socket: {self.__server_socket}\")\n                sock = self.__init_unix_socket(self.__server_socket)\n            else:\n                self.log_func(f\"Using TCP connection: {server_address}:{server_port}\")\n                sock = self.__init_tcp_socket(self.__server_address, self.__server_port)\n\n            self.__socket = sock\n            if sock is not None:\n                self.log_func(\"Socket connection established successfully\")\n                self.__socket.setblocking(False)\n\n                self.__poller = select.poll()\n                self.__poller.register(\n                    self.__socket,\n                    select.POLLIN | select.POLLPRI | select.POLLHUP | select.POLLERR,\n                )\n                self.log_func(\"Socket poller configured successfully\")\n            else:\n                self.log_func(\"Failed to establish socket connection\")\n                raise MiniOBConnectionException(\n                    message=\"Socket connection returned None\",\n                    server_address=server_address,\n                    server_port=server_port,\n                    server_socket=server_socket,\n                    error_code=\"NULL_SOCKET\",\n                )\n        except Exception as e:\n            if isinstance(e, MiniOBConnectionException):\n                raise\n            else:\n                raise MiniOBConnectionException(\n                    message=f\"Failed to initialize connection: {str(e)}\",\n                    server_address=server_address,\n                    server_port=server_port,\n                    server_socket=server_socket,\n                    error_code=\"INIT_FAILED\",\n                ) from e\n\n    @staticmethod\n    def __init_tcp_socket(server_address: str, server_port: int):\n        try:\n            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n            s.connect((server_address, server_port))\n            return s\n        except socket.error as e:\n            raise MiniOBConnectionException(\n                message=f\"Failed to establish TCP connection: {str(e)}\",\n                server_address=server_address,\n                server_port=server_port,\n                error_code=\"TCP_CONNECTION_FAILED\",\n            ) from e\n        except Exception as e:\n            raise MiniOBConnectionException(\n                message=f\"Unexpected error during TCP connection: {str(e)}\",\n                server_address=server_address,\n                server_port=server_port,\n                error_code=\"TCP_UNEXPECTED_ERROR\",\n            ) from e\n\n    @staticmethod\n    def __init_unix_socket(server_socket: str):\n        try:\n            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n            sock.connect(server_socket)\n            return sock\n        except socket.error as e:\n            raise MiniOBConnectionException(\n                message=f\"Failed to establish Unix socket connection: {str(e)}\",\n                server_socket=server_socket,\n                error_code=\"UNIX_SOCKET_CONNECTION_FAILED\",\n            ) from e\n        except Exception as e:\n            raise MiniOBConnectionException(\n                message=f\"Unexpected error during Unix socket connection: {str(e)}\",\n                server_socket=server_socket,\n                error_code=\"UNIX_SOCKET_UNEXPECTED_ERROR\",\n            ) from e\n\n    def __recv_response(\n        self,\n        timeout: float,\n        total_timeout_seconds: int,\n    ) -> str:\n        result = b\"\"\n\n        if not timeout:\n            timeout = self.__time_limit\n\n        if timeout is not None:\n            timeout *= 1000\n\n        deadline = time.time() + 3600 * 24\n        if total_timeout_seconds is not None and total_timeout_seconds > 0:\n            deadline = time.time() + total_timeout_seconds\n\n        while time.time() < deadline:\n            events = self.__poller.poll(timeout)\n            if len(events) == 0:\n                raise MiniOBTimeoutException(\n                    message=f\"Poll timeout after {timeout / 1000} second(s)\",\n                    timeout_seconds=timeout / 1000,\n                    operation_type=\"SOCKET_POLL\",\n                )\n\n            (_, event) = events[0]\n            if event & (select.POLLHUP | select.POLLERR):\n                error_details = {\n                    \"POLLHUP\": bool(event & select.POLLHUP),\n                    \"POLLERR\": bool(event & select.POLLERR),\n                    \"event_code\": event,\n                }\n                msg = (\n                    f\"Failed to receive from server. poll return \"\n                    f\"POLLHUP={str(event & select.POLLHUP)} or POLLERR={str(event & select.POLLERR)}\"\n                )\n                self.log_func(msg)\n                raise MiniOBConnectionException(\n                    message=\"Socket connection error during polling\",\n                    error_code=\"SOCKET_POLL_ERROR\",\n                )\n\n            data = self.__socket.recv(self.__buffer_size)\n            if len(data) > 0:\n                try:\n                    if data[0] == 0 and len(result) == 0:\n                        self.log_func(\"Error: receive from server \\\\0 byte\")\n                        ps_ef = subprocess.run(\n                            [\"ps\", \"-ef\"],\n                            stdout=subprocess.PIPE,\n                            stderr=subprocess.PIPE,\n                            universal_newlines=True,\n                        )\n\n                        self.log_func(f\"Process status stdout: {str(ps_ef.stdout)}\")\n                        self.log_func(f\"Process status stderr: {str(ps_ef.stderr)}\")\n                except BaseException as ex:\n                    self.log_func(f\"Exception during data processing: {ex}\")\n\n                result += data\n                self.log_func(\n                    f\"Received from server (size={len(data)}): {data[:100]}...\"\n                )\n\n                if data.endswith(b\"\\0\"):\n\n                    result = result[:-1]\n                    try:\n                        decoded_result = result.decode(encoding=self.__charset)\n                        self.log_func(\n                            f\"Successfully decoded response with length {len(decoded_result)}\"\n                        )\n                        return decoded_result.strip() + \"\\n\"\n                    except UnicodeDecodeError as e:\n                        self.log_func(f\"Unicode decode error: {e}\")\n\n                        decoded_result = result.decode(\n                            encoding=self.__charset, errors=\"replace\"\n                        )\n                        self.log_func(\n                            f\"Decoded with error handling, length: {len(decoded_result)}\"\n                        )\n                        return decoded_result.strip() + \"\\n\"\n            else:\n                self.log_func(f\"Error: receive from server returned zero length data\")\n                raise MiniOBConnectionException(\n                    message=\"Received zero length data from server - connection may be closed\",\n                    error_code=\"ZERO_LENGTH_DATA\",\n                )\n\n        if time.time() >= deadline:\n            self.log_func(\n                f\"Timeout: receive from server timeout after {total_timeout_seconds} seconds\"\n            )\n\n        raise MiniOBTimeoutException(\n            message=f\"Response timeout after {total_timeout_seconds} second(s)\",\n            timeout_seconds=total_timeout_seconds,\n            operation_type=\"RECEIVE_RESPONSE\",\n        )\n\n    def exec(\n        self,\n        sql: str,\n        timeout=None,\n        total_timeout_seconds=None,\n    ) -> str:\n        if not sql:\n            raise MiniOBQueryException(\n                message=\"SQL query cannot be empty or None\", sql=sql or \"None\"\n            )\n\n        start_time = time.time()\n        self.log_func(f\"Executing SQL: {sql}\")\n\n        try:\n            data = str.encode(sql, self.__charset)\n            self.__socket.sendall(data)\n            self.__socket.sendall(b\"\\0\")\n            self.log_func(f\"SQL command sent to server (size={len(data) + 1}): '{sql}'\")\n            self.log_func(\"SQL command sent to server, waiting for response...\")\n\n            result = self.__recv_response(timeout, total_timeout_seconds)\n            execution_time = time.time() - start_time\n\n            self.log_func(f\"SQL response received from server: '{result}'\")\n            self.log_func(f\"SQL execution completed with result: {result}\")\n\n            result_lower = result.lower().strip()\n            if (\n                result_lower.startswith(\"error\")\n                or \"failed\" in result_lower\n                or \"exception\" in result_lower\n            ):\n                raise MiniOBQueryException(\n                    message=\"SQL execution returned error result\",\n                    sql=sql,\n                    result=result,\n                    execution_time=execution_time,\n                )\n\n            return result.strip(\"\\n\")\n\n        except (MiniOBConnectionException, MiniOBTimeoutException):\n\n            raise\n        except Exception as e:\n            execution_time = time.time() - start_time\n            if isinstance(e, MiniOBQueryException):\n                raise\n            else:\n                raise MiniOBQueryException(\n                    message=f\"Unexpected error during SQL execution: {str(e)}\",\n                    sql=sql,\n                    execution_time=execution_time,\n                ) from e\n\n    def close(self):\n        if self.__socket:\n            self.log_func(\"Closing MiniOB connector socket...\")\n            self.__socket.close()\n            self.__socket = None\n            self.log_func(\"MiniOB connector socket closed successfully\")\n        else:\n            self.log_func(\"No socket to close\")\n\n\nclass MiniOBVectorStore(VectorStore):\n    def __init__(\n        self,\n        embedding: Embeddings | None,\n        server_address: str,\n        server_port: int,\n        server_socket: str,\n        time_limit: float,\n        charset: str,\n        log_func=None,\n    ) -> None:\n        self.__embedding: Embeddings | None = embedding\n        self.__log_func = log_func or (lambda msg: None)\n\n        self.connector: MiniObConnector = MiniObConnector(\n            server_address=server_address,\n            server_port=server_port,\n            server_socket=server_socket,\n            time_limit=time_limit,\n            charset=charset,\n            log_func=self.__log_func,\n        )\n\n        if not self.__embedding:\n            raise MiniOBException(\n                message=\"Embedding model is required but was not provided\",\n                operation=\"INITIALIZATION\",\n            )\n\n        try:\n            self.__embedding_dimension: int = len(self.__embedding.embed_query(\"Hello\"))\n        except Exception as e:\n            raise MiniOBException(\n                message=f\"Failed to determine embedding dimension: {str(e)}\",\n                operation=\"EMBEDDING_DIMENSION_CHECK\",\n                details={\"embedding_model\": type(self.__embedding).__name__},\n            ) from e\n        # 初始化 MiniOB 表与向量索引。避免使用 IF NOT EXISTS，采用探测+捕获异常的方式。\n        self.__table: str = \"rag_docs\"\n        self.__index: str = \"rag_vec_idx\"\n        # 默认维度以嵌入模型为准，后续可能根据表内样本自动对齐\n        self.__dim: int = int(self.__embedding_dimension)\n        self.__ensure_initialized()\n\n    def __del__(self) -> None:\n        \"\"\"析构函数：确保 socket 被正确关闭\"\"\"\n        try:\n            if hasattr(self, 'connector') and self.connector:\n                self.connector.close()\n        except Exception:\n            pass\n\n    def close(self) -> None:\n        \"\"\"手动关闭连接\"\"\"\n        if self.connector:\n            self.connector.close()\n\n    def __enter__(self):\n        \"\"\"上下文管理器入口\"\"\"\n        return self\n\n    def __exit__(self, exc_type, exc_val, exc_tb):\n        \"\"\"上下文管理器出口：自动关闭连接\"\"\"\n        self.close()\n        return False\n\n    # ---- 内部工具方法 ----\n    def __log(self, msg: str) -> None:\n        try:\n            self.__log_func(msg)\n        except Exception:\n            pass\n\n    def __sql_escape_text(self, s: str) -> str:\n        \"\"\"转义 SQL 文本字面量，最小必要：单引号转义为两个单引号。\"\"\"\n        if s is None:\n            return \"\"\n        return s.replace(\"'\", \"''\")\n\n    def __format_vector_literal(self, vec: List[float], max_decimals: int = 4) -> str:\n        \"\"\"将向量格式化为 MiniOB 可解析的字面量字符串，如 '[0.12,1.0,-3.5]'。\n        说明：服务器侧会做进一步规范化（如保留位数）。\n        \"\"\"\n        if not vec:\n            return \"[]\"\n        fmt = f\"{{:.{max_decimals}f}}\"\n        parts = []\n        for v in vec:\n            # 兼容 int/float\n            try:\n                fv = float(v)\n            except Exception:\n                fv = 0.0\n            parts.append(fmt.format(fv).rstrip(\"0\").rstrip(\".\") or \"0\")\n        return \"[\" + \",\".join(parts) + \"]\"\n\n    def __ensure_initialized(self) -> None:\n        \"\"\"探测/创建表与向量索引。避免使用 IF NOT EXISTS。\"\"\"\n        table = self.__table\n        index = self.__index\n        # 1) 探测表是否存在\n        try:\n            self.connector.exec(f\"DESC {table}\")\n            self.__log(f\"Table {table} exists.\")\n        except Exception as e:\n            # 2) 建表：包含内容与向量列，向量维度与嵌入模型一致\n            create_sql = (\n                f\"CREATE TABLE {table} (\"  # 避免 IF NOT EXISTS\n                f\"content TEXT, \"\n                f\"embedding VECTOR({self.__dim})\"\n                f\")\"\n            )\n            self.__log(f\"Creating table: {create_sql}\")\n            try:\n                self.connector.exec(create_sql)\n                self.__log(\"Create table success.\")\n            except Exception as ce:\n                raise MiniOBException(\n                    message=f\"Create table failed: {ce}\",\n                    operation=\"CREATE_TABLE\",\n                    details={\"sql\": create_sql},\n                ) from ce\n\n        # 2.5) 若表已存在（或刚建好为空），尝试从样本数据推断表内向量维度，以避免后续 ORDER BY L2/COSINE 维度不一致\n        try:\n            sample_sql = f\"SELECT embedding FROM {table} LIMIT 1\"\n            raw = self.connector.exec(sample_sql, total_timeout_seconds=5)\n            lines = [ln for ln in (raw or \"\").splitlines() if ln.strip()]\n            if len(lines) >= 2:\n                vec_text = lines[1].strip()\n                if vec_text.startswith(\"[\") and vec_text.endswith(\"]\"):\n                    body = vec_text[1:-1].strip()\n                    if body:\n                        dim_detect = body.count(\",\") + 1\n                        if dim_detect > 0:\n                            self.__dim = dim_detect\n                            self.__log(f\"Detected dimension from table sample: {self.__dim}\")\n        except Exception as _:\n            # 表为空或老版本 to_string 差异，忽略\n            pass\n\n        # 3) 创建向量索引（若已存在将抛错，捕获后忽略）\n        try:\n            index_sql = (\n                f\"CREATE VECTOR INDEX {index} \"\n                f\"ON {table} (embedding) \"\n                f\"WITH(TYPE=IVFFLAT, DISTANCE=L2_DISTANCE, LISTS=64, PROBES=8)\"\n            )\n            self.__log(f\"Ensuring vector index: {index_sql}\")\n            self.connector.exec(index_sql)\n            self.__log(\"Vector index created.\")\n        except Exception as ie:\n            # 可能已经存在或语法差异，忽略\n            self.__log(f\"Create vector index ignored: {ie}\")\n\n    def similarity_search(\n        self,\n        query: str,\n        k: int = 4,\n        search_method: str = \"Vector Search\",\n    ) -> list[Document]:\n        self.__log_func(f\"Performing similarity search for query: '{query}' with k={k}\")\n        result: list[Document] = []\n\n        if not query or not query.strip():\n            return result\n\n        try:\n            qvec: List[float] = self.__embedding.embed_query(query)\n            if isinstance(qvec, list):\n                # 若表内维度更小，按表维度截断；若更大则保留，部分实现可在服务端做截断\n                if self.__dim > 0 and len(qvec) != self.__dim:\n                    qvec = qvec[: self.__dim]\n        except Exception as e:\n            raise MiniOBException(\n                message=f\"Failed to embed query: {e}\",\n                operation=\"EMBED_QUERY\",\n            ) from e\n\n        vec_lit = self.__format_vector_literal(qvec)\n\n        # 采用基于距离的排序检索。若存在向量索引，优化器会重写为 VECTOR_INDEX_SCAN。\n        sql = (\n            f\"SELECT content, L2_DISTANCE(embedding, '{vec_lit}') AS score \"\n            f\"FROM {self.__table} \"\n            f\"ORDER BY L2_DISTANCE(embedding, '{vec_lit}') ASC \"\n            f\"LIMIT {max(1, int(k))}\"\n        )\n        self.__log(f\"Search SQL: {sql}\")\n\n        try:\n            raw = self.connector.exec(sql, total_timeout_seconds=60)\n        except Exception as e:\n            raise MiniOBQueryException(\n                message=f\"Search SQL failed: {e}\", sql=sql\n            ) from e\n\n        # 解析返回：第一行为表头，如 \"content | score\"；数据行以 \" | \" 分隔。\n        if not raw:\n            return result\n        lines = [ln for ln in raw.splitlines() if ln.strip()]\n        if not lines:\n            return result\n\n        header = lines[0]\n        # 后续每行，使用最后一个分隔符将 content 与 score 分割，避免 content 中包含 ' | ' 造成歧义\n        for line in lines[1:]:\n            pos = line.rfind(\" | \")\n            if pos <= 0:\n                continue\n            content = line[:pos]\n            # score_str = line[pos+3:]  # 如需可解析为浮点用作元数据\n            result.append(Document(page_content=content, metadata={\"source\": self.__table}))\n\n        self.__log_func(f\"Similarity search completed. Found {len(result)} documents\")\n        return result\n\n    # 兼容 Langflow/LangChain 的统一搜索入口\n    def search(self, query: str, search_type: str = \"similarity\", k: int = 4, **kwargs: Any) -> list[Document]:\n        return self.similarity_search(query=query, k=k, search_method=search_type)\n\n    def add_documents(\n        self,\n        documents: list[Document],\n        **kwargs: Any,\n    ) -> List[str]:\n        if not documents or len(documents) == 0:\n            self.__log_func(\"No documents provided for insertion\")\n            return []\n\n        self.__log_func(f\"Processing {len(documents)} documents for insertion\")\n        page_contents: List[str] = [document.page_content for document in documents]\n        self.__log_func(\"Generating embeddings for documents...\")\n        try:\n            embeddings: List[List[float]] = self.__embedding.embed_documents(\n                page_contents\n            )\n        except Exception as e:\n            raise MiniOBException(\n                message=f\"Failed to generate embeddings for documents: {str(e)}\",\n                operation=\"GENERATE_EMBEDDINGS\",\n                details={\"document_count\": len(page_contents)},\n            ) from e\n\n        if len(embeddings) != len(page_contents):\n            self.__log_func(\n                f\"Error: Embedding count mismatch. Expected {len(page_contents)}, got {len(embeddings)}\"\n            )\n            raise MiniOBDataException(\n                message=\"Embedding count mismatch with document count\",\n                data_type=\"embeddings\",\n                expected_format=f\"{len(page_contents)} embeddings\",\n                actual_format=f\"{len(embeddings)} embeddings\",\n                row_count=len(page_contents),\n            )\n\n        # 插入数据到 MiniOB。避免使用批量插入，逐行确保兼容性。\n        inserted_ids: List[str] = []\n        for text, vec in zip(page_contents, embeddings):\n            if isinstance(vec, list) and self.__dim > 0 and len(vec) != self.__dim:\n                vec = vec[: self.__dim]\n            text_escaped = self.__sql_escape_text(text)\n            vec_lit = self.__format_vector_literal(vec)\n            sql = (\n                f\"INSERT INTO {self.__table} (content, embedding) \"\n                f\"VALUES ('{text_escaped}', '{vec_lit}')\"\n            )\n            try:\n                self.connector.exec(sql, total_timeout_seconds=120)\n                inserted_ids.append(\"\")  # MiniOB 暂无返回行 id，这里占位即可\n            except Exception as e:\n                # 单条失败不中断整体流程，记录并继续\n                self.__log(f\"Insert failed, skip one row: {e}\")\n                continue\n\n        return inserted_ids\n\n    @classmethod\n    def from_texts(\n        cls: type[VST],\n        texts: list[str],\n        embedding: Embeddings,\n        metadatas: Optional[list[dict]] = None,\n        *,\n        ids: Optional[list[str]] = None,\n        **kwargs: Any,\n    ) -> VST:\n        raise NotImplementedError()\n\n\n@vector_store_connection\nclass MiniOBVectorStoreComponent(LCVectorStoreComponent):\n    display_name = \"MiniOB\"\n    description = \"miniob vector store component.\"\n    documentation: str = \"https://oceanbase.github.io/miniob/\"\n    icon = \"database\"\n    name = \"MiniOB\"\n\n    _cached_vector_store: MiniOBVectorStore | None = None\n\n    inputs = [\n        StrInput(\n            name=\"server_address\",\n            display_name=\"Server Address\",\n            advanced=True,\n            value=\"127.0.0.1\",\n        ),\n        IntInput(\n            name=\"server_port\",\n            display_name=\"Server port\",\n            advanced=True,\n            value=6789,\n        ),\n        StrInput(\n            name=\"server_socket\",\n            display_name=\"Server socket\",\n            advanced=True,\n        ),\n        IntInput(\n            name=\"number_of_results\",\n            display_name=\"Number of Search Results\",\n            advanced=True,\n            value=4,\n        ),\n        FloatInput(\n            name=\"time_limit\",\n            display_name=\"Search Time Limit\",\n            advanced=True,\n            value=10.0,\n        ),\n        StrInput(\n            name=\"charset\",\n            display_name=\"Charset\",\n            advanced=True,\n            value=\"utf-8\",\n        ),\n        HandleInput(\n            name=\"embedding_model\",\n            display_name=\"Embedding Model\",\n            input_types=[\"Embeddings\"],\n            info=\"\",\n            required=True,\n            show=True,\n        ),\n        *LCVectorStoreComponent.inputs,\n    ]\n\n    outputs = [\n        *LCVectorStoreComponent.outputs,\n    ]\n    \n    def _already_build(self) -> bool:\n        # : check if the document has been built\n        return False\n\n    def _add_documents_to_vector_store(self, vector_store: MiniOBVectorStore) -> None:\n        self.log(\"Preparing to add documents to vector store...\")\n        self.ingest_data = self._prepare_ingest_data()\n\n        documents = []\n        for _input in self.ingest_data or []:\n            if isinstance(_input, Data):\n                documents.append(_input.to_lc_document())\n            else:\n                msg = \"Vector Store Inputs must be Data objects.\"\n                self.log(\n                    f\"Error: Invalid input type {type(_input)}, expected Data object\"\n                )\n                raise TypeError(msg)\n\n        self.log(f\"Prepared {len(documents)} documents for ingestion\")\n\n        documents = [\n            Document(\n                page_content=doc.page_content,\n                metadata=serialize(doc.metadata, to_str=True),\n            )\n            for doc in documents\n        ]\n\n        if documents:\n            self.log(f\"Adding {len(documents)} documents to the Vector Store.\")\n            try:\n                vector_store.add_documents(documents)\n                self.log(\n                    f\"Successfully added {len(documents)} documents to Vector Store\"\n                )\n            except Exception as e:\n                self.log(f\"Error adding documents to Vector Store: {str(e)}\")\n                raise\n        else:\n            self.log(\"No documents to add to the Vector Store.\")\n            return None\n\n    @check_cached_vector_store\n    def build_vector_store(self) -> VectorStore:\n        self.log(\"Building MiniOB Vector Store...\")\n        self.log(f\"Connecting to server: {self.server_address}:{self.server_port}\")\n\n        self.log(\n            f\"Configuration: server_address={self.server_address}, server_port={self.server_port}\"\n        )\n        self.log(\n            f\"Configuration: server_socket={self.server_socket}, time_limit={self.time_limit}\"\n        )\n        self.log(\n            f\"Configuration: charset={self.charset}, embedding_model={type(self.embedding_model).__name__ if self.embedding_model else 'None'}\"\n        )\n\n        vector_store = MiniOBVectorStore(\n            embedding=self.embedding_model if self.embedding_model else None,\n            server_address=self.server_address if self.server_address else \"127.0.0.1\",\n            server_port=self.server_port if self.server_port else 6789,\n            server_socket=self.server_socket if self.server_socket else \"\",\n            time_limit=self.time_limit if self.time_limit else 10.0,\n            charset=self.charset if self.charset else \"utf-8\",\n            log_func=self.log,\n        )\n\n        self.log(\"Vector Store created successfully\")\n        if not self._already_build():\n            self._add_documents_to_vector_store(vector_store)\n        self.log(\"Vector Store build completed\")\n        return vector_store\n\n    def search_documents(self, vector_store=None) -> list[Data]:\n        if not vector_store:\n            vector_store = self.build_vector_store()\n\n        query = (self.search_query if self.search_query else \"\").strip()\n        if not query:\n            self.log(\"Warning: Empty search query provided\")\n            return []\n\n        self.log(f\"Searching for documents with query: '{query}'\")\n        self.log(\n            f\"Number of results requested: {self.number_of_results if self.number_of_results else 4}\"\n        )\n\n        vector_store = vector_store or self.build_vector_store()\n\n        data = docs_to_data(\n            vector_store.search(\n                query=query,\n                search_type=\"similarity\",\n                k=self.number_of_results if self.number_of_results else 4,\n            )\n        )\n\n        if not data:\n            self.log(f\"No documents found for query: '{query}'\")\n            return []\n\n        self.log(f\"Found {len(data)} documents for query: '{query}'\")\n        return data\nTODO\n"
               },
               "embedding_model": {
                 "_input_type": "HandleInput",
@@ -1272,7 +1265,7 @@
           "type": "MiniOB"
         },
         "dragging": false,
-        "id": "MiniOB-NpwFB",
+        "id": "MiniOB-H7uKN",
         "measured": {
           "height": 334,
           "width": 320
@@ -1286,7 +1279,7 @@
       },
       {
         "data": {
-          "id": "TestOutput-tWCju",
+          "id": "TestOutput-XDUWN",
           "node": {
             "base_classes": [
               "Data"
@@ -1303,7 +1296,9 @@
             ],
             "frozen": false,
             "icon": "code",
+            "last_updated": "2025-10-28T11:32:11.625Z",
             "legacy": false,
+            "lf_version": "1.6.4",
             "metadata": {},
             "minimized": false,
             "output_types": [],
@@ -1377,21 +1372,21 @@
           "type": "TestOutput"
         },
         "dragging": false,
-        "id": "TestOutput-tWCju",
+        "id": "TestOutput-XDUWN",
         "measured": {
           "height": 203,
           "width": 320
         },
         "position": {
-          "x": 3236.3729027118266,
-          "y": 1073.5049822812236
+          "x": 3473.374605095726,
+          "y": 1000.6699776279102
         },
         "selected": false,
         "type": "genericNode"
       },
       {
         "data": {
-          "id": "ChatInput-Kpdte",
+          "id": "ChatInput-dZGaB",
           "node": {
             "base_classes": [
               "Message"
@@ -1417,7 +1412,7 @@
             "frozen": false,
             "icon": "MessagesSquare",
             "legacy": false,
-            "lf_version": "1.5.0.post1",
+            "lf_version": "1.6.4",
             "metadata": {},
             "minimized": true,
             "output_types": [],
@@ -1505,7 +1500,7 @@
                 "show": true,
                 "title_case": false,
                 "type": "code",
-                "value": "import os\n\nfrom langflow.base.data.utils import IMG_FILE_TYPES, TEXT_FILE_TYPES\nfrom langflow.base.io.chat import ChatComponent\nfrom langflow.inputs.inputs import BoolInput\nfrom langflow.io import (\n    DropdownInput,\n    FileInput,\n    MessageTextInput,\n    MultilineInput,\n    Output,\n)\nfrom langflow.schema.message import Message\nfrom langflow.utils.constants import (\n    MESSAGE_SENDER_AI,\n    MESSAGE_SENDER_NAME_USER,\n    MESSAGE_SENDER_USER,\n)\nimport requests\n\n\nclass ChatInput(ChatComponent):\n    display_name = \"Chat Input\"\n    description = \"Get chat inputs from the Playground.\"\n    documentation: str = \"https://docs.langflow.org/components-io#chat-input\"\n    icon = \"MessagesSquare\"\n    name = \"ChatInput\"\n    minimized = True\n\n    inputs = [\n        MultilineInput(\n            name=\"input_value\",\n            display_name=\"Input Text\",\n            value=\"\",\n            info=\"Message to be passed as input.\",\n            input_types=[],\n        ),\n        BoolInput(\n            name=\"should_store_message\",\n            display_name=\"Store Messages\",\n            info=\"Store the message in the history.\",\n            value=True,\n            advanced=True,\n        ),\n        DropdownInput(\n            name=\"sender\",\n            display_name=\"Sender Type\",\n            options=[MESSAGE_SENDER_AI, MESSAGE_SENDER_USER],\n            value=MESSAGE_SENDER_USER,\n            info=\"Type of sender.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"sender_name\",\n            display_name=\"Sender Name\",\n            info=\"Name of the sender.\",\n            value=MESSAGE_SENDER_NAME_USER,\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"session_id\",\n            display_name=\"Session ID\",\n            info=\"The session ID of the chat. If empty, the current session ID parameter will be used.\",\n            advanced=True,\n        ),\n        FileInput(\n            name=\"files\",\n            display_name=\"Files\",\n            file_types=TEXT_FILE_TYPES + IMG_FILE_TYPES,\n            info=\"Files to be sent with the message.\",\n            advanced=True,\n            is_list=True,\n            temp_file=True,\n        ),\n        MessageTextInput(\n            name=\"background_color\",\n            display_name=\"Background Color\",\n            info=\"The background color of the icon.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"chat_icon\",\n            display_name=\"Icon\",\n            info=\"The icon of the message.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"text_color\",\n            display_name=\"Text Color\",\n            info=\"The text color of the name\",\n            advanced=True,\n        ),\n    ]\n    outputs = [\n        Output(display_name=\"Chat Message\", name=\"message\", method=\"message_response\"),\n    ]\n\n    async def message_response(self) -> Message:\n        background_color = self.background_color\n        text_color = self.text_color\n        icon = self.chat_icon\n        text = self.input_value\n        if not text:\n            url = os.getenv(\"QA_SERVER_GET_QUESTION_URL\")\n            response = requests.get(url)\n            data = response.json()  # 解析 JSON 响应\n            text = data.get(\"question\")  # 提取 \"question\" 字段的值\n\n        message = await Message.create(\n            text=text,\n            sender=self.sender,\n            sender_name=self.sender_name,\n            session_id=self.session_id,\n            files=self.files,\n            properties={\n                \"background_color\": background_color,\n                \"text_color\": text_color,\n                \"icon\": icon,\n            },\n        )\n        if (\n            self.session_id\n            and isinstance(message, Message)\n            and self.should_store_message\n        ):\n            stored_message = await self.send_message(\n                message,\n            )\n            self.message.value = stored_message\n            message = stored_message\n\n        self.status = message\n        return message\n"
+                "value": "import os\n\nfrom langflow.base.data.utils import IMG_FILE_TYPES, TEXT_FILE_TYPES\nfrom langflow.base.io.chat import ChatComponent\nfrom langflow.inputs.inputs import BoolInput\nfrom langflow.io import (\n    DropdownInput,\n    FileInput,\n    MessageTextInput,\n    MultilineInput,\n    Output,\n)\nfrom langflow.schema.message import Message\nfrom langflow.utils.constants import (\n    MESSAGE_SENDER_AI,\n    MESSAGE_SENDER_NAME_USER,\n    MESSAGE_SENDER_USER,\n)\nimport requests\n\n\nclass ChatInput(ChatComponent):\n    display_name = \"Chat Input\"\n    description = \"Get chat inputs from the Playground.\"\n    documentation: str = \"https://docs.langflow.org/components-io#chat-input\"\n    icon = \"MessagesSquare\"\n    name = \"ChatInput\"\n    minimized = True\n\n    inputs = [\n        MultilineInput(\n            name=\"input_value\",\n            display_name=\"Input Text\",\n            value=\"\",\n            info=\"Message to be passed as input.\",\n            input_types=[],\n        ),\n        BoolInput(\n            name=\"should_store_message\",\n            display_name=\"Store Messages\",\n            info=\"Store the message in the history.\",\n            value=True,\n            advanced=True,\n        ),\n        DropdownInput(\n            name=\"sender\",\n            display_name=\"Sender Type\",\n            options=[MESSAGE_SENDER_AI, MESSAGE_SENDER_USER],\n            value=MESSAGE_SENDER_USER,\n            info=\"Type of sender.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"sender_name\",\n            display_name=\"Sender Name\",\n            info=\"Name of the sender.\",\n            value=MESSAGE_SENDER_NAME_USER,\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"session_id\",\n            display_name=\"Session ID\",\n            info=\"The session ID of the chat. If empty, the current session ID parameter will be used.\",\n            advanced=True,\n        ),\n        FileInput(\n            name=\"files\",\n            display_name=\"Files\",\n            file_types=TEXT_FILE_TYPES + IMG_FILE_TYPES,\n            info=\"Files to be sent with the message.\",\n            advanced=True,\n            is_list=True,\n            temp_file=True,\n        ),\n        MessageTextInput(\n            name=\"background_color\",\n            display_name=\"Background Color\",\n            info=\"The background color of the icon.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"chat_icon\",\n            display_name=\"Icon\",\n            info=\"The icon of the message.\",\n            advanced=True,\n        ),\n        MessageTextInput(\n            name=\"text_color\",\n            display_name=\"Text Color\",\n            info=\"The text color of the name\",\n            advanced=True,\n        ),\n    ]\n    outputs = [\n        Output(display_name=\"Chat Message\", name=\"message\", method=\"message_response\"),\n    ]\n\n    async def message_response(self) -> Message:\n        background_color = self.background_color\n        text_color = self.text_color\n        icon = self.chat_icon\n        text = self.input_value\n        if not text:\n            url = os.getenv(\"QA_SERVER_GET_QUESTION_URL\")\n            if url:\n                try:\n                    response = requests.get(url, timeout=10)\n                    response.raise_for_status()\n                    data = response.json()\n                    text = data.get(\"question\", \"\")\n                except requests.exceptions.RequestException as e:\n                    print(f\"Warning: Failed to fetch question from {url}: {e}\")\n                    text = \"\"\n                except (ValueError, KeyError) as e:\n                    print(f\"Warning: Invalid response format: {e}\")\n                    text = \"\"\n            else:\n                text = \"\"\n\n        message = await Message.create(\n            text=text,\n            sender=self.sender,\n            sender_name=self.sender_name,\n            session_id=self.session_id,\n            files=self.files,\n            properties={\n                \"background_color\": background_color,\n                \"text_color\": text_color,\n                \"icon\": icon,\n            },\n        )\n        if (\n            self.session_id\n            and isinstance(message, Message)\n            and self.should_store_message\n        ):\n            stored_message = await self.send_message(\n                message,\n            )\n            self.message.value = stored_message\n            message = stored_message\n\n        self.status = message\n        return message\n"
               },
               "files": {
                 "_input_type": "FileInput",
@@ -1692,21 +1687,21 @@
           "type": "ChatInput"
         },
         "dragging": false,
-        "id": "ChatInput-Kpdte",
+        "id": "ChatInput-dZGaB",
         "measured": {
           "height": 202,
           "width": 320
         },
         "position": {
-          "x": 803.096134571702,
-          "y": 884.9002809531578
+          "x": 765.7964586406156,
+          "y": 949.9213188531851
         },
         "selected": false,
         "type": "genericNode"
       },
       {
         "data": {
-          "id": "OllamaEmbeddings-WRolM",
+          "id": "OllamaEmbeddings-PEjBI",
           "node": {
             "base_classes": [
               "Embeddings"
@@ -1724,8 +1719,9 @@
             ],
             "frozen": false,
             "icon": "Ollama",
-            "last_updated": "2025-09-01T12:09:42.031Z",
+            "last_updated": "2025-10-28T11:26:38.676Z",
             "legacy": false,
+            "lf_version": "1.6.4",
             "metadata": {
               "keywords": [
                 "model",
@@ -1833,7 +1829,7 @@
           "type": "OllamaEmbeddings"
         },
         "dragging": false,
-        "id": "OllamaEmbeddings-WRolM",
+        "id": "OllamaEmbeddings-PEjBI",
         "measured": {
           "height": 284,
           "width": 320
@@ -1847,7 +1843,7 @@
       },
       {
         "data": {
-          "id": "ChatQwenModel-fSPD4",
+          "id": "ChatQwenModel-Yd5Td",
           "node": {
             "base_classes": [
               "LanguageModel",
@@ -1877,8 +1873,9 @@
             ],
             "frozen": false,
             "icon": "Qwen",
-            "last_updated": "2025-10-28T17:03:20.398Z",
+            "last_updated": "2025-10-28T11:40:56.946Z",
             "legacy": false,
+            "lf_version": "1.6.4",
             "metadata": {
               "code_hash": "112daed5634e",
               "dependencies": {
@@ -2244,21 +2241,21 @@
           "type": "ChatQwenModel"
         },
         "dragging": false,
-        "id": "ChatQwenModel-fSPD4",
+        "id": "ChatQwenModel-Yd5Td",
         "measured": {
-          "height": 425,
+          "height": 589,
           "width": 320
         },
         "position": {
-          "x": 2433.41171731269,
-          "y": 863.9154671314868
+          "x": 2513.434269738249,
+          "y": 612.0850726116726
         },
         "selected": false,
         "type": "genericNode"
       },
       {
         "data": {
-          "id": "Directory-TGIZ5",
+          "id": "Directory-kKuza",
           "node": {
             "base_classes": [
               "DataFrame"
@@ -2283,6 +2280,7 @@
             "frozen": false,
             "icon": "folder",
             "legacy": false,
+            "lf_version": "1.6.4",
             "metadata": {},
             "minimized": false,
             "output_types": [],
@@ -2508,7 +2506,7 @@
           "type": "Directory"
         },
         "dragging": false,
-        "id": "Directory-TGIZ5",
+        "id": "Directory-kKuza",
         "measured": {
           "height": 366,
           "width": 320
@@ -2522,7 +2520,7 @@
       },
       {
         "data": {
-          "id": "SplitText-7hapY",
+          "id": "SplitText-Rwd8t",
           "node": {
             "base_classes": [
               "DataFrame"
@@ -2545,7 +2543,7 @@
             "frozen": false,
             "icon": "scissors-line-dashed",
             "legacy": false,
-            "lf_version": "1.5.0.post1",
+            "lf_version": "1.6.4",
             "metadata": {
               "code_hash": "dbf2e9d2319d",
               "module": "langflow.components.processing.split_text.SplitTextComponent"
@@ -2726,7 +2724,7 @@
           "type": "SplitText"
         },
         "dragging": false,
-        "id": "SplitText-7hapY",
+        "id": "SplitText-Rwd8t",
         "measured": {
           "height": 410,
           "width": 320
@@ -2740,17 +2738,17 @@
       }
     ],
     "viewport": {
-      "x": -758.9843014246233,
-      "y": -214.58010872623015,
-      "zoom": 0.6552394231612366
+      "x": -1933.9377554218713,
+      "y": -317.07788207506974,
+      "zoom": 0.7643558149926846
     }
   },
   "description": "Load your data for chat context with Retrieval Augmented Generation.",
   "endpoint_name": null,
-  "id": "98c7de8f-8bc2-4e3d-9813-51fe3dca690d",
+  "id": "a456fab1-c270-4506-999d-519eb5498a95",
   "is_component": false,
   "last_tested_version": "1.6.4",
-  "name": "model (345) (21) (2) (1) (1)",
+  "name": "model 1 (2)",
   "tags": [
     "openai",
     "astradb",
