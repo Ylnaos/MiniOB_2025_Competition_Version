@@ -194,7 +194,6 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
   fstream fs;
   fs.open(file_name, ios_base::in | ios_base::binary);
   if (!fs.is_open()) {
-    result_string << "Failed to open file: " << file_name << ". system error=" << strerror(errno) << endl;
     sql_result->set_return_code(RC::FILE_NOT_EXIST);
     sql_result->set_state_string(result_string.str());
     return;
@@ -229,8 +228,6 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
       line_num++;
 
       if (file_values.size() < static_cast<size_t>(field_num)) {
-        result_string << "Line:" << line_num << " field count mismatch. expected:" << field_num
-                      << ", actual:" << file_values.size() << endl;
         rc = RC::SCHEMA_FIELD_MISSING;
         break;
       }
@@ -245,8 +242,6 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
         }
         rc = DataType::type_instance(field->type())->set_value_from_str(record_values[i], file_value);
         if (rc != RC::SUCCESS) {
-          result_string << "Line:" << line_num << " failed to parse field " << i
-                        << ", value:" << file_value << ", type:" << attr_type_to_string(field->type()) << endl;
           parse_success = false;
         }
       }
@@ -265,7 +260,6 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
       if (batch_count >= BATCH_SIZE) {
         rc = table->insert_chunk(chunk);
         if (rc != RC::SUCCESS) {
-          result_string << "Batch insert failed at line:" << line_num << ", error:" << strrc(rc) << endl;
           break;
         }
         insertion_count += batch_count;
@@ -277,9 +271,7 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
     // 插入剩余的数据
     if (batch_count > 0 && rc == RC::SUCCESS) {
       rc = table->insert_chunk(chunk);
-      if (rc != RC::SUCCESS) {
-        result_string << "Final batch insert failed at line:" << line_num << ", error:" << strrc(rc) << endl;
-      } else {
+      if (rc == RC::SUCCESS) {
         insertion_count += batch_count;
       }
     }
@@ -293,8 +285,6 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
       stringstream errmsg;
       rc = insert_record_from_file(table, file_values, record_values, errmsg);
       if (rc != RC::SUCCESS) {
-        result_string << "Line:" << line_num << " insert record failed:" << errmsg.str()
-                      << ". error:" << strrc(rc) << endl;
         break;
       }
       insertion_count++;
@@ -308,10 +298,7 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
   double elapsed_time = (end_time.tv_sec - begin_time.tv_sec) +
                         (end_time.tv_nsec - begin_time.tv_nsec) / 1000000000.0;
 
-  if (RC::SUCCESS == rc) {
-    result_string << "SUCCESS. Rows inserted: " << insertion_count
-                  << ", Time: " << elapsed_time << "s";
-  }
+  // 成功时不输出额外信息，只通过RC状态码返回
   LOG_INFO("load data done. row num: %d, result: %s, time: %.2fs", insertion_count, strrc(rc), elapsed_time);
   sql_result->set_return_code(rc);
   sql_result->set_state_string(result_string.str());

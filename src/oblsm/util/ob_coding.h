@@ -10,9 +10,12 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
+#include <string_view>
 #include "common/lang/string.h"
 
 namespace oceanbase {
+
+using std::string_view;
 
 static const uint8_t SEQ_SIZE               = 8;
 static const uint8_t LOOKUP_KEY_PREFIX_SIZE = 8;
