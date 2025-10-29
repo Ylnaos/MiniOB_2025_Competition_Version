@@ -378,6 +378,15 @@ struct CreateViewSqlNode
 };
 
 /**
+ * @brief 描述一个 create materialized view 语句
+ */
+struct CreateMaterializedViewSqlNode
+{
+  string                    view_name;       ///< 物化视图名称
+  unique_ptr<ParsedSqlNode> select_node;     ///< 解析好的 SELECT 语法树
+};
+
+/**
  * @brief 描述一个 DROP VIEW 语句
  * @ingroup SQLParser
  */
@@ -413,6 +422,7 @@ enum SqlCommandFlag
   SCF_DELETE,
   SCF_CREATE_TABLE,
   SCF_CREATE_VIEW,
+  SCF_CREATE_MATERIALIZED_VIEW,
   SCF_DROP_TABLE,
   SCF_DROP_VIEW,
   SCF_ANALYZE_TABLE,
@@ -446,10 +456,11 @@ public:
   InsertSqlNode       insertion;
   DeleteSqlNode       deletion;
   UpdateSqlNode       update;
-  CreateTableSqlNode  create_table;
-  CreateViewSqlNode   create_view;
-  DropTableSqlNode    drop_table;
-  DropViewSqlNode     drop_view;
+  CreateTableSqlNode              create_table;
+  CreateViewSqlNode               create_view;
+  CreateMaterializedViewSqlNode   create_materialized_view;
+  DropTableSqlNode                drop_table;
+  DropViewSqlNode                 drop_view;
   AnalyzeTableSqlNode analyze_table;
   CreateIndexSqlNode  create_index;
   DropIndexSqlNode    drop_index;

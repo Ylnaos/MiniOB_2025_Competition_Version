@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/expr/aggregate_hash_table.h"
 #include "sql/operator/physical_operator.h"
+#include "storage/common/chunk.h"
 
 /**
  * @brief Group By 物理算子(vectorized)
@@ -20,15 +21,26 @@ See the Mulan PSL v2 for more details. */
 class GroupByVecPhysicalOperator : public PhysicalOperator
 {
 public:
-  GroupByVecPhysicalOperator(vector<unique_ptr<Expression>> &&group_by_exprs, vector<Expression *> &&expressions){};
+  GroupByVecPhysicalOperator(vector<unique_ptr<Expression>> &&group_by_exprs, vector<Expression *> &&expressions);
 
   virtual ~GroupByVecPhysicalOperator() = default;
 
   PhysicalOperatorType type() const override { return PhysicalOperatorType::GROUP_BY_VEC; }
 
-  RC open(Trx *trx) override { return RC::UNIMPLEMENTED; }
-  RC next(Chunk &chunk) override { return RC::UNIMPLEMENTED; }
-  RC close() override { return RC::UNIMPLEMENTED; }
+  RC open(Trx *trx) override;
+  RC next(Chunk &chunk) override;
+  RC close() override;
 
 private:
+  vector<unique_ptr<Expression>> group_by_expressions_;
+  vector<Expression *>           aggregate_expressions_;
+  vector<Expression *>           value_expressions_;
+
+  unique_ptr<StandardAggregateHashTable> hash_table_;
+  unique_ptr<AggregateHashTable::Scanner> scanner_;
+
+  Chunk input_chunk_;
+  Chunk group_chunk_;
+  Chunk aggr_chunk_;
+  Chunk output_chunk_;
 };

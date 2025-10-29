@@ -16,6 +16,9 @@ See the Mulan PSL v2 for more details. */
 #include "storage/index/fulltext_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
+#include "storage/record/lob_ref.h"
+#include "common/value.h"
+#include <algorithm>
 
 
 HeapTableEngine::~HeapTableEngine()
@@ -142,13 +145,111 @@ RC rc2 = delete_entry_of_indexes(record.data(), record.rid(), false /*error_on_n
 RC HeapTableEngine::insert_chunk(const Chunk& chunk)
 {
   RC rc = RC::SUCCESS;
-  rc    = record_handler_->insert_chunk(chunk, table_meta_->record_size());
-  if (rc != RC::SUCCESS) {
-    LOG_ERROR("Insert chunk failed. table name=%s, rc=%s", table_meta_->name(), strrc(rc));
+
+  const int sys_field_num    = table_meta_->sys_field_num();
+  const int total_field_num  = table_meta_->field_num();
+  const int normal_field_num = total_field_num - sys_field_num;
+
+  bool has_text_field = false;
+  for (int idx = sys_field_num; idx < total_field_num; ++idx) {
+    const FieldMeta *field = table_meta_->field(idx);
+    if (field == nullptr) {
+      LOG_WARN("Unexpected null field meta when scanning table schema. table=%s index=%d",
+               table_meta_->name(), idx);
+      return RC::INTERNAL;
+    }
+    if (field->type() == AttrType::TEXTS) {
+      has_text_field = true;
+      break;
+    }
+  }
+
+  if (!has_text_field) {
+    rc = record_handler_->insert_chunk(chunk, table_meta_->record_size());
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Insert chunk failed. table name=%s, rc=%s", table_meta_->name(), strrc(rc));
+    }
+    // TODO: insert chunk support update index
     return rc;
   }
 
-  // TODO: insert chunk support update index
+  if (normal_field_num <= 0 || chunk.rows() == 0) {
+    return RC::SUCCESS;
+  }
+
+  int max_field_id = -1;
+  for (int idx = sys_field_num; idx < total_field_num; ++idx) {
+    const FieldMeta *field = table_meta_->field(idx);
+    if (field == nullptr) {
+      LOG_WARN("Unexpected null field meta when computing field ids. table=%s index=%d",
+               table_meta_->name(), idx);
+      return RC::INTERNAL;
+    }
+    max_field_id = std::max(max_field_id, field->field_id());
+  }
+  if (max_field_id < 0) {
+    return RC::SUCCESS;
+  }
+
+  vector<int> field_to_chunk_idx(max_field_id + 1, -1);
+  for (int chunk_col_idx = 0; chunk_col_idx < chunk.column_num(); ++chunk_col_idx) {
+    int field_id = chunk.column_ids(chunk_col_idx);
+    if (field_id >= 0 && field_id <= max_field_id) {
+      field_to_chunk_idx[field_id] = chunk_col_idx;
+    }
+  }
+
+  for (int idx = sys_field_num; idx < total_field_num; ++idx) {
+    const FieldMeta *field = table_meta_->field(idx);
+    if (field == nullptr) {
+      LOG_WARN("Unexpected null field meta when validating chunk. table=%s index=%d",
+               table_meta_->name(), idx);
+      return RC::INTERNAL;
+    }
+    const int field_id = field->field_id();
+    if (field_id < 0 || field_id > max_field_id || field_to_chunk_idx[field_id] < 0) {
+      LOG_WARN("Chunk missing required column for field. table=%s field=%s field_id=%d",
+               table_meta_->name(), field->name(), field_id);
+      return RC::SCHEMA_FIELD_MISSING;
+    }
+  }
+
+  vector<Value> row_values(normal_field_num);
+  for (int row_idx = 0; row_idx < chunk.rows(); ++row_idx) {
+    int value_pos = 0;
+    for (int idx = sys_field_num; idx < total_field_num; ++idx) {
+      const FieldMeta *field = table_meta_->field(idx);
+      if (field == nullptr) {
+        LOG_WARN("Unexpected null field meta when materializing chunk row. table=%s index=%d",
+                 table_meta_->name(), idx);
+        return RC::INTERNAL;
+      }
+      const int field_id       = field->field_id();
+      const int chunk_col_idx  = field_to_chunk_idx[field_id];
+      row_values[value_pos++]  = chunk.get_value(chunk_col_idx, row_idx);
+    }
+    if (value_pos != normal_field_num) {
+      LOG_WARN("Chunk row value count mismatch. table=%s row=%d expect=%d actual=%d",
+               table_meta_->name(), row_idx, normal_field_num, value_pos);
+      return RC::SCHEMA_FIELD_MISSING;
+    }
+
+    Record record;
+    rc = table_->make_record(normal_field_num, row_values.data(), record);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("Failed to build record from chunk row. table=%s row=%d rc=%s",
+               table_meta_->name(), row_idx, strrc(rc));
+      return rc;
+    }
+
+    rc = table_->insert_record(record);
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Insert record from chunk failed. table=%s row=%d rc=%s",
+                table_meta_->name(), row_idx, strrc(rc));
+      return rc;
+    }
+  }
+
   return rc;
 }
 

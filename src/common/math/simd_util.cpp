@@ -22,9 +22,27 @@ int mm256_extract_epi32_var_indx(const __m256i vec, const unsigned int i)
 
 int mm256_sum_epi32(const int *values, int size)
 {
-  // your code here
-  int sum = 0;
-  for (int i = 0; i < size; i++) {
+  if (values == nullptr || size <= 0) {
+    return 0;
+  }
+
+  __m256i vec_sum = _mm256_setzero_si256();
+  int     i       = 0;
+
+  const int simd_step = SIMD_WIDTH;
+  for (; i + simd_step <= size; i += simd_step) {
+    __m256i vec = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(values + i));
+    vec_sum     = _mm256_add_epi32(vec_sum, vec);
+  }
+
+  __m128i low128  = _mm256_castsi256_si128(vec_sum);
+  __m128i high128 = _mm256_extracti128_si256(vec_sum, 1);
+  __m128i sum128  = _mm_add_epi32(low128, high128);
+  sum128          = _mm_hadd_epi32(sum128, sum128);
+  sum128          = _mm_hadd_epi32(sum128, sum128);
+  int sum         = _mm_cvtsi128_si32(sum128);
+
+  for (; i < size; ++i) {
     sum += values[i];
   }
   return sum;
@@ -32,9 +50,27 @@ int mm256_sum_epi32(const int *values, int size)
 
 float mm256_sum_ps(const float *values, int size)
 {
-  // your code here
-  float sum = 0;
-  for (int i = 0; i < size; i++) {
+  if (values == nullptr || size <= 0) {
+    return 0.0f;
+  }
+
+  __m256 vec_sum = _mm256_setzero_ps();
+  int    i       = 0;
+
+  const int simd_step = SIMD_WIDTH;
+  for (; i + simd_step <= size; i += simd_step) {
+    __m256 vec = _mm256_loadu_ps(values + i);
+    vec_sum    = _mm256_add_ps(vec_sum, vec);
+  }
+
+  __m128 low128  = _mm256_castps256_ps128(vec_sum);
+  __m128 high128 = _mm256_extractf128_ps(vec_sum, 1);
+  __m128 sum128  = _mm_add_ps(low128, high128);
+  sum128         = _mm_hadd_ps(sum128, sum128);
+  sum128         = _mm_hadd_ps(sum128, sum128);
+  float sum      = _mm_cvtss_f32(sum128);
+
+  for (; i < size; ++i) {
     sum += values[i];
   }
   return sum;

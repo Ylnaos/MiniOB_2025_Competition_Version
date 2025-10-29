@@ -16,6 +16,9 @@ See the Mulan PSL v2 for more details. */
 #include "storage/common/condition_filter.h"
 #include "storage/trx/trx.h"
 #include "storage/clog/log_handler.h"
+#include "storage/record/lob_ref.h"
+#include "common/type/string_t.h"
+#include <vector>
 
 using namespace common;
 
@@ -466,8 +469,55 @@ RC PaxRecordPageHandler::insert_record(const char *data, RID *rid)
 
 RC PaxRecordPageHandler::insert_chunk(const Chunk &chunk, int start_row, int &insert_rows)
 {
-  // your code here
-  return RC::UNIMPLEMENTED;
+  ASSERT(rw_mode_ != ReadWriteMode::READ_ONLY,
+         "cannot insert chunk into page while the page is readonly");
+
+  insert_rows = 0;
+
+  // 计算可以插入的行数
+  int available_slots = page_header_->record_capacity - page_header_->record_num;
+  int rows_to_insert = std::min(available_slots, chunk.rows() - start_row);
+
+  if (rows_to_insert <= 0) {
+    return RC::SUCCESS;
+  }
+
+  Bitmap bitmap(bitmap_, page_header_->record_capacity);
+
+  // 批量插入每一行
+  for (int row_idx = 0; row_idx < rows_to_insert; ++row_idx) {
+    int chunk_row = start_row + row_idx;
+
+    // 找到空闲位置
+    int slot_num = bitmap.next_unsetted_bit(0);
+    if (slot_num < 0) {
+      LOG_WARN("No available slot found, page is full");
+      break;
+    }
+
+    bitmap.set_bit(slot_num);
+    page_header_->record_num++;
+
+    // 将 Chunk 中的每一列数据写入对应的列存储区域
+    for (int col_idx = 0; col_idx < chunk.column_num(); ++col_idx) {
+      int col_id = chunk.column_ids(col_idx);
+      const Column &column = chunk.column(col_idx);
+
+      char *field_data = get_field_data(slot_num, col_id);
+      int field_len = get_field_len(col_id);
+
+      // 从 Chunk 的列中复制数据
+      memcpy(field_data, column.data() + chunk_row * column.attr_len(), field_len);
+    }
+
+    insert_rows++;
+  }
+
+  if (insert_rows > 0) {
+    frame_->mark_dirty();
+  }
+
+  return RC::SUCCESS;
 }
 
 RC PaxRecordPageHandler::delete_record(const RID *rid)
@@ -509,8 +559,13 @@ RC PaxRecordPageHandler::get_record(const RID &rid, Record &record)
   }
 
   // PAX 格式：从各列存储区域读取数据并拼接成完整行
-  // 分配临时缓冲区用于拼接完整行
-  char *row_data = new char[page_header_->record_real_size];
+  // 使用 malloc 分配内存（与 Record 的 free 配对）
+  char *row_data = (char *)malloc(page_header_->record_real_size);
+  if (row_data == nullptr) {
+    LOG_ERROR("Failed to allocate memory for record data");
+    return RC::NOMEM;
+  }
+
   int data_offset = 0;
   for (int col_id = 0; col_id < page_header_->column_num; ++col_id) {
     int field_len = get_field_len(col_id);
@@ -542,11 +597,14 @@ RC PaxRecordPageHandler::get_chunk(Chunk &chunk)
     return RC::SUCCESS;
   }
 
+  std::vector<char> lob_buffer;
+
   // 对于 chunk 请求的每一列，批量读取该列的所有有效数据
   for (int chunk_col_idx = 0; chunk_col_idx < chunk.column_num(); ++chunk_col_idx) {
     int col_id = chunk.column_ids(chunk_col_idx);
     Column &column = chunk.column(chunk_col_idx);
     (void)get_field_len(col_id);  // 避免未使用变量警告
+    const bool is_text_column = (column.attr_type() == AttrType::TEXTS);
 
     // 为每个有效记录追加列数据
     for (int slot_num = 0; slot_num < page_header_->record_capacity; ++slot_num) {
@@ -557,6 +615,42 @@ RC PaxRecordPageHandler::get_chunk(Chunk &chunk)
           LOG_ERROR("Failed to append data to column. col_id=%d, slot_num=%d, rc=%s",
                     col_id, slot_num, strrc(rc));
           return rc;
+        }
+
+        if (is_text_column) {
+          const auto *lob_ref = reinterpret_cast<const LobRef *>(field_data);
+          if (lob_ref->length < 0) {
+            LOG_WARN("Invalid LOB length when reading TEXT column. col_id=%d length=%d",
+                     col_id, lob_ref->length);
+            return RC::INTERNAL;
+          }
+          string_t     text_value("", 0);
+
+          if (lob_ref->length > 0) {
+            if (lob_handler_ == nullptr) {
+              LOG_WARN("LOB handler not initialized when reading TEXT column. col_id=%d", col_id);
+              return RC::INTERNAL;
+            }
+            if (static_cast<size_t>(lob_ref->length) > lob_buffer.size()) {
+              lob_buffer.resize(lob_ref->length);
+            }
+            rc = lob_handler_->get_data(lob_ref->offset, lob_ref->length, lob_buffer.data());
+            if (OB_FAIL(rc)) {
+              LOG_ERROR("Failed to read LOB data. offset=%ld len=%d rc=%s",
+                        lob_ref->offset, lob_ref->length, strrc(rc));
+              return rc;
+            }
+            text_value = column.add_text(lob_buffer.data(), lob_ref->length);
+          }
+
+          const int   appended_index = column.count() - 1;
+          char       *slot_ptr       = column.data() + appended_index * column.attr_len();
+          if (column.attr_len() < static_cast<int>(sizeof(string_t))) {
+            LOG_WARN("TEXT column slot too small for string_t. col_id=%d attr_len=%d",
+                     col_id, column.attr_len());
+            return RC::INTERNAL;
+          }
+          memcpy(slot_ptr, &text_value, sizeof(string_t));
         }
       }
     }
@@ -717,8 +811,91 @@ RC RecordFileHandler::insert_record(const char *data, int record_size, RID *rid)
 
 RC RecordFileHandler::insert_chunk(const Chunk &chunk, int record_size)
 {
-  // your code here
-  return RC::UNIMPLEMENTED;
+  RC ret = RC::SUCCESS;
+
+  if (chunk.rows() == 0) {
+    return RC::SUCCESS;
+  }
+
+  unique_ptr<RecordPageHandler> record_page_handler(RecordPageHandler::create(storage_format_));
+  int start_row = 0;
+  int total_inserted = 0;
+
+  while (start_row < chunk.rows()) {
+    PageNum current_page_num = 0;
+    bool page_found = false;
+
+    // 寻找未满的页面
+    lock_.lock();
+    while (!free_pages_.empty()) {
+      current_page_num = *free_pages_.begin();
+
+      ret = record_page_handler->init(*disk_buffer_pool_, *log_handler_, current_page_num, ReadWriteMode::READ_WRITE);
+      if (OB_FAIL(ret)) {
+        lock_.unlock();
+        LOG_WARN("failed to init record page handler. page num=%d, rc=%s", current_page_num, strrc(ret));
+        return ret;
+      }
+
+      if (!record_page_handler->is_full()) {
+        page_found = true;
+        break;
+      }
+      record_page_handler->cleanup();
+      free_pages_.erase(free_pages_.begin());
+    }
+    lock_.unlock();
+
+    // 找不到就分配新页面
+    if (!page_found) {
+      Frame *frame = nullptr;
+      if ((ret = disk_buffer_pool_->allocate_page(&frame)) != RC::SUCCESS) {
+        LOG_ERROR("Failed to allocate page while inserting chunk. ret:%d", ret);
+        return ret;
+      }
+
+      current_page_num = frame->page_num();
+
+      ret = record_page_handler->init_empty_page(
+          *disk_buffer_pool_, *log_handler_, current_page_num, record_size, table_meta_, lob_handler_);
+      if (OB_FAIL(ret)) {
+        frame->unpin();
+        LOG_ERROR("Failed to init empty page. ret:%d", ret);
+        return ret;
+      }
+
+      frame->unpin();
+
+      lock_.lock();
+      free_pages_.insert(current_page_num);
+      lock_.unlock();
+    }
+
+    // 向当前页面插入尽可能多的行
+    int insert_rows = 0;
+    ret = record_page_handler->insert_chunk(chunk, start_row, insert_rows);
+    if (OB_FAIL(ret)) {
+      LOG_ERROR("Failed to insert chunk into page. page_num=%d, start_row=%d, rc=%s",
+                current_page_num, start_row, strrc(ret));
+      record_page_handler->cleanup();
+      return ret;
+    }
+
+    start_row += insert_rows;
+    total_inserted += insert_rows;
+
+    // 如果页面满了，从 free_pages_ 中移除
+    if (record_page_handler->is_full()) {
+      lock_.lock();
+      free_pages_.erase(current_page_num);
+      lock_.unlock();
+    }
+
+    record_page_handler->cleanup();
+  }
+
+  LOG_DEBUG("insert_chunk completed. total_inserted=%d, total_rows=%d", total_inserted, chunk.rows());
+  return RC::SUCCESS;
 }
 
 RC RecordFileHandler::recover_insert_record(const char *data, int record_size, const RID &rid)

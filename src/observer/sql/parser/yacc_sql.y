@@ -137,6 +137,7 @@ static size_t default_length_for_attr_type(AttrType type)
         RBRACKET
         CREATE
         VIEW
+        MATERIALIZED
         DROP
         ALTER
         GROUP
@@ -337,6 +338,7 @@ static size_t default_length_for_attr_type(AttrType type)
 %type <sql_node>            delete_stmt
 %type <sql_node>            create_table_stmt
 %type <sql_node>            create_view_stmt
+%type <sql_node>            create_materialized_view_stmt
 %type <sql_node>            drop_view_stmt
 %type <sql_node>            drop_table_stmt
 %type <sql_node>            alter_table_stmt
@@ -378,6 +380,7 @@ command_wrapper:
   | delete_stmt
   | create_table_stmt
   | create_view_stmt
+  | create_materialized_view_stmt
   | drop_table_stmt
   | drop_view_stmt
   | alter_table_stmt
@@ -507,6 +510,15 @@ create_view_stmt:
       // 记录 select 子句的原始文本
       $$->create_view.view_select_sql = token_name(sql_string, &@8);
       $$->create_view.select_node.reset($8);
+    }
+    ;
+
+create_materialized_view_stmt:
+    CREATE MATERIALIZED VIEW ID AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_MATERIALIZED_VIEW);
+      $$->create_materialized_view.view_name = $4;
+      $$->create_materialized_view.select_node.reset($6);
     }
     ;
 

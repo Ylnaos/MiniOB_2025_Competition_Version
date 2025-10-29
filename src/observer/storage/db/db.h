@@ -94,6 +94,8 @@ public:
   RC drop_view(const char *view_name);
   /// @brief 查找视图
   View *find_view(const char *view_name) const;
+  /// @brief 创建物化视图
+  RC create_materialized_view(const char *view_name, class SelectStmt *select_stmt);
 
   /// @brief 当前数据库的名称
   const char *name() const;

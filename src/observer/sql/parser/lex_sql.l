@@ -91,6 +91,7 @@ HELP                                    RETURN_TOKEN(HELP);
 DESC                                    RETURN_TOKEN(DESC);
 CREATE                                  RETURN_TOKEN(CREATE);
 VIEW                                    RETURN_TOKEN(VIEW);
+MATERIALIZED                            RETURN_TOKEN(MATERIALIZED);
 DROP                                    RETURN_TOKEN(DROP);
 ALTER                                   RETURN_TOKEN(ALTER);
 ADD                                     RETURN_TOKEN(ADD);

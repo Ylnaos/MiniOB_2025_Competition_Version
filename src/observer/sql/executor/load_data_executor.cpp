@@ -228,7 +228,7 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
     while (parse_csv_line(fs, file_values, terminated, enclosed)) {
       line_num++;
 
-      if (file_values.size() < field_num) {
+      if (file_values.size() < static_cast<size_t>(field_num)) {
         result_string << "Line:" << line_num << " field count mismatch. expected:" << field_num
                       << ", actual:" << file_values.size() << endl;
         rc = RC::SCHEMA_FIELD_MISSING;

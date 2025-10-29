@@ -1262,6 +1262,32 @@ RC Db::create_view(const char *view_name, const char *select_sql, const vector<s
   return RC::SUCCESS;
 }
 
+RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
+{
+  if (is_blank(view_name) || nullptr == select_stmt) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 检查名称冲突
+  if (opened_tables_.count(view_name) > 0) {
+    return RC::SCHEMA_TABLE_EXIST;
+  }
+  if (opened_views_.count(view_name) > 0) {
+    return RC::EXIST;
+  }
+
+  // TODO: 完整实现需要：
+  // 1. 从 SelectStmt 推导出结果的 schema (列名、类型)
+  // 2. 创建物理表来存储查询结果
+  // 3. 在 executor 中执行查询并将结果插入表中
+  //
+  // 目前返回 UNIMPLEMENTED，需要在 CreateMaterializedViewExecutor 中
+  // 参考 CreateTableExecutor 的 CTAS 实现来完成数据填充逻辑
+
+  LOG_WARN("create_materialized_view not fully implemented yet");
+  return RC::UNIMPLEMENTED;
+}
+
 RC Db::drop_view(const char *view_name)
 {
   if (is_blank(view_name)) return RC::INVALID_ARGUMENT;
