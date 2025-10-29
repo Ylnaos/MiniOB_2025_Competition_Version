@@ -30,8 +30,9 @@ class CreateTableStmt : public Stmt
 {
 public:
   CreateTableStmt(const string &table_name, const vector<AttrInfoSqlNode> &attr_infos, const vector<string> &pks,
-      StorageFormat storage_format)
-      : table_name_(table_name), attr_infos_(attr_infos), primary_keys_(pks), storage_format_(storage_format)
+      StorageFormat storage_format, bool if_not_exists = false)
+      : table_name_(table_name), attr_infos_(attr_infos), primary_keys_(pks), storage_format_(storage_format),
+        if_not_exists_(if_not_exists)
   {}
   virtual ~CreateTableStmt();
 
@@ -43,6 +44,7 @@ public:
   const StorageFormat            storage_format() const { return storage_format_; }
   bool                           is_ctas() const { return as_select_stmt_ != nullptr; }
   SelectStmt                    *as_select_stmt() const { return as_select_stmt_; }
+  bool                           if_not_exists() const { return if_not_exists_; }
 
   static RC            create(Db *db, const CreateTableSqlNode &create_table, Stmt *&stmt);
   static StorageFormat get_storage_format(const char *format_str);
@@ -53,4 +55,5 @@ private:
   vector<string>          primary_keys_;
   StorageFormat           storage_format_;
   SelectStmt             *as_select_stmt_ = nullptr; // owned, non-null for CTAS
+  bool                    if_not_exists_ = false;
 };

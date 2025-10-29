@@ -240,6 +240,7 @@ struct CreateTableSqlNode
   string storage_engine;  ///< storage engine
   // CTAS: optional subquery to build schema and data
   std::unique_ptr<ParsedSqlNode> as_select;  ///< non-null when using `CREATE TABLE ... AS SELECT ...`
+  bool                    if_not_exists = false;  ///< IF NOT EXISTS flag
 };
 
 /**
@@ -249,6 +250,7 @@ struct CreateTableSqlNode
 struct DropTableSqlNode
 {
   string relation_name;  ///< 要删除的表名
+  bool   if_exists = false;  ///< IF EXISTS flag
 };
 
 /**
@@ -292,6 +294,7 @@ struct DropIndexSqlNode
 {
   string index_name;     ///< Index name
   string relation_name;  ///< Relation name
+  bool   if_exists = false;  ///< IF EXISTS flag
 };
 
 /**
@@ -375,6 +378,16 @@ struct CreateViewSqlNode
 };
 
 /**
+ * @brief 描述一个 DROP VIEW 语句
+ * @ingroup SQLParser
+ */
+struct DropViewSqlNode
+{
+  string view_name;          ///< 要删除的视图名称
+  bool   if_exists = false;  ///< IF EXISTS flag
+};
+
+/**
  * @brief 解析SQL语句出现了错误
  * @ingroup SQLParser
  * @details 当前解析时并没有处理错误的行号和列号
@@ -401,6 +414,7 @@ enum SqlCommandFlag
   SCF_CREATE_TABLE,
   SCF_CREATE_VIEW,
   SCF_DROP_TABLE,
+  SCF_DROP_VIEW,
   SCF_ANALYZE_TABLE,
   SCF_CREATE_INDEX,
   SCF_DROP_INDEX,
@@ -435,6 +449,7 @@ public:
   CreateTableSqlNode  create_table;
   CreateViewSqlNode   create_view;
   DropTableSqlNode    drop_table;
+  DropViewSqlNode     drop_view;
   AnalyzeTableSqlNode analyze_table;
   CreateIndexSqlNode  create_index;
   DropIndexSqlNode    drop_index;

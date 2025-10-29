@@ -20,6 +20,7 @@ enum class AttrType
   CHARS,     ///< 定长字符串
   TEXTS,     ///< TEXT 类型（按字符串处理），固定最大4096字节
   INTS,      ///< 整数类型(4字节)
+  BIGINTS,   ///< 大整数类型(8字节)
   FLOATS,    ///< 浮点数类型(4字节)
   DATES,     ///< 日期类型(4字字节)
   VECTORS,   ///< 向量类型

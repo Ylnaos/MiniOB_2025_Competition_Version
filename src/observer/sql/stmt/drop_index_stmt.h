@@ -27,18 +27,21 @@ class Table;
 class DropIndexStmt : public Stmt
 {
 public:
-  DropIndexStmt(Table *table, const std::string &index_name) : table_(table), index_name_(index_name) {}
+  DropIndexStmt(Table *table, const std::string &index_name, bool if_exists = false)
+    : table_(table), index_name_(index_name), if_exists_(if_exists) {}
   virtual ~DropIndexStmt() = default;
 
   StmtType type() const override { return StmtType::DROP_INDEX; }
 
   Table              *table() const { return table_; }
   const std::string  &index_name() const { return index_name_; }
+  bool                if_exists() const { return if_exists_; }
 
   static RC create(Db *db, const DropIndexSqlNode &drop_index, Stmt *&stmt);
 
 private:
   Table             *table_ = nullptr;
   std::string        index_name_;
+  bool               if_exists_ = false;
 };
 

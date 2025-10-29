@@ -28,7 +28,8 @@
       "Bash(winpty docker exec miniob2025 bash -c \"cat /root/miniob/etc/observer.ini | grep -A 2 -i log\")",
       "Bash(md5sum:*)",
       "Bash(copy:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": [],
     "ask": []

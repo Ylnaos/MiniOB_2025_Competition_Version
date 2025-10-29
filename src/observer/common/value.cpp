@@ -156,6 +156,10 @@ void Value::set_data(char *data, int length)
       value_.int_value_ = *(int *)data;
       length_           = length;
     } break;
+    case AttrType::BIGINTS: {
+      value_.bigint_value_ = *(int64_t *)data;
+      length_              = length;
+    } break;
     case AttrType::FLOATS: {
       value_.float_value_ = *(float *)data;
       length_             = length;
@@ -180,6 +184,14 @@ void Value::set_int(int val)
   attr_type_        = AttrType::INTS;
   value_.int_value_ = val;
   length_           = sizeof(val);
+}
+
+void Value::set_bigint(int64_t val)
+{
+  reset();
+  attr_type_           = AttrType::BIGINTS;
+  value_.bigint_value_ = val;
+  length_              = sizeof(val);
 }
 
 void Value::set_float(float val)
@@ -251,6 +263,9 @@ void Value::set_value(const Value &value)
   switch (value.attr_type_) {
     case AttrType::INTS: {
       set_int(value.get_int());
+    } break;
+    case AttrType::BIGINTS: {
+      set_bigint(value.get_bigint());
     } break;
     case AttrType::FLOATS: {
       set_float(value.get_float());
@@ -364,6 +379,9 @@ int Value::get_int() const
     case AttrType::INTS: {
       return value_.int_value_;
     }
+    case AttrType::BIGINTS: {
+      return static_cast<int>(value_.bigint_value_);
+    }
     case AttrType::FLOATS: {
       return (int)(value_.float_value_);
     }
@@ -372,6 +390,44 @@ int Value::get_int() const
     }
     case AttrType::DATES: {
       return value_.int_value_;
+    }
+    default: {
+      LOG_WARN("unknown data type. type=%d", attr_type_);
+      return 0;
+    }
+  }
+  return 0;
+}
+
+int64_t Value::get_bigint() const
+{
+  switch (attr_type_) {
+    case AttrType::CHARS:
+    case AttrType::TEXTS: {
+      if (value_.pointer_value_ == nullptr) {
+        return 0;
+      }
+      char    *endptr = nullptr;
+      int64_t  v      = strtoll(value_.pointer_value_, &endptr, 10);
+      if (endptr == value_.pointer_value_) {
+        return 0;
+      }
+      return v;
+    }
+    case AttrType::INTS: {
+      return static_cast<int64_t>(value_.int_value_);
+    }
+    case AttrType::BIGINTS: {
+      return value_.bigint_value_;
+    }
+    case AttrType::FLOATS: {
+      return static_cast<int64_t>(value_.float_value_);
+    }
+    case AttrType::BOOLEANS: {
+      return static_cast<int64_t>(value_.bool_value_);
+    }
+    case AttrType::DATES: {
+      return static_cast<int64_t>(value_.int_value_);
     }
     default: {
       LOG_WARN("unknown data type. type=%d", attr_type_);
@@ -400,6 +456,9 @@ float Value::get_float() const
     } break;
     case AttrType::INTS: {
       return float(value_.int_value_);
+    } break;
+    case AttrType::BIGINTS: {
+      return static_cast<float>(value_.bigint_value_);
     } break;
     case AttrType::FLOATS: {
       return value_.float_value_;
@@ -447,6 +506,9 @@ bool Value::get_boolean() const
     } break;
     case AttrType::INTS: {
       return value_.int_value_ != 0;
+    } break;
+    case AttrType::BIGINTS: {
+      return value_.bigint_value_ != 0;
     } break;
     case AttrType::FLOATS: {
       float val = value_.float_value_;

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(//d/迅雷下载/MiniOB2025/oceanbase-doc/oceanbase-doc/oceanbase-doc/zh-CN/**)"
+      "Read(//d/迅雷下载/MiniOB2025/oceanbase-doc/oceanbase-doc/oceanbase-doc/zh-CN/**)",
+      "Read(//d/迅雷下载/MiniOB2025/MiniOB_2025_Competition_Version/**)"
     ],
     "deny": [],
     "ask": []
