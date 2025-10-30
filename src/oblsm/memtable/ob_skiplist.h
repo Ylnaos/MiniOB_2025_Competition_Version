@@ -36,6 +36,8 @@ See the Mulan PSL v2 for more details. */
 //
 // ... prev vs. next pointer ordering ...
 
+#include <mutex>
+
 #include "common/math/random_generator.h"
 #include "common/lang/atomic.h"
 #include "common/lang/vector.h"
@@ -166,6 +168,8 @@ private:
   // Modified only by insert().  Read racily by readers, but stale
   // values are ok.
   atomic<int> max_height_;  // Height of the entire list
+
+  mutable std::mutex mutex_;
 
   static common::RandomGenerator rnd;
 };
@@ -306,8 +310,23 @@ template <typename Key, class ObComparator>
 typename ObSkipList<Key, ObComparator>::Node *ObSkipList<Key, ObComparator>::find_greater_or_equal(
     const Key &key, Node **prev) const
 {
-  // your code here
-  return nullptr;
+  Node *x     = head_;
+  int   level = get_max_height() - 1;
+  while (true) {
+    ASSERT(level >= 0, "level >= 0");
+    Node *next = x->next(level);
+    if (next != nullptr && compare_(next->key, key) < 0) {
+      x = next;
+    } else {
+      if (prev != nullptr) {
+        prev[level] = x;
+      }
+      if (level == 0) {
+        return next;
+      }
+      level--;
+    }
+  }
 }
 
 template <typename Key, class ObComparator>
@@ -376,12 +395,87 @@ ObSkipList<Key, ObComparator>::~ObSkipList()
 
 template <typename Key, class ObComparator>
 void ObSkipList<Key, ObComparator>::insert(const Key &key)
-{}
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+
+  Node *prev[kMaxHeight];
+  Node *x = find_greater_or_equal(key, prev);
+  ASSERT(x == nullptr || !equal(key, x->key), "Duplicate keys are not allowed");
+
+  int height         = random_height();
+  int current_height = get_max_height();
+  if (height > current_height) {
+    for (int i = current_height; i < height; i++) {
+      prev[i] = head_;
+    }
+    max_height_.store(height, std::memory_order_relaxed);
+  }
+
+  Node *new_node_ptr = new_node(key, height);
+  for (int i = 0; i < height; i++) {
+    Node *next = prev[i]->next(i);
+    new_node_ptr->set_next(i, next);
+    prev[i]->set_next(i, new_node_ptr);
+  }
+}
 
 template <typename Key, class ObComparator>
 void ObSkipList<Key, ObComparator>::insert_concurrently(const Key &key)
 {
-  // your code here
+  Node *new_node_ptr      = nullptr;
+  int   new_node_height   = 0;
+  bool  node_initialized  = false;
+
+  while (true) {
+    Node *prev[kMaxHeight];
+    Node *next = find_greater_or_equal(key, prev);
+    if (next != nullptr && equal(key, next->key)) {
+      ASSERT(false, "Duplicate keys are not allowed");
+      return;
+    }
+
+    if (!node_initialized) {
+      new_node_height = random_height();
+      new_node_ptr    = new_node(key, new_node_height);
+      for (int i = 0; i < new_node_height; i++) {
+        new_node_ptr->nobarrier_set_next(i, nullptr);
+      }
+      node_initialized = true;
+    }
+
+    int current_height = get_max_height();
+    while (new_node_height > current_height) {
+      if (max_height_.compare_exchange_weak(current_height, new_node_height)) {
+        for (int i = current_height; i < new_node_height; i++) {
+          prev[i] = head_;
+        }
+        break;
+      }
+      current_height = get_max_height();
+    }
+
+    Node *expected_next = next;
+    new_node_ptr->set_next(0, expected_next);
+    if (!prev[0]->cas_next(0, expected_next, new_node_ptr)) {
+      continue;
+    }
+
+    for (int level = 1; level < new_node_height; level++) {
+      while (true) {
+        Node *level_prev[kMaxHeight];
+        Node *level_next = find_greater_or_equal(key, level_prev);
+        ASSERT(level_next == new_node_ptr, "New node must be discoverable after level 0 insertion");
+        Node *prev_node = level_prev[level];
+        ASSERT(prev_node != nullptr, "prev_node != nullptr");
+        Node *next_node = prev_node->next(level);
+        new_node_ptr->set_next(level, next_node);
+        if (prev_node->cas_next(level, next_node, new_node_ptr)) {
+          break;
+        }
+      }
+    }
+    return;
+  }
 }
 
 template <typename Key, class ObComparator>

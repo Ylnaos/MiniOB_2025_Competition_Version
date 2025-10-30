@@ -13,6 +13,7 @@
 //
 #pragma once
 
+#include "common/lang/memory.h"
 #include "common/lang/mutex.h"
 #include "common/sys/rc.h"
 #include "oblsm/util/ob_file_writer.h"
@@ -85,7 +86,7 @@ public:
    * @param filename The name of the WAL file to write logs.
    * @return `RC::SUCCESS` if the file was successfully opened, or an error code if it failed.
    */
-  RC open(const std::string &filename) { return RC::UNIMPLEMENTED; }
+  RC open(const std::string &filename);
 
   /**
    * @brief Recovers data from a specified WAL file.
@@ -117,11 +118,12 @@ public:
    *
    * @return `RC::SUCCESS` if the sync operation is successful, or an error code if it fails.
    */
-  RC sync() { return RC::UNIMPLEMENTED; }
+  RC sync();
 
   const string &filename() const { return filename_; }
 
 private:
   string filename_;
+  unique_ptr<ObFileWriter> file_writer_;
 };
 }  // namespace oceanbase

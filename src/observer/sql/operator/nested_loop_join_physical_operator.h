@@ -35,7 +35,16 @@ public:
   virtual double calculate_cost(
       LogicalProperty *prop, const vector<LogicalProperty *> &child_log_props, CostModel *cm) override
   {
-    return 0.0;
+    // cost_nlj = left × right × CPU + output × CPU
+    if (child_log_props.size() != 2 || prop == nullptr || cm == nullptr) {
+      return 0.0;
+    }
+
+    double left_card  = child_log_props[0]->get_card();
+    double right_card = child_log_props[1]->get_card();
+    double output     = prop->get_card();
+
+    return left_card * right_card * cm->cpu_op() + output * cm->cpu_op();
   }
 
   RC     open(Trx *trx) override;

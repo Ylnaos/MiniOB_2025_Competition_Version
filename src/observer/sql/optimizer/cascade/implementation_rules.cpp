@@ -27,6 +27,9 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/group_by_logical_operator.h"
 #include "sql/operator/scalar_group_by_physical_operator.h"
 #include "sql/operator/hash_group_by_physical_operator.h"
+#include "sql/operator/join_logical_operator.h"
+#include "sql/operator/nested_loop_join_physical_operator.h"
+#include "sql/operator/hash_join_physical_operator.h"
 
 // -------------------------------------------------------------------------------------------------
 // PhysicalSeqScan
@@ -260,3 +263,84 @@ void LogicalPredicateToPredicate::transform(OperatorNode* input,
 
 //   transformed->emplace_back(std::move(groupby_phys_oper));
 // }
+
+// -------------------------------------------------------------------------------------------------
+// Physical Nested Loop Join
+// -------------------------------------------------------------------------------------------------
+LogicalInnerJoinToNLJoin::LogicalInnerJoinToNLJoin()
+{
+  type_ = RuleType::INNER_JOIN_TO_NL_JOIN;
+  match_pattern_ = unique_ptr<Pattern>(new Pattern(OpType::LOGICALINNERJOIN));
+  auto left_child = new Pattern(OpType::LEAF);
+  auto right_child = new Pattern(OpType::LEAF);
+  match_pattern_->add_child(left_child);
+  match_pattern_->add_child(right_child);
+}
+
+void LogicalInnerJoinToNLJoin::transform(OperatorNode* input,
+                         std::vector<std::unique_ptr<OperatorNode>> *transformed,
+                         OptimizerContext *context) const
+{
+  auto join_oper = dynamic_cast<JoinLogicalOperator*>(input);
+  ASSERT(join_oper != nullptr, "input operator should be JoinLogicalOperator");
+
+  auto nl_join_oper = make_unique<NestedLoopJoinPhysicalOperator>();
+  for (auto &child : join_oper->children()) {
+    nl_join_oper->add_general_child(child.get());
+  }
+
+  transformed->emplace_back(std::move(nl_join_oper));
+}
+
+// -------------------------------------------------------------------------------------------------
+// Physical Hash Join
+// -------------------------------------------------------------------------------------------------
+LogicalInnerJoinToHashJoin::LogicalInnerJoinToHashJoin()
+{
+  type_ = RuleType::INNER_JOIN_TO_HASH_JOIN;
+  match_pattern_ = unique_ptr<Pattern>(new Pattern(OpType::LOGICALINNERJOIN));
+  auto left_child = new Pattern(OpType::LEAF);
+  auto right_child = new Pattern(OpType::LEAF);
+  match_pattern_->add_child(left_child);
+  match_pattern_->add_child(right_child);
+}
+
+void LogicalInnerJoinToHashJoin::transform(OperatorNode* input,
+                         std::vector<std::unique_ptr<OperatorNode>> *transformed,
+                         OptimizerContext *context) const
+{
+  auto join_oper = dynamic_cast<JoinLogicalOperator*>(input);
+  ASSERT(join_oper != nullptr, "input operator should be JoinLogicalOperator");
+
+  // 检查是否有等值连接条件
+  auto &join_predicates = join_oper->get_join_predicates();
+  if (join_predicates.empty()) {
+    // 没有连接条件，不能使用Hash Join
+    return;
+  }
+
+  // 查找第一个等值连接条件
+  unique_ptr<Expression> join_condition = nullptr;
+  for (auto &predicate : join_predicates) {
+    if (predicate->type() == ExprType::COMPARISON) {
+      ComparisonExpr *comp_expr = dynamic_cast<ComparisonExpr *>(predicate.get());
+      if (comp_expr != nullptr && comp_expr->comp() == CompOp::EQUAL_TO) {
+        join_condition = predicate->copy();
+        break;
+      }
+    }
+  }
+
+  if (join_condition == nullptr) {
+    // 没有等值条件，不能使用Hash Join
+    return;
+  }
+
+  auto hash_join_oper = make_unique<HashJoinPhysicalOperator>(std::move(join_condition));
+  for (auto &child : join_oper->children()) {
+    hash_join_oper->add_general_child(child.get());
+  }
+
+  transformed->emplace_back(std::move(hash_join_oper));
+}
+

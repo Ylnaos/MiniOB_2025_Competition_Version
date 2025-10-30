@@ -223,17 +223,23 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
 
     vector<Value> record_values(field_num);
     int batch_count = 0;
+    int parse_failed_count = 0;  // 解析失败的行数
+    int insert_failed_count = 0; // 插入失败的行数
 
     while (parse_csv_line(fs, file_values, terminated, enclosed)) {
       line_num++;
 
       if (file_values.size() < static_cast<size_t>(field_num)) {
-        rc = RC::SCHEMA_FIELD_MISSING;
-        break;
+        LOG_WARN("Line %d: insufficient fields, expected=%d, got=%zu",
+                 line_num, field_num, file_values.size());
+        parse_failed_count++;
+        continue;
       }
 
       // 解析每个字段
       bool parse_success = true;
+      int failed_field_idx = -1;
+      RC failed_rc = RC::SUCCESS;
       for (int i = 0; i < field_num && parse_success; i++) {
         const FieldMeta *field = table->table_meta().field(i + sys_field_num);
         string &file_value = file_values[i];
@@ -243,10 +249,20 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
         rc = DataType::type_instance(field->type())->set_value_from_str(record_values[i], file_value);
         if (rc != RC::SUCCESS) {
           parse_success = false;
+          failed_field_idx = i;
+          failed_rc = rc;
         }
       }
 
       if (!parse_success) {
+        parse_failed_count++;
+        const FieldMeta *failed_field = table->table_meta().field(failed_field_idx + sys_field_num);
+        // 每1000个错误记录一次日志，避免日志过多
+        if (parse_failed_count <= 10 || parse_failed_count % 1000 == 0) {
+          LOG_WARN("Line %d: failed to parse field '%s' (type=%d), value='%s', error=%s",
+                   line_num, failed_field->name(), failed_field->type(),
+                   file_values[failed_field_idx].c_str(), strrc(failed_rc));
+        }
         continue;
       }
 
@@ -260,6 +276,9 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
       if (batch_count >= BATCH_SIZE) {
         rc = table->insert_chunk(chunk);
         if (rc != RC::SUCCESS) {
+          LOG_ERROR("Failed to insert chunk at line %d, batch_count=%d, error=%s",
+                    line_num, batch_count, strrc(rc));
+          insert_failed_count += batch_count;
           break;
         }
         insertion_count += batch_count;
@@ -273,8 +292,16 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
       rc = table->insert_chunk(chunk);
       if (rc == RC::SUCCESS) {
         insertion_count += batch_count;
+      } else {
+        LOG_ERROR("Failed to insert final chunk, batch_count=%d, error=%s",
+                  batch_count, strrc(rc));
+        insert_failed_count += batch_count;
       }
     }
+
+    // 输出详细统计信息
+    LOG_INFO("Load data statistics: total_lines=%d, inserted=%d, parse_failed=%d, insert_failed=%d",
+             line_num, insertion_count, parse_failed_count, insert_failed_count);
   } else {
     // ROW 格式：逐行插入
     vector<Value> record_values(field_num);

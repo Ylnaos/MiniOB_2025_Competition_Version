@@ -68,7 +68,7 @@ public:
 
       RC rc = oblsm_->put(key, key);
       if (rc != RC::SUCCESS) {
-        exit(1);
+        throw runtime_error("failed to put key-value in FillUp");
       }
     }
   }
@@ -86,7 +86,7 @@ public:
   {
     RC rc = oblsm_->put(to_string(value), to_string(value));
     if (rc != RC::SUCCESS) {
-      exit(1);
+      throw runtime_error("failed to put key-value in Insert");
     }
   }
 

@@ -398,7 +398,39 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
     return RC::INTERNAL;
   }
   if (session->hash_join_on() && can_use_hash_join(join_oper)) {
-    // your code here
+    // 使用Hash Join
+    // 找到第一个等值连接条件
+    unique_ptr<Expression> join_condition = nullptr;
+    auto &join_predicates = join_oper.get_join_predicates();
+    for (auto &predicate : join_predicates) {
+      if (predicate->type() == ExprType::COMPARISON) {
+        ComparisonExpr *comp_expr = dynamic_cast<ComparisonExpr *>(predicate.get());
+        if (comp_expr != nullptr && comp_expr->comp() == CompOp::EQUAL_TO) {
+          join_condition = predicate->copy();
+          break;
+        }
+      }
+    }
+
+    if (join_condition == nullptr) {
+      LOG_WARN("hash join enabled but no equality condition found");
+      return RC::INTERNAL;
+    }
+
+    unique_ptr<PhysicalOperator> hash_join_oper(new HashJoinPhysicalOperator(std::move(join_condition)));
+
+    // 创建左右子算子
+    for (auto &child_oper : child_opers) {
+      unique_ptr<PhysicalOperator> child_physical_oper;
+      rc = create(*child_oper, child_physical_oper, session);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to create physical child oper. rc=%s", strrc(rc));
+        return rc;
+      }
+      hash_join_oper->add_child(std::move(child_physical_oper));
+    }
+
+    oper = std::move(hash_join_oper);
   } else {
     unique_ptr<PhysicalOperator> join_physical_oper(new NestedLoopJoinPhysicalOperator());
     for (auto &child_oper : child_opers) {
@@ -419,7 +451,32 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
 
 bool PhysicalPlanGenerator::can_use_hash_join(JoinLogicalOperator &join_oper)
 {
-  // your code here
+  // 检查join_predicates中是否有等值连接条件
+  auto &join_predicates = join_oper.get_join_predicates();
+  if (join_predicates.empty()) {
+    // 没有连接条件，无法使用hash join
+    return false;
+  }
+
+  // 遍历所有连接条件，查找等值条件
+  for (const auto &predicate : join_predicates) {
+    if (predicate->type() != ExprType::COMPARISON) {
+      continue;
+    }
+
+    ComparisonExpr *comp_expr = dynamic_cast<ComparisonExpr *>(predicate.get());
+    if (comp_expr == nullptr) {
+      continue;
+    }
+
+    // 检查是否为等值比较
+    if (comp_expr->comp() == CompOp::EQUAL_TO) {
+      // 找到了等值条件，可以使用hash join
+      return true;
+    }
+  }
+
+  // 没有找到等值条件
   return false;
 }
 

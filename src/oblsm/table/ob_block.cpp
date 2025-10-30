@@ -16,7 +16,61 @@ namespace oceanbase {
 
 RC ObBlock::decode(const string &data)
 {
-  return RC::UNIMPLEMENTED;
+  offsets_.clear();
+  data_.clear();
+
+  const size_t total_size = data.size();
+  if (total_size < 2 * sizeof(uint32_t)) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  const char *raw_data = data.data();
+  const size_t trailer_offset = total_size - sizeof(uint32_t);
+  const uint32_t data_size = get_numeric<uint32_t>(raw_data + trailer_offset);
+
+  const size_t entry_region_size = static_cast<size_t>(data_size);
+
+  if (entry_region_size > total_size) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  const size_t metadata_len = total_size - entry_region_size;
+  if (metadata_len < 2 * sizeof(uint32_t) || metadata_len % sizeof(uint32_t) != 0) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  const char    *metadata_ptr = raw_data + entry_region_size;
+  const uint32_t offset_count = get_numeric<uint32_t>(metadata_ptr);
+  const size_t   expected_metadata_len = (static_cast<size_t>(offset_count) + 2) * sizeof(uint32_t);
+  if (metadata_len != expected_metadata_len) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  vector<uint32_t> parsed_offsets;
+  parsed_offsets.reserve(offset_count);
+
+  metadata_ptr += sizeof(uint32_t);
+  for (uint32_t i = 0; i < offset_count; i++) {
+    uint32_t offset = get_numeric<uint32_t>(metadata_ptr);
+    metadata_ptr += sizeof(uint32_t);
+    if (static_cast<size_t>(offset) >= entry_region_size) {
+      return RC::INVALID_ARGUMENT;
+    }
+    if (i > 0 && offset <= parsed_offsets.back()) {
+      return RC::INVALID_ARGUMENT;
+    }
+    parsed_offsets.push_back(offset);
+  }
+
+  const uint32_t data_size_footer = get_numeric<uint32_t>(metadata_ptr);
+  if (data_size_footer != data_size) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  data_.assign(raw_data, entry_region_size);
+  offsets_.assign(parsed_offsets.begin(), parsed_offsets.end());
+
+  return RC::SUCCESS;
 }
 
 string_view ObBlock::get_entry(uint32_t offset) const

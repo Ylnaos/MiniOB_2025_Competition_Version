@@ -16,7 +16,93 @@ namespace oceanbase {
 // TODO: refactor build with mem_table/iterator logic.
 RC ObSSTableBuilder::build(shared_ptr<ObMemTable> mem_table, const std::string &file_name, uint32_t sst_id)
 {
-  return RC::UNIMPLEMENTED;
+  RC rc = RC::SUCCESS;
+
+  if (mem_table == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  reset();
+  sst_id_ = sst_id;
+
+  file_writer_ = ObFileWriter::create_file_writer(file_name, false);
+  if (file_writer_ == nullptr) {
+    reset();
+    return RC::IOERR_OPEN;
+  }
+
+  unique_ptr<ObLsmIterator> iter(mem_table->new_iterator());
+  if (iter == nullptr) {
+    reset();
+    return RC::NOMEM;
+  }
+
+  iter->seek_to_first();
+
+  bool block_empty = true;
+  while (iter->valid()) {
+    string_view key = iter->key();
+    string_view value = iter->value();
+
+    if (block_empty) {
+      curr_blk_first_key_.assign(key.data(), key.size());
+    }
+
+    rc = block_builder_.add(key, value);
+    if (rc == RC::SUCCESS) {
+      block_empty = false;
+      iter->next();
+      continue;
+    } else if (rc == RC::FULL) {
+      finish_build_block();
+      curr_blk_first_key_.clear();
+      block_empty = true;
+      continue;
+    } else {
+      reset();
+      return rc;
+    }
+  }
+
+  if (!block_empty) {
+    finish_build_block();
+    curr_blk_first_key_.clear();
+    block_empty = true;
+  }
+
+  const uint32_t meta_offset = curr_offset_;
+
+  string metadata;
+  put_numeric<uint32_t>(&metadata, static_cast<uint32_t>(block_metas_.size()));
+  for (const BlockMeta &meta : block_metas_) {
+    string encoded = meta.encode();
+    put_numeric<uint32_t>(&metadata, static_cast<uint32_t>(encoded.size()));
+    metadata.append(encoded);
+  }
+
+  rc = file_writer_->write(metadata);
+  if (OB_FAIL(rc)) {
+    reset();
+    return rc;
+  }
+
+  string footer;
+  put_numeric<uint32_t>(&footer, meta_offset);
+  rc = file_writer_->write(footer);
+  if (OB_FAIL(rc)) {
+    reset();
+    return rc;
+  }
+
+  rc = file_writer_->flush();
+  if (OB_FAIL(rc)) {
+    reset();
+    return rc;
+  }
+
+  file_size_ = static_cast<size_t>(meta_offset) + metadata.size() + footer.size();
+
+  return RC::SUCCESS;
 }
 
 void ObSSTableBuilder::finish_build_block()

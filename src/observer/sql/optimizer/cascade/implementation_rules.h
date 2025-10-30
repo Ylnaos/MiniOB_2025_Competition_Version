@@ -126,3 +126,27 @@ public:
 //                          std::vector<std::unique_ptr<OperatorNode>> *transformed,
 //                          OptimizerContext *context) const override;
 // };
+
+/**
+ * Rule transforms Logical Inner Join -> Physical Nested Loop Join
+ */
+class LogicalInnerJoinToNLJoin : public Rule
+{
+public:
+  LogicalInnerJoinToNLJoin();
+
+  void transform(OperatorNode *input, std::vector<std::unique_ptr<OperatorNode>> *transformed,
+      OptimizerContext *context) const override;
+};
+
+/**
+ * Rule transforms Logical Inner Join -> Physical Hash Join
+ */
+class LogicalInnerJoinToHashJoin : public Rule
+{
+public:
+  LogicalInnerJoinToHashJoin();
+
+  void transform(OperatorNode *input, std::vector<std::unique_ptr<OperatorNode>> *transformed,
+      OptimizerContext *context) const override;
+};
