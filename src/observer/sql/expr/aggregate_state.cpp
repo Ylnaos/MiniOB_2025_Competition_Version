@@ -294,15 +294,22 @@ RC aggregate_state_update_by_column(void *state, AggregateExpr::Type aggr_type, 
 {
   RC rc = RC::SUCCESS;
   if (aggr_type == AggregateExpr::Type::SUM) {
-    if (attr_type == AttrType::INTS) {
-      update_aggregate_state<SumState<int>, int>(state, col);
-    } else if (attr_type == AttrType::BIGINTS) {
-      update_aggregate_state<SumState<int64_t>, int64_t>(state, col);
-    } else if (attr_type == AttrType::FLOATS) {
-      update_aggregate_state<SumState<float>, float>(state, col);
-    } else {
+    if (attr_type != AttrType::INTS && attr_type != AttrType::BIGINTS && attr_type != AttrType::FLOATS) {
       LOG_WARN("unsupported aggregate value type");
       rc = RC::UNIMPLEMENTED;
+    } else {
+      // SUM(expr) 忽略 NULL，逐行检查以规避列向量缺少 NULL 位图的问题
+      const int rows = col.count();
+      for (int i = 0; i < rows; ++i) {
+        Value v = col.get_value(i);
+        if (v.is_null()) {
+          continue;
+        }
+        RC rc2 = aggregate_state_update_by_value(state, aggr_type, attr_type, v);
+        if (rc2 != RC::SUCCESS) {
+          return rc2;
+        }
+      }
     }
   } else if (aggr_type == AggregateExpr::Type::COUNT) {
     // COUNT(expr) 忽略 NULL，逐行检查以规避列向量缺少 NULL 位图的问题
@@ -314,15 +321,22 @@ RC aggregate_state_update_by_column(void *state, AggregateExpr::Type aggr_type, 
       }
     }
   } else if (aggr_type == AggregateExpr::Type::AVG) {
-    if (attr_type == AttrType::INTS) {
-      update_aggregate_state<AvgState<int>, int>(state, col);
-    } else if (attr_type == AttrType::BIGINTS) {
-      update_aggregate_state<AvgState<int64_t>, int64_t>(state, col);
-    } else if (attr_type == AttrType::FLOATS) {
-      update_aggregate_state<AvgState<float>, float>(state, col);
-    } else {
+    if (attr_type != AttrType::INTS && attr_type != AttrType::BIGINTS && attr_type != AttrType::FLOATS) {
       LOG_WARN("unsupported aggregate value type");
       rc = RC::UNIMPLEMENTED;
+    } else {
+      // AVG(expr) 也需要按行过滤 NULL，否则列中垃圾值会污染结果
+      const int rows = col.count();
+      for (int i = 0; i < rows; ++i) {
+        Value v = col.get_value(i);
+        if (v.is_null()) {
+          continue;
+        }
+        RC rc2 = aggregate_state_update_by_value(state, aggr_type, attr_type, v);
+        if (rc2 != RC::SUCCESS) {
+          return rc2;
+        }
+      }
     }
   } else if (aggr_type == AggregateExpr::Type::MAX || aggr_type == AggregateExpr::Type::MIN) {
     // Generic path: iterate row by row using Value wrapper
