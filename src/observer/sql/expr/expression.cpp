@@ -50,7 +50,37 @@ See the Mulan PSL v2 for more details. */
 #include "session/session.h"
 #include "storage/db/db.h"
 #include "storage/index/fulltext_index.h"
+
+#if __has_include("cppjieba/Jieba.hpp")
 #include "cppjieba/Jieba.hpp"
+#define MINIOB_HAVE_CPPJIEBA 1
+#else
+#define MINIOB_HAVE_CPPJIEBA 0
+namespace cppjieba {
+class Jieba
+{
+public:
+  Jieba(const std::string &, const std::string &, const std::string &, const std::string &, const std::string &) {}
+
+  void Cut(const std::string &text, std::vector<std::string> &out, bool) const { cut_simple(text, out); }
+  void Cut(const std::string &text, std::vector<std::string> &out) const { cut_simple(text, out); }
+
+private:
+  static void cut_simple(const std::string &text, std::vector<std::string> &out)
+  {
+    out.clear();
+    std::istringstream input(text);
+    std::string token;
+    while (input >> token) {
+      out.emplace_back(std::move(token));
+    }
+    if (out.empty() && !text.empty()) {
+      out.emplace_back(text);
+    }
+  }
+};
+}  // namespace cppjieba
+#endif
 
 using namespace std;
 
@@ -230,7 +260,7 @@ static fs::path locate_executable_dir()
 #endif
 }
 
-static fs::path detect_jieba_dict_dir()
+[[maybe_unused]] static fs::path detect_jieba_dict_dir()
 {
   vector<fs::path> candidates;
   unordered_set<string> candidate_seen;
@@ -533,6 +563,7 @@ private:
 
     RC initialize()
     {
+#if MINIOB_HAVE_CPPJIEBA
       dict_dir = detect_jieba_dict_dir();
       if (dict_dir.empty()) {
         LOG_WARN("Failed to locate jieba dictionary directory");
@@ -559,6 +590,13 @@ private:
       const string user_path = optional_path(user_path_fs);
       const string idf_path  = optional_path(idf_path_fs);
       const string stop_path = optional_path(stop_path_fs);
+#else
+      const string dict_path;
+      const string hmm_path;
+      const string user_path;
+      const string idf_path;
+      const string stop_path;
+#endif
 
       try {
         jieba = make_unique<cppjieba::Jieba>(dict_path, hmm_path, user_path, idf_path, stop_path);
@@ -589,25 +627,29 @@ private:
         LOG_INFO("No stop_words.utf8 provided, using empty stop-word list");
       }
 
-      ifstream dict_input(dict_path);
-      if (!dict_input.is_open()) {
-        LOG_WARN("Failed to open jieba dict file: %s", dict_path.c_str());
-        return RC::IOERR_OPEN;
+#if MINIOB_HAVE_CPPJIEBA
+      {
+        ifstream dict_input(dict_path);
+        if (!dict_input.is_open()) {
+          LOG_WARN("Failed to open jieba dict file: %s", dict_path.c_str());
+          return RC::IOERR_OPEN;
+        }
+        while (getline(dict_input, line)) {
+          if (line.empty()) {
+            continue;
+          }
+          size_t pos = line.find(' ');
+          string word = (pos == string::npos) ? line : line.substr(0, pos);
+          if (word.empty()) {
+            continue;
+          }
+          dict_words.insert(word);
+          if (word.size() > max_dict_word_bytes) {
+            max_dict_word_bytes = word.size();
+          }
+        }
       }
-      while (getline(dict_input, line)) {
-        if (line.empty()) {
-          continue;
-        }
-        size_t pos = line.find(' ');
-        string word = (pos == string::npos) ? line : line.substr(0, pos);
-        if (word.empty()) {
-          continue;
-        }
-        dict_words.insert(word);
-        if (word.size() > max_dict_word_bytes) {
-          max_dict_word_bytes = word.size();
-        }
-      }
+#endif
 
       static const char *const builtin_user_words[] = {
           "有何",
