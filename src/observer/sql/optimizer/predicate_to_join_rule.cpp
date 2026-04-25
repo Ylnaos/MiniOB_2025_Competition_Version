@@ -123,6 +123,47 @@ void replace_with_child(unique_ptr<LogicalOperator> &oper)
   oper = std::move(child);
 }
 
+bool extract_join_predicates(LogicalOperator *join, unique_ptr<Expression> &expr, bool &change_made)
+{
+  if (expr == nullptr) {
+    return true;
+  }
+
+  if (expr->type() == ExprType::CONJUNCTION) {
+    auto *conjunction = static_cast<ConjunctionExpr *>(expr.get());
+    if (conjunction->conjunction_type() != ConjunctionExpr::Type::AND) {
+      return false;
+    }
+
+    auto &children = conjunction->children();
+    for (auto iter = children.begin(); iter != children.end();) {
+      if (extract_join_predicates(join, *iter, change_made)) {
+        iter = children.erase(iter);
+        change_made = true;
+      } else {
+        ++iter;
+      }
+    }
+
+    if (children.empty()) {
+      expr.reset();
+      return true;
+    }
+
+    if (children.size() == 1) {
+      expr = std::move(children.front());
+      change_made = true;
+    }
+    return false;
+  }
+
+  if (attach_to_join(join, expr)) {
+    change_made = true;
+    return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 RC PredicateToJoinRewriter::rewrite(unique_ptr<LogicalOperator> &oper, bool &change_made)
@@ -135,30 +176,8 @@ RC PredicateToJoinRewriter::rewrite(unique_ptr<LogicalOperator> &oper, bool &cha
   unique_ptr<Expression> &expr = oper->expressions().front();
   LogicalOperator        *join = oper->children().front().get();
 
-  if (expr->type() == ExprType::CONJUNCTION) {
-    auto *conjunction = static_cast<ConjunctionExpr *>(expr.get());
-    if (conjunction->conjunction_type() != ConjunctionExpr::Type::AND) {
-      return RC::SUCCESS;
-    }
-
-    auto &children = conjunction->children();
-    for (auto iter = children.begin(); iter != children.end();) {
-      if (attach_to_join(join, *iter)) {
-        iter = children.erase(iter);
-        change_made = true;
-      } else {
-        ++iter;
-      }
-    }
-
-    if (children.empty()) {
-      replace_with_child(oper);
-    } else if (children.size() == 1) {
-      expr = std::move(children.front());
-    }
-  } else if (attach_to_join(join, expr)) {
+  if (extract_join_predicates(join, expr, change_made)) {
     replace_with_child(oper);
-    change_made = true;
   }
 
   return RC::SUCCESS;

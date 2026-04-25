@@ -299,7 +299,8 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
                         (end_time.tv_nsec - begin_time.tv_nsec) / 1000000000.0;
 
   // 成功时不输出额外信息，只通过RC状态码返回
-  LOG_INFO("load data done. row num: %d, result: %s, time: %.2fs", insertion_count, strrc(rc), elapsed_time);
+  LOG_INFO("load data done. read line num: %d, row num: %d, result: %s, time: %.2fs",
+      line_num, insertion_count, strrc(rc), elapsed_time);
   sql_result->set_return_code(rc);
   sql_result->set_state_string(result_string.str());
 }
