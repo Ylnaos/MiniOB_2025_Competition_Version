@@ -75,8 +75,6 @@ RC DiskDoubleWriteBuffer::open_file(const char *filename)
 
 RC DiskDoubleWriteBuffer::flush_page()
 {
-  sync();
-
   for (const auto &pair : dblwr_pages_) {
     RC rc = write_page(pair.second);
     if (rc != RC::SUCCESS) {
