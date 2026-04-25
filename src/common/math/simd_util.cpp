@@ -22,9 +22,20 @@ int mm256_extract_epi32_var_indx(const __m256i vec, const unsigned int i)
 
 int mm256_sum_epi32(const int *values, int size)
 {
-  // your code here
+  __m256i sum_vec = _mm256_setzero_si256();
   int sum = 0;
-  for (int i = 0; i < size; i++) {
+  int i = 0;
+  for (; i + SIMD_WIDTH <= size; i += SIMD_WIDTH) {
+    __m256i value_vec = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(values + i));
+    sum_vec = _mm256_add_epi32(sum_vec, value_vec);
+  }
+
+  alignas(32) int partial[SIMD_WIDTH];
+  _mm256_store_si256(reinterpret_cast<__m256i *>(partial), sum_vec);
+  for (int j = 0; j < SIMD_WIDTH; j++) {
+    sum += partial[j];
+  }
+  for (; i < size; i++) {
     sum += values[i];
   }
   return sum;
@@ -32,9 +43,20 @@ int mm256_sum_epi32(const int *values, int size)
 
 float mm256_sum_ps(const float *values, int size)
 {
-  // your code here
+  __m256 sum_vec = _mm256_setzero_ps();
   float sum = 0;
-  for (int i = 0; i < size; i++) {
+  int i = 0;
+  for (; i + SIMD_WIDTH <= size; i += SIMD_WIDTH) {
+    __m256 value_vec = _mm256_loadu_ps(values + i);
+    sum_vec = _mm256_add_ps(sum_vec, value_vec);
+  }
+
+  alignas(32) float partial[SIMD_WIDTH];
+  _mm256_store_ps(partial, sum_vec);
+  for (int j = 0; j < SIMD_WIDTH; j++) {
+    sum += partial[j];
+  }
+  for (; i < size; i++) {
     sum += values[i];
   }
   return sum;

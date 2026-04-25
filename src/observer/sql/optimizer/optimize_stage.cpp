@@ -131,42 +131,7 @@ RC OptimizeStage::generate_physical_plan(
 
   const bool plan_has_subquery = contains_subquery_in_plan(*logical_operator);
 
-  // 当存在聚合表达式时，当前向量化执行链路(Chunk Iterator)尚未完整覆盖空输入/NULL 语义与扫描实现，
-  // 为避免崩溃或输出异常，这里强制回退到按行执行(Tuple Iterator)。
-  std::function<bool(Expression &)> contains_aggregation_expr = [&](Expression &expr) -> bool {
-    if (expr.type() == ExprType::AGGREGATION) {
-      return true;
-    }
-    bool found = false;
-    (void)ExpressionIterator::iterate_child_expr(expr, [&](std::unique_ptr<Expression> &child) -> RC {
-      if (child) {
-        if (contains_aggregation_expr(*child)) {
-          found = true;
-          return RC::SUCCESS;
-        }
-      }
-      return RC::SUCCESS;
-    });
-    return found;
-  };
-
-  std::function<bool(LogicalOperator &)> contains_aggregation_in_plan = [&](LogicalOperator &op) -> bool {
-    for (auto &expr_up : op.expressions()) {
-      if (expr_up && contains_aggregation_expr(*expr_up)) {
-        return true;
-      }
-    }
-    for (auto &child : op.children()) {
-      if (child && contains_aggregation_in_plan(*child)) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const bool plan_has_aggregation = contains_aggregation_in_plan(*logical_operator);
-
-  if (!plan_has_subquery && !plan_has_aggregation && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+  if (!plan_has_subquery && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
       LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);

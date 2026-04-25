@@ -85,7 +85,7 @@ struct GreatEqual
 
   static inline __m256i operation(const __m256i &left, const __m256i &right)
   {
-    return _mm256_cmpgt_epi32(left, right) | _mm256_cmpeq_epi32(left, right);
+    return _mm256_or_si256(_mm256_cmpgt_epi32(left, right), _mm256_cmpeq_epi32(left, right));
   }
 #endif
 };

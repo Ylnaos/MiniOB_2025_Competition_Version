@@ -15,13 +15,19 @@ See the Mulan PSL v2 for more details. */
 
 RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk)
 {
-    if (groups_chunk.rows() != aggrs_chunk.rows()) {
+  if (groups_chunk.rows() != aggrs_chunk.rows()) {
     LOG_WARN("groups_chunk and aggrs_chunk have different rows: %d, %d", groups_chunk.rows(), aggrs_chunk.rows());
     return RC::INVALID_ARGUMENT;
   }
+
+  if (aggrs_chunk.column_num() != static_cast<int>(aggr_types_.size())) {
+    LOG_WARN("aggregate chunk column num mismatch: %d, %zu", aggrs_chunk.column_num(), aggr_types_.size());
+    return RC::INVALID_ARGUMENT;
+  }
+
   for (int i = 0; i < groups_chunk.rows(); i++) {
     vector<Value> group_by_values;
-    vector<void*> aggr_values;
+    vector<void *> aggr_values;
 
     for (int j = 0; j < groups_chunk.column_num(); j++) {
       group_by_values.emplace_back(groups_chunk.get_value(j, i));
@@ -30,18 +36,22 @@ RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk
     auto it = aggr_values_.find(group_by_values);
     if (it == aggr_values_.end()) {
       for (size_t j = 0; j < aggr_types_.size(); j++) {
-        void * state_ptr = create_aggregate_state(aggr_types_[j], aggr_child_types_[j]);
+        if (aggr_child_types_[j] == AttrType::UNDEFINED) {
+          aggr_child_types_[j] = aggrs_chunk.column(j).attr_type();
+        }
+        void *state_ptr = create_aggregate_state(aggr_types_[j], aggr_child_types_[j]);
         if (state_ptr == nullptr) {
           LOG_WARN("create aggregate state failed");
           return RC::INTERNAL;
-        }   
+        }
         aggr_values.emplace_back(state_ptr);
       }
       aggr_values_.emplace(group_by_values, aggr_values);
     }
     auto &aggr = aggr_values_.find(group_by_values)->second;
     for (size_t aggr_idx = 0; aggr_idx < aggr.size(); aggr_idx++) {
-      RC rc = aggregate_state_update_by_value(aggr[aggr_idx], aggr_types_[aggr_idx], aggr_child_types_[aggr_idx], aggrs_chunk.get_value(aggr_idx, i));
+      RC rc = aggregate_state_update_by_value(
+          aggr[aggr_idx], aggr_types_[aggr_idx], aggr_child_types_[aggr_idx], aggrs_chunk.get_value(aggr_idx, i));
       if (rc != RC::SUCCESS) {
         LOG_WARN("update aggregate state failed");
         return rc;
@@ -147,7 +157,7 @@ RC LinearProbingAggregateHashTable<V>::Scanner::next(Chunk &output_chunk)
     return RC::RECORD_EOF;
   }
   auto linear_probing_hash_table = static_cast<LinearProbingAggregateHashTable *>(hash_table_);
-  while (scan_pos_ < capacity_ && scan_count_ < size_ && output_chunk.rows() <= output_chunk.capacity()) {
+  while (scan_pos_ < capacity_ && scan_count_ < size_ && output_chunk.rows() < output_chunk.capacity()) {
     int key;
     V   value;
     RC  rc = linear_probing_hash_table->iter_get(scan_pos_, key, value);
@@ -223,8 +233,8 @@ template <typename V>
 void LinearProbingAggregateHashTable<V>::resize()
 {
   capacity_ *= 2;
-  vector<int> new_keys(capacity_);
-  vector<V>   new_values(capacity_);
+  vector<int> new_keys(capacity_, EMPTY_KEY);
+  vector<V>   new_values(capacity_, 0);
 
   for (size_t i = 0; i < keys_.size(); i++) {
     auto &key   = keys_[i];
@@ -254,29 +264,78 @@ void LinearProbingAggregateHashTable<V>::resize_if_need()
 template <typename V>
 void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_values, int len)
 {
-  // your code here
-  exit(-1);
+  int i = 0;
+  for (; i + SIMD_WIDTH <= len; i += SIMD_WIDTH) {
+    while (size_ + SIMD_WIDTH >= capacity_ / 2) {
+      resize();
+    }
 
-  // inv (invalid) 表示是否有效，inv[i] = -1 表示有效，inv[i] = 0 表示无效。
-  // key[SIMD_WIDTH],value[SIMD_WIDTH] 表示当前循环中处理的键值对。
-  // off (offset) 表示线性探测冲突时的偏移量，key[i] 每次遇到冲突键，则off[i]++，如果key[i] 已经完成聚合，则off[i] = 0，
-  // i = 0 表示selective load 的起始位置。
-  // inv 全部初始化为 -1
-  // off 全部初始化为 0
+    __m256i key_vec       = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(input_keys + i));
+    __m256i empty_key_vec = _mm256_set1_epi32(EMPTY_KEY);
+    alignas(32) int probe_indexes[SIMD_WIDTH];
+    for (int lane = 0; lane < SIMD_WIDTH; lane++) {
+      probe_indexes[lane] = (input_keys[i + lane] % capacity_ + capacity_) % capacity_;
+    }
 
-  // for (; i + SIMD_WIDTH <= len;) {
-    // 1: 根据 `inv` 变量的值，从 `input_keys` 中 `selective load` `SIMD_WIDTH` 个不同的输入键值对。
-    // 2. 计算 i += |inv|, `|inv|` 表示 `inv` 中有效的个数 
-    // 3. 计算 hash 值，
-    // 4. 根据聚合类型（目前只支持 sum），在哈希表中更新聚合结果。如果本次循环，没有找到key[i] 在哈希表中的位置，则不更新聚合结果。
-    // 5. gather 操作，根据 hash 值将 keys_ 的 gather 结果写入 table_key 中。
-    // 6. 更新 inv 和 off。如果本次循环key[i] 聚合完成，则inv[i]=-1，表示该位置在下次循环中读取新的键值对。
-    // 如果本次循环 key[i] 未在哈希表中聚合完成（table_key[i] != key[i]），则inv[i] = 0，表示该位置在下次循环中不需要读取新的键值对。
-    // 如果本次循环中，key[i]聚合完成，则off[i] 更新为 0，表示线性探测偏移量为 0，key[i] 未完成聚合，则off[i]++,表示线性探测偏移量加 1。
-  // }
-  //7. 通过标量线性探测，处理剩余键值对
+    __m256i probe_index_vec = _mm256_load_si256(reinterpret_cast<const __m256i *>(probe_indexes));
+    int     unfinished_mask = (1 << SIMD_WIDTH) - 1;
+    while (unfinished_mask != 0) {
+      __m256i table_key_vec = _mm256_i32gather_epi32(keys_.data(), probe_index_vec, sizeof(int));
+      __m256i matched_vec   = _mm256_cmpeq_epi32(table_key_vec, key_vec);
+      __m256i empty_vec     = _mm256_cmpeq_epi32(table_key_vec, empty_key_vec);
+      int ready_mask = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_or_si256(matched_vec, empty_vec))) &
+                       unfinished_mask;
 
-  // resize_if_need();
+      if (ready_mask != 0) {
+        _mm256_store_si256(reinterpret_cast<__m256i *>(probe_indexes), probe_index_vec);
+        for (int lane = 0; lane < SIMD_WIDTH; lane++) {
+          if ((ready_mask & (1 << lane)) == 0) {
+            continue;
+          }
+
+          const int table_pos = probe_indexes[lane];
+          const int input_key = input_keys[i + lane];
+          if (keys_[table_pos] == input_key) {
+            aggregate(&values_[table_pos], input_values[i + lane]);
+            unfinished_mask &= ~(1 << lane);
+          } else if (keys_[table_pos] == EMPTY_KEY) {
+            keys_[table_pos]   = input_key;
+            values_[table_pos] = input_values[i + lane];
+            size_++;
+            unfinished_mask &= ~(1 << lane);
+          }
+        }
+      }
+
+      if (unfinished_mask != 0) {
+        _mm256_store_si256(reinterpret_cast<__m256i *>(probe_indexes), probe_index_vec);
+        for (int lane = 0; lane < SIMD_WIDTH; lane++) {
+          if ((unfinished_mask & (1 << lane)) != 0) {
+            probe_indexes[lane] = (probe_indexes[lane] + 1) % capacity_;
+          }
+        }
+        probe_index_vec = _mm256_load_si256(reinterpret_cast<const __m256i *>(probe_indexes));
+      }
+    }
+  }
+
+  for (; i < len; i++) {
+    resize_if_need();
+    int index = (input_keys[i] % capacity_ + capacity_) % capacity_;
+    while (true) {
+      if (keys_[index] == EMPTY_KEY) {
+        keys_[index]   = input_keys[i];
+        values_[index] = input_values[i];
+        size_++;
+        break;
+      }
+      if (keys_[index] == input_keys[i]) {
+        aggregate(&values_[index], input_values[i]);
+        break;
+      }
+      index = (index + 1) % capacity_;
+    }
+  }
 }
 
 template <typename V>

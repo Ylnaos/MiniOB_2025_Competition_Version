@@ -86,7 +86,8 @@ public:
       ASSERT(expr->type() == ExprType::AGGREGATION, "expect aggregate expression");
       auto *aggregation_expr = static_cast<AggregateExpr *>(expr);
       aggr_types_.push_back(aggregation_expr->aggregate_type());
-      aggr_child_types_.push_back(aggregation_expr->value_type());
+      aggr_child_types_.push_back(
+          aggregation_expr->child() == nullptr ? AttrType::UNDEFINED : aggregation_expr->child()->value_type());
     }
   }
   virtual ~StandardAggregateHashTable()

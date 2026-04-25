@@ -57,7 +57,7 @@ public:
     return &column(idx);
   }
 
-  int column_ids(size_t i)
+  int column_ids(size_t i) const
   {
     ASSERT(i < column_ids_.size(), "invalid column index");
     return column_ids_[i];
