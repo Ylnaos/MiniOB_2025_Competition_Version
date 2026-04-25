@@ -504,13 +504,6 @@ public:
         continue;
       }
 
-      // 特殊处理："的" + "值" 合并为 "的值"
-      if (word == "的" && i + 1 < raw.size() && raw[i + 1] == "值") {
-        tokens.push_back("的值");
-        i++;  // 跳过下一个 "值"
-        continue;
-      }
-
       // 过滤停用词
       if (ctx.stop_words.find(word) != ctx.stop_words.end()) {
         continue;
