@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/lang/mutex.h"
 #include "common/lang/sstream.h"
+#include "common/lang/vector.h"
 #include "common/types.h"
 #include "storage/persist/persist.h"
 
@@ -30,12 +31,18 @@ public:
 
   RC open_file(const char *file_name);
 
-  RC close_file() { return file_.close_file(); }
+  RC close_file();
 
   RC insert_data(int64_t &offset, int64_t length, const char *data);
 
-  RC get_data(int64_t offset, int64_t length, char *data) { return file_.read_at(offset, length, data); }
+  RC get_data(int64_t offset, int64_t length, char *data);
+
+  RC flush();
 
 private:
+  static constexpr int64_t APPEND_BUFFER_LIMIT = 1024 * 1024;
+
   PersistHandler file_;
+  int64_t        append_offset_ = 0;
+  vector<char>   append_buffer_;
 };

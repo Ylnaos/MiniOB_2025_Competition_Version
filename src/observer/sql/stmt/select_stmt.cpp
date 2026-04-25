@@ -228,8 +228,7 @@ static RC rewrite_unqualified_fields(
             replaced->set_alias(expr->alias());
           }
           expr.swap(replaced);
-          // 递归重写替换后表达式内部的未限定字段
-          return rewrite_unqualified_fields(expr, name_to_relattr, name_to_expr);
+          return RC::SUCCESS;
         }
 
         // 其次查找字段映射(简单字段)
@@ -524,7 +523,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           return RC::SUCCESS;
         }
 
-        // 1) 展开 FROM/WHERE（将视图条件并入外层 WHERE）
+        // 1) 展开 FROM。外层 WHERE/GROUP/ORDER 仍按视图输出列解析，需先重写，再并入视图自身条件。
         select_sql.relations.swap(node->selection.relations);
         // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
         if (!view_alias.empty() && select_sql.relations.size() == 1) {
@@ -532,28 +531,33 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           LOG_INFO("Assigned view alias '%s' to inner table '%s'",
                    view_alias.c_str(), select_sql.relations[0].relation_name.c_str());
         }
-        for (auto &cond : node->selection.conditions) {
-          select_sql.conditions.emplace_back(std::move(cond));
-        }
-        // 处理where_expr：如果视图有where_expr，需要与外层WHERE合并
-        if (node->selection.where_expr) {
-          if (select_sql.where_expr) {
-            // 外层也有where_expr，创建AND节点连接
-            vector<unique_ptr<Expression>> children;
-            children.push_back(std::move(select_sql.where_expr));
-            children.push_back(std::move(node->selection.where_expr));
-            select_sql.where_expr = make_unique<ConjunctionExpr>(ConjunctionExpr::Type::AND, std::move(children));
-          } else {
-            // 外层没有where_expr，直接移动
-            select_sql.where_expr = std::move(node->selection.where_expr);
-          }
-        }
+
+        unordered_map<string, pair<string, string>> name_to_relattr;
+        unordered_map<string, unique_ptr<Expression>> name_to_expr;
+        const vector<string> &view_fields = view->view_fields();
+        build_view_output_mapping(
+            db, select_sql.relations, node->selection.expressions, view_fields, name_to_relattr, name_to_expr);
 
         // 2) 如果是 SELECT *，用视图 SELECT 列替换
         bool only_star = (select_sql.expressions.size() == 1) &&
                          (select_sql.expressions[0] != nullptr) &&
                          (select_sql.expressions[0]->type() == ExprType::STAR);
         if (only_star) {
+          for (auto &gexpr : select_sql.group_by) {
+            RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
+            if (OB_FAIL(rc)) return rc;
+          }
+          for (auto &item : select_sql.order_by) {
+            RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
+            if (OB_FAIL(rc)) return rc;
+          }
+          if (select_sql.where_expr) {
+            RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
+            if (OB_FAIL(rc)) {
+              LOG_WARN("Failed to rewrite WHERE condition for view '%s'", view->name());
+              return rc;
+            }
+          }
           select_sql.expressions.swap(node->selection.expressions);
           // 同步 group/order（如果视图中带有）
           if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
@@ -564,13 +568,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           }
         } else {
           // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
-          unordered_map<string, pair<string, string>> name_to_relattr;
-          unordered_map<string, unique_ptr<Expression>> name_to_expr;
-          // 注意：上面已经将视图内部的 relation 列表 swap 到 select_sql.relations 中
-          // 此处必须使用新的 relations，否则会拿到原外层的视图名，导致无法建立字段映射
-          // 获取视图的定义列名
-          const vector<string> &view_fields = view->view_fields();
-          build_view_output_mapping(db, select_sql.relations, node->selection.expressions, view_fields, name_to_relattr, name_to_expr);
           for (auto &outer_expr : select_sql.expressions) {
             RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
             if (OB_FAIL(rc)) return rc;
@@ -591,6 +588,21 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
               LOG_WARN("Failed to rewrite WHERE condition for view '%s'", view->name());
               return rc;
             }
+          }
+        }
+
+        for (auto &cond : node->selection.conditions) {
+          select_sql.conditions.emplace_back(std::move(cond));
+        }
+        // 处理where_expr：如果视图有where_expr，需要与已重写的外层WHERE合并
+        if (node->selection.where_expr) {
+          if (select_sql.where_expr) {
+            vector<unique_ptr<Expression>> children;
+            children.push_back(std::move(select_sql.where_expr));
+            children.push_back(std::move(node->selection.where_expr));
+            select_sql.where_expr = make_unique<ConjunctionExpr>(ConjunctionExpr::Type::AND, std::move(children));
+          } else {
+            select_sql.where_expr = std::move(node->selection.where_expr);
           }
         }
       }

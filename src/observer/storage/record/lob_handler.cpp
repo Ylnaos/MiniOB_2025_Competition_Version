@@ -10,35 +10,113 @@ See the Mulan PSL v2 for more details. */
 
 #include "storage/record/lob_handler.h"
 
+#include <sys/stat.h>
+
 RC LobFileHandler::create_file(const char *file_name)
 {
-  return file_.create_file(file_name);
+  RC rc = file_.create_file(file_name);
+  if (OB_SUCC(rc)) {
+    append_offset_ = 0;
+    append_buffer_.clear();
+  }
+  return rc;
 }
 
 RC LobFileHandler::open_file(const char *file_name)
 {
   std::ifstream file(file_name);
   if (file.good()) {
-    return file_.open_file(file_name);
+    RC rc = file_.open_file(file_name);
+    if (OB_SUCC(rc)) {
+      struct stat st;
+      if (stat(file_name, &st) != 0) {
+        return RC::IOERR_SEEK;
+      }
+      append_offset_ = st.st_size;
+      append_buffer_.clear();
+    }
+    return rc;
   } else {
     return RC::FILE_NOT_EXIST;
   }
   return RC::INTERNAL;
 }
 
-RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data)
+RC LobFileHandler::close_file()
 {
-  RC       rc         = RC::SUCCESS;
-  int64_t  out_size   = 0;
-  int64_t end_offset = 0;
-  rc                  = file_.append(length, data, &out_size, &end_offset);
+  RC rc = flush();
   if (OB_FAIL(rc)) {
     return rc;
   }
-  if (out_size != length) {
+  return file_.close_file();
+}
+
+RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data)
+{
+  if (length < 0 || (length > 0 && data == nullptr)) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  offset = append_offset_ + static_cast<int64_t>(append_buffer_.size());
+  if (length == 0) {
+    return RC::SUCCESS;
+  }
+
+  if (length > APPEND_BUFFER_LIMIT) {
+    RC rc = flush();
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+
+    int64_t out_size = 0;
+    rc = file_.write_at(append_offset_, static_cast<int>(length), data, &out_size);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    if (out_size != length) {
+      return RC::IOERR_WRITE;
+    }
+    append_offset_ += length;
+    return RC::SUCCESS;
+  }
+
+  if (static_cast<int64_t>(append_buffer_.size()) + length > APPEND_BUFFER_LIMIT) {
+    RC rc = flush();
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    offset = append_offset_;
+  }
+
+  append_buffer_.insert(append_buffer_.end(), data, data + length);
+  return RC::SUCCESS;
+}
+
+RC LobFileHandler::get_data(int64_t offset, int64_t length, char *data)
+{
+  RC rc = flush();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  return file_.read_at(offset, length, data);
+}
+
+RC LobFileHandler::flush()
+{
+  if (append_buffer_.empty()) {
+    return RC::SUCCESS;
+  }
+
+  int64_t out_size = 0;
+  RC rc = file_.write_at(append_offset_, static_cast<int>(append_buffer_.size()), append_buffer_.data(), &out_size);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  if (out_size != static_cast<int64_t>(append_buffer_.size())) {
     return RC::IOERR_WRITE;
   }
-  offset = end_offset;
 
-  return rc;
+  append_offset_ += out_size;
+  append_buffer_.clear();
+  return RC::SUCCESS;
 }

@@ -514,5 +514,9 @@ Index *Table::find_index_by_field(const char *field_name) const
 
 RC Table::sync()
 {
-  return engine_->sync();
+  RC rc = engine_->sync();
+  if (OB_SUCC(rc) && lob_handler_ != nullptr) {
+    rc = lob_handler_->flush();
+  }
+  return rc;
 }

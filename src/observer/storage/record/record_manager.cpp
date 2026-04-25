@@ -646,10 +646,34 @@ RC PaxRecordPageHandler::insert_chunk(const Chunk &chunk, int start_row, int &in
     return RC::SUCCESS;
   }
 
+  vector<int> field_id_to_segment;
+  if (table_meta_has_record_layout(table_meta_, page_header_->record_real_size)) {
+    vector<PaxSegment> segments = build_pax_segments(table_meta_, page_header_->record_real_size);
+    int max_field_id = -1;
+    for (const PaxSegment &segment : segments) {
+      if (segment.visible) {
+        max_field_id = std::max(max_field_id, segment.field_id);
+      }
+    }
+    if (max_field_id >= 0) {
+      field_id_to_segment.assign(max_field_id + 1, -1);
+      for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
+        if (segments[i].visible && segments[i].field_id >= 0) {
+          field_id_to_segment[segments[i].field_id] = i;
+        }
+      }
+    }
+  }
+
   vector<int> column_segment_ids(chunk.column_num(), -1);
   vector<int> column_field_lens(chunk.column_num(), 0);
   for (int col_idx = 0; col_idx < chunk.column_num(); ++col_idx) {
-    const int col_id = segment_id_for_field_id(chunk.column_ids(col_idx));
+    const int field_id = chunk.column_ids(col_idx);
+    int       col_id   = field_id;
+    if (field_id >= 0 && field_id < static_cast<int>(field_id_to_segment.size()) &&
+        field_id_to_segment[field_id] >= 0) {
+      col_id = field_id_to_segment[field_id];
+    }
     if (col_id < 0 || col_id >= page_header_->column_num) {
       LOG_WARN("invalid PAX column id. field_id=%d segment_id=%d column_num=%d",
                chunk.column_ids(col_idx), col_id, page_header_->column_num);
@@ -660,6 +684,77 @@ RC PaxRecordPageHandler::insert_chunk(const Chunk &chunk, int start_row, int &in
   }
 
   Bitmap bitmap(bitmap_, page_header_->record_capacity);
+  int first_free_slot = bitmap.next_unsetted_bit(0);
+  if (first_free_slot == page_header_->record_num) {
+    for (int col_idx = 0; col_idx < chunk.column_num(); ++col_idx) {
+      const Column &column    = chunk.column(col_idx);
+      const int     field_len = column_field_lens[col_idx];
+      if (column.attr_type() == AttrType::TEXTS) {
+        if (field_len < static_cast<int>(sizeof(LobRef))) {
+          LOG_WARN("TEXT PAX field is too small for LobRef. field_len=%d", field_len);
+          return RC::INTERNAL;
+        }
+        if (lob_handler_ == nullptr) {
+          LOG_WARN("LOB handler not initialized when inserting PAX TEXT chunk");
+          return RC::INTERNAL;
+        }
+        for (int row_idx = 0; row_idx < rows_to_insert; ++row_idx) {
+          const int   chunk_row = start_row + row_idx;
+          const auto *text_ref  = reinterpret_cast<const string_t *>(column.data() + chunk_row * column.attr_len());
+          if (static_cast<int>(text_ref->size()) > TEXT_MAX_LENGTH) {
+            LOG_WARN("TEXT too long when inserting PAX chunk. len=%d", static_cast<int>(text_ref->size()));
+            return RC::IOERR_TOO_LONG;
+          }
+        }
+      }
+    }
+
+    for (int slot_num = first_free_slot; slot_num < first_free_slot + rows_to_insert; ++slot_num) {
+      bitmap.set_bit(slot_num);
+    }
+
+    for (int segment_id = 0; segment_id < page_header_->column_num; ++segment_id) {
+      char *segment_data = get_field_data(first_free_slot, segment_id);
+      memset(segment_data, 0, get_field_len(segment_id) * rows_to_insert);
+    }
+
+    for (int col_idx = 0; col_idx < chunk.column_num(); ++col_idx) {
+      const int     col_id    = column_segment_ids[col_idx];
+      const int     field_len = column_field_lens[col_idx];
+      const Column &column    = chunk.column(col_idx);
+      char         *field_data = get_field_data(first_free_slot, col_id);
+
+      if (column.attr_type() == AttrType::TEXTS) {
+        for (int row_idx = 0; row_idx < rows_to_insert; ++row_idx) {
+          const int   chunk_row = start_row + row_idx;
+          const auto *text_ref  = reinterpret_cast<const string_t *>(column.data() + chunk_row * column.attr_len());
+
+          LobRef lob_ref;
+          lob_ref.length = static_cast<int>(text_ref->size());
+          lob_ref.offset = 0;
+          if (lob_ref.length > 0) {
+            RC rc = lob_handler_->insert_data(lob_ref.offset, lob_ref.length, text_ref->data());
+            if (OB_FAIL(rc)) {
+              return rc;
+            }
+          }
+          memcpy(field_data + row_idx * field_len, &lob_ref, sizeof(LobRef));
+        }
+      } else if (column.attr_len() == field_len) {
+        memcpy(field_data, column.data() + start_row * column.attr_len(), field_len * rows_to_insert);
+      } else {
+        for (int row_idx = 0; row_idx < rows_to_insert; ++row_idx) {
+          const int chunk_row = start_row + row_idx;
+          memcpy(field_data + row_idx * field_len, column.data() + chunk_row * column.attr_len(), field_len);
+        }
+      }
+    }
+
+    page_header_->record_num += rows_to_insert;
+    insert_rows = rows_to_insert;
+    frame_->mark_dirty();
+    return RC::SUCCESS;
+  }
 
   // 批量插入每一行
   for (int row_idx = 0; row_idx < rows_to_insert; ++row_idx) {
