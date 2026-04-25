@@ -186,6 +186,23 @@ static RC bind_expression_fields(unique_ptr<Expression> &expr, Db *db, Table *de
       return rc;
     }
   }
+  // 布尔表达式树，递归绑定每个子条件中的字段
+  else if (expr->type() == ExprType::CONJUNCTION) {
+    auto *conj_expr = static_cast<ConjunctionExpr *>(expr.get());
+    for (auto &child : conj_expr->children()) {
+      rc = bind_expression_fields(child, db, default_table, tables);
+      if (rc != RC::SUCCESS) {
+        return rc;
+      }
+    }
+  }
+  else if (expr->type() == ExprType::CAST) {
+    auto *cast_expr = static_cast<CastExpr *>(expr.get());
+    rc = bind_expression_fields(cast_expr->child(), db, default_table, tables);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+  }
   // IN 表达式：只绑定左侧（测试值），右侧子查询单独在其上下文解析
   else if (expr->type() == ExprType::IN_LIST) {
     auto *in_expr = static_cast<InExpr *>(expr.get());
