@@ -67,6 +67,7 @@ public:
   Tuple *current_tuple() override;
 
   int table_id() const { return table_->table_id(); }
+  RC fast_count(int64_t &count) const;
 
   void set_predicates(vector<unique_ptr<Expression>> &&exprs);
   void set_alias(const std::string &alias) { alias_ = alias; }

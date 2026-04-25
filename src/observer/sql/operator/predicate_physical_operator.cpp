@@ -60,12 +60,6 @@ RC PredicatePhysicalOperator::next()
       return rc;
     }
 
-    // 临时使用INFO级别日志诊断问题
-    LOG_INFO("[PREDICATE] expr_type=%d, result=%s, bool=%d",
-              static_cast<int>(expression_->type()),
-              value.to_string().c_str(),
-              value.get_boolean());
-
     if (value.get_boolean()) {
       return rc;
     }

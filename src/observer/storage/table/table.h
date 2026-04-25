@@ -105,6 +105,8 @@ public:
 
   RC get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode);
 
+  RC record_count(int64_t &count);
+
   /**
    * @brief 可以在页面锁保护的情况下访问记录
    * @details 当前是在事务中访问记录，为了提供一个“原子性”的访问模式

@@ -646,6 +646,19 @@ RC PaxRecordPageHandler::insert_chunk(const Chunk &chunk, int start_row, int &in
     return RC::SUCCESS;
   }
 
+  vector<int> column_segment_ids(chunk.column_num(), -1);
+  vector<int> column_field_lens(chunk.column_num(), 0);
+  for (int col_idx = 0; col_idx < chunk.column_num(); ++col_idx) {
+    const int col_id = segment_id_for_field_id(chunk.column_ids(col_idx));
+    if (col_id < 0 || col_id >= page_header_->column_num) {
+      LOG_WARN("invalid PAX column id. field_id=%d segment_id=%d column_num=%d",
+               chunk.column_ids(col_idx), col_id, page_header_->column_num);
+      return RC::INVALID_ARGUMENT;
+    }
+    column_segment_ids[col_idx] = col_id;
+    column_field_lens[col_idx]  = get_field_len(col_id);
+  }
+
   Bitmap bitmap(bitmap_, page_header_->record_capacity);
 
   // 批量插入每一行
@@ -669,16 +682,11 @@ RC PaxRecordPageHandler::insert_chunk(const Chunk &chunk, int start_row, int &in
 
     // 将 Chunk 中的每一列数据写入对应的 PAX 字段段
     for (int col_idx = 0; col_idx < chunk.column_num(); ++col_idx) {
-      int col_id = segment_id_for_field_id(chunk.column_ids(col_idx));
-      if (col_id < 0 || col_id >= page_header_->column_num) {
-        LOG_WARN("invalid PAX column id. field_id=%d segment_id=%d column_num=%d",
-                 chunk.column_ids(col_idx), col_id, page_header_->column_num);
-        return RC::INVALID_ARGUMENT;
-      }
+      int col_id = column_segment_ids[col_idx];
       const Column &column = chunk.column(col_idx);
 
       char *field_data = get_field_data(slot_num, col_id);
-      int field_len = get_field_len(col_id);
+      int field_len = column_field_lens[col_idx];
 
       if (column.attr_type() == AttrType::TEXTS) {
         if (field_len < static_cast<int>(sizeof(LobRef))) {
@@ -1137,6 +1145,35 @@ RC RecordFileHandler::recover_insert_record(const char *data, int record_size, c
   }
 
   return record_page_handler->recover_insert_record(data, rid);
+}
+
+RC RecordFileHandler::record_count(int64_t &count)
+{
+  count = 0;
+
+  RC rc = RC::SUCCESS;
+  BufferPoolIterator bp_iterator;
+  rc = bp_iterator.init(*disk_buffer_pool_, 1);
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to init bp iterator. rc=%s", strrc(rc));
+    return rc;
+  }
+
+  unique_ptr<RecordPageHandler> record_page_handler(RecordPageHandler::create(storage_format_));
+  while (bp_iterator.has_next()) {
+    const PageNum page_num = bp_iterator.next();
+    rc = record_page_handler->init(
+        *disk_buffer_pool_, *log_handler_, page_num, ReadWriteMode::READ_ONLY, lob_handler_, table_meta_);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to init record page handler. page_num=%d, rc=%s", page_num, strrc(rc));
+      return rc;
+    }
+
+    count += record_page_handler->record_num();
+    record_page_handler->cleanup();
+  }
+
+  return RC::SUCCESS;
 }
 
 RC RecordFileHandler::delete_record(const RID *rid)

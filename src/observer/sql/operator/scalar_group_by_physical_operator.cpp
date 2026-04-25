@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/log/log.h"
 #include "event/sql_debug.h"
 #include "sql/operator/scalar_group_by_physical_operator.h"
+#include "sql/operator/table_scan_physical_operator.h"
 #include "sql/expr/expression_tuple.h"
 #include "sql/expr/composite_tuple.h"
 #include "sql/expr/tuple_cell.h"
@@ -27,37 +28,27 @@ using namespace common;
 
 namespace {
 
-template <typename... Args>
-void exec_trace(const char *fmt, Args &&... args)
+bool is_count_star_only(const vector<Expression *> &aggregate_expressions)
 {
-  LOG_INFO(fmt, std::forward<Args>(args)...);
-  sql_debug(fmt, std::forward<Args>(args)...);
-}
-
-std::string dump_value_list(const ValueListTuple &tuple)
-{
-  std::ostringstream oss;
-  const int cell_num = tuple.cell_num();
-  oss << "cells=[";
-  for (int i = 0; i < cell_num; ++i) {
-    if (i > 0) {
-      oss << ", ";
-    }
-    Value         value;
-    TupleCellSpec spec;
-    tuple.cell_at(i, value);
-    if (tuple.spec_at(i, spec) == RC::SUCCESS) {
-      const char *alias = spec.alias();
-      if (alias != nullptr && alias[0] != '\0') {
-        oss << alias << "=";
-      } else if (spec.field_name() != nullptr && spec.field_name()[0] != '\0') {
-        oss << spec.field_name() << "=";
-      }
-    }
-    oss << value.to_string();
+  if (aggregate_expressions.size() != 1 || aggregate_expressions[0]->type() != ExprType::AGGREGATION) {
+    return false;
   }
-  oss << "]";
-  return oss.str();
+
+  const auto *aggregate_expr = static_cast<const AggregateExpr *>(aggregate_expressions[0]);
+  if (aggregate_expr->aggregate_type() != AggregateExpr::Type::COUNT || aggregate_expr->child() == nullptr) {
+    return false;
+  }
+
+  Expression &child = *aggregate_expr->child();
+  if (child.type() == ExprType::STAR) {
+    return true;
+  }
+  if (child.type() == ExprType::VALUE) {
+    Value value;
+    static_cast<ValueExpr &>(child).get_value(value);
+    return !value.is_null();
+  }
+  return false;
 }
 
 }  // namespace
@@ -77,6 +68,35 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
     return rc;
   }
 
+  if (is_count_star_only(aggregate_expressions_) && child.type() == PhysicalOperatorType::TABLE_SCAN) {
+    int64_t count = 0;
+    rc = static_cast<TableScanPhysicalOperator &>(child).fast_count(count);
+    if (OB_SUCC(rc)) {
+      vector<Value> values;
+      Value count_value;
+      count_value.set_int(static_cast<int>(count));
+      values.emplace_back(count_value);
+
+      vector<TupleCellSpec> names;
+      names.emplace_back(aggregate_expressions_[0]->name());
+
+      auto tuple = make_unique<ValueListTuple>();
+      tuple->set_cells(values);
+      tuple->set_names(names);
+
+      CompositeTuple composite_tuple;
+      composite_tuple.add_tuple(std::move(tuple));
+
+      AggregatorList aggregator_list;
+      group_value_ = make_unique<GroupValueType>(std::move(aggregator_list), std::move(composite_tuple));
+      emitted_ = false;
+      return RC::SUCCESS;
+    }
+    if (rc != RC::UNSUPPORTED) {
+      return rc;
+    }
+  }
+
   ExpressionTuple<Expression *> group_value_expression_tuple(value_expressions_);
 
   ValueListTuple group_by_evaluated_tuple;
@@ -88,12 +108,7 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
       return RC::INTERNAL;
     }
 
-    // 计算需要做聚合的值
     group_value_expression_tuple.set_tuple(child_tuple);
-    ValueListTuple aggregated_inputs;
-    if (ValueListTuple::make(group_value_expression_tuple, aggregated_inputs) == RC::SUCCESS) {
-      exec_trace("[ScalarAgg][InputValue] %s", dump_value_list(aggregated_inputs).c_str());
-    }
 
     // 计算聚合值
     if (group_value_ == nullptr) {
@@ -106,14 +121,12 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
       CompositeTuple composite_tuple;
       if (OB_SUCC(rc)) {
         // 成功转换为 ValueListTuple，将其缓存
-        exec_trace("[ScalarAgg][CacheChildTuple] %s", dump_value_list(child_tuple_to_value).c_str());
         composite_tuple.add_tuple(make_unique<ValueListTuple>(std::move(child_tuple_to_value)));
       } else if (rc == RC::NOTFOUND) {
         // 无法访问子tuple的字段（比如来自聚合视图的结果）
         // 对于count(*)这样的聚合，不需要缓存子tuple的值，使用空CompositeTuple即可
         LOG_DEBUG("Cannot convert child tuple to value list (rc=%s), using empty composite tuple for aggregation", strrc(rc));
         rc = RC::SUCCESS;
-        exec_trace("[ScalarAgg][CacheChildTuple] cells=[<unavailable>]");
       } else {
         // 其他错误
         LOG_WARN("failed to make tuple to value list. rc=%s", strrc(rc));
@@ -121,9 +134,7 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
       }
 
       group_value_ = make_unique<GroupValueType>(std::move(aggregator_list), std::move(composite_tuple));
-      exec_trace("[ScalarAgg][CreateGroupValue]");
     }
-    exec_trace("[ScalarAgg][AggregateOnce]");
     
     rc = aggregate(get<0>(*group_value_), group_value_expression_tuple);
     if (OB_FAIL(rc)) {
@@ -150,7 +161,6 @@ RC ScalarGroupByPhysicalOperator::open(Trx *trx)
 
     CompositeTuple composite_tuple; // 无需缓存子元组
     group_value_ = make_unique<GroupValueType>(std::move(aggregator_list), std::move(composite_tuple));
-    exec_trace("[ScalarAgg][NoInputDefault]");
   }
   rc = evaluate(*group_value_);
   if (OB_FAIL(rc)) {

@@ -69,6 +69,7 @@ public:
   virtual RC     drop_index(const char *index_name)                                        = 0;
   virtual RC     get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode)   = 0;
   virtual RC     get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadWriteMode mode)  = 0;
+  virtual RC     record_count(int64_t &count) { return RC::UNIMPLEMENTED; }
   virtual RC     visit_record(const RID &rid, function<bool(Record &)> visitor)              = 0;
   virtual RC     sync()                                                                      = 0;
   virtual Index *find_index(const char *index_name) const                                    = 0;

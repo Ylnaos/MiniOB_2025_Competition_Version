@@ -164,7 +164,7 @@ RC HeapTableEngine::insert_chunk(const Chunk& chunk)
     }
   }
 
-  if (!has_text_field) {
+  if (!has_text_field || table_meta_->storage_format() == StorageFormat::PAX_FORMAT) {
     rc = record_handler_->insert_chunk(chunk, table_meta_->record_size());
     if (rc != RC::SUCCESS) {
       LOG_ERROR("Insert chunk failed. table name=%s, rc=%s", table_meta_->name(), strrc(rc));
@@ -378,6 +378,11 @@ RC HeapTableEngine::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadW
     LOG_ERROR("failed to open scanner. rc=%s", strrc(rc));
   }
   return rc;
+}
+
+RC HeapTableEngine::record_count(int64_t &count)
+{
+  return record_handler_->record_count(count);
 }
 
 RC HeapTableEngine::create_index(Trx *trx,

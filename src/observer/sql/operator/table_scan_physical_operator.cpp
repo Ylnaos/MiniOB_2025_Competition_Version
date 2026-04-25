@@ -21,17 +21,6 @@ See the Mulan PSL v2 for more details. */
 
 using namespace std;
 
-namespace {
-
-template <typename... Args>
-void exec_trace(const char *fmt, Args &&... args)
-{
-  LOG_INFO(fmt, std::forward<Args>(args)...);
-  sql_debug(fmt, std::forward<Args>(args)...);
-}
-
-}  // namespace
-
 RC TableScanPhysicalOperator::open(Trx *trx)
 {
   RC rc = table_->get_record_scanner(record_scanner_, trx, mode_);
@@ -48,10 +37,7 @@ RC TableScanPhysicalOperator::next()
 
   bool filter_result = false;
   while (OB_SUCC(rc = record_scanner_->next(current_record_))) {
-    const string rid_string = current_record_.rid().to_string();
     tuple_.set_record(&current_record_);
-    const string tuple_string = tuple_.to_string();
-    exec_trace("[TableScan][Row] table=%s rid=%s data=%s", table_->name(), rid_string.c_str(), tuple_string.c_str());
 
     rc = filter(tuple_, filter_result);
     if (rc != RC::SUCCESS) {
@@ -60,10 +46,7 @@ RC TableScanPhysicalOperator::next()
     }
 
     if (filter_result) {
-      exec_trace("[TableScan][Pass] table=%s rid=%s data=%s", table_->name(), rid_string.c_str(), tuple_string.c_str());
       break;
-    } else {
-      exec_trace("[TableScan][Skip] table=%s rid=%s data=%s", table_->name(), rid_string.c_str(), tuple_string.c_str());
     }
   }
   return rc;
@@ -87,6 +70,15 @@ Tuple *TableScanPhysicalOperator::current_tuple()
 {
   tuple_.set_record(&current_record_);
   return &tuple_;
+}
+
+RC TableScanPhysicalOperator::fast_count(int64_t &count) const
+{
+  if (!predicates_.empty()) {
+    return RC::UNSUPPORTED;
+  }
+  RC rc = table_->record_count(count);
+  return rc == RC::UNIMPLEMENTED ? RC::UNSUPPORTED : rc;
 }
 
 string TableScanPhysicalOperator::param() const { return table_->name(); }

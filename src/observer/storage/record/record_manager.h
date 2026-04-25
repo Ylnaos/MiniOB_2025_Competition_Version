@@ -228,6 +228,8 @@ public:
    */
   PageNum get_page_num() const;
 
+  int record_num() const { return page_header_ == nullptr ? 0 : page_header_->record_num; }
+
   /**
    * @brief 当前页面是否已经没有空闲位置插入新的记录
    */
@@ -412,6 +414,8 @@ public:
    * @param rid         要插入记录的指定标识符
    */
   RC recover_insert_record(const char *data, int record_size, const RID &rid);
+
+  RC record_count(int64_t &count);
 
   RC get_record(const RID &rid, Record &record);
 
