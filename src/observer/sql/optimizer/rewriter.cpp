@@ -18,12 +18,14 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/expression_rewriter.h"
 #include "sql/optimizer/predicate_pushdown_rewriter.h"
 #include "sql/optimizer/predicate_rewrite.h"
+#include "sql/optimizer/predicate_to_join_rule.h"
 #include "sql/optimizer/vector_rewrite_rule.h"
 
 Rewriter::Rewriter()
 {
   rewrite_rules_.emplace_back(new ExpressionRewriter);
   rewrite_rules_.emplace_back(new VectorRewriteRule);
+  rewrite_rules_.emplace_back(new PredicateToJoinRewriter);
   rewrite_rules_.emplace_back(new PredicateRewriteRule);
   rewrite_rules_.emplace_back(new PredicatePushdownRewriter);
 }

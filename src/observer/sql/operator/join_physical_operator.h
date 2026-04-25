@@ -35,9 +35,12 @@ public:
   RC     close() override;
   Tuple *current_tuple() override;
 
+  void set_predicates(vector<unique_ptr<Expression>> &&predicates) { predicates_ = std::move(predicates); }
+
 private:
   RC left_next();   //! 左表遍历下一条数据
   RC right_next();  //! 右表遍历下一条数据，如果上一轮结束了就重新开始新的一轮
+  RC predicate_satisfied(bool &matched);
 
 private:
   Trx *trx_ = nullptr;
@@ -50,4 +53,5 @@ private:
   JoinedTuple       joined_tuple_;         //! 当前关联的左右两个tuple
   bool              round_done_   = true;  //! 右表遍历的一轮是否结束
   bool              right_closed_ = true;  //! 右表算子是否已经关闭
+  vector<unique_ptr<Expression>> predicates_;
 };

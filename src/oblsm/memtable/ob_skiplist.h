@@ -167,11 +167,11 @@ private:
   // values are ok.
   atomic<int> max_height_;  // Height of the entire list
 
-  static common::RandomGenerator rnd;
+  static thread_local common::RandomGenerator rnd;
 };
 
 template <typename Key, class ObComparator>
-common::RandomGenerator ObSkipList<Key, ObComparator>::rnd = common::RandomGenerator();
+thread_local common::RandomGenerator ObSkipList<Key, ObComparator>::rnd = common::RandomGenerator();
 
 // Implementation details follow
 template <typename Key, class ObComparator>
@@ -306,8 +306,22 @@ template <typename Key, class ObComparator>
 typename ObSkipList<Key, ObComparator>::Node *ObSkipList<Key, ObComparator>::find_greater_or_equal(
     const Key &key, Node **prev) const
 {
-  // your code here
-  return nullptr;
+  Node *x     = head_;
+  int   level = get_max_height() - 1;
+  while (true) {
+    Node *next = x->next(level);
+    if (next != nullptr && compare_(next->key, key) < 0) {
+      x = next;
+    } else {
+      if (prev != nullptr) {
+        prev[level] = x;
+      }
+      if (level == 0) {
+        return next;
+      }
+      level--;
+    }
+  }
 }
 
 template <typename Key, class ObComparator>
@@ -376,12 +390,66 @@ ObSkipList<Key, ObComparator>::~ObSkipList()
 
 template <typename Key, class ObComparator>
 void ObSkipList<Key, ObComparator>::insert(const Key &key)
-{}
+{
+  Node *prev[kMaxHeight];
+  Node *x = find_greater_or_equal(key, prev);
+  ASSERT(x == nullptr || !equal(key, x->key), "duplicate key");
+
+  int height = random_height();
+  if (height > get_max_height()) {
+    for (int i = get_max_height(); i < height; i++) {
+      prev[i] = head_;
+    }
+    max_height_.store(height, std::memory_order_relaxed);
+  }
+
+  x = new_node(key, height);
+  for (int i = 0; i < height; i++) {
+    x->nobarrier_set_next(i, prev[i]->nobarrier_next(i));
+    prev[i]->set_next(i, x);
+  }
+}
 
 template <typename Key, class ObComparator>
 void ObSkipList<Key, ObComparator>::insert_concurrently(const Key &key)
 {
-  // your code here
+  const int height = random_height();
+  Node     *x      = new_node(key, height);
+  Node     *prev[kMaxHeight];
+
+  while (true) {
+    Node *next = find_greater_or_equal(key, prev);
+    ASSERT(next == nullptr || !equal(key, next->key), "duplicate key");
+
+    int current_height = get_max_height();
+    while (height > current_height) {
+      for (int i = current_height; i < height; i++) {
+        prev[i] = head_;
+      }
+      if (max_height_.compare_exchange_weak(current_height, height)) {
+        break;
+      }
+    }
+
+    for (int i = 0; i < height; i++) {
+      x->nobarrier_set_next(i, prev[i]->next(i));
+    }
+
+    if (prev[0]->cas_next(0, x->nobarrier_next(0), x)) {
+      break;
+    }
+  }
+
+  for (int i = 1; i < height; i++) {
+    while (true) {
+      Node *next = x->nobarrier_next(i);
+      if (prev[i]->cas_next(i, next, x)) {
+        break;
+      }
+      find_greater_or_equal(key, prev);
+      x->nobarrier_set_next(i, prev[i]->next(i));
+    }
+  }
 }
 
 template <typename Key, class ObComparator>

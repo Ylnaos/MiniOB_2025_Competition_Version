@@ -58,21 +58,12 @@ RC OptimizeStage::handle_request(SQLStageEvent *sql_event)
   // TODO: error handle
   unique_ptr<PhysicalOperator> physical_operator;
   if (sql_event->session_event()->session()->use_cascade()) {
-    physical_operator = optimizer.optimize(logical_operator.get());
-    if (!physical_operator) {
-      rc = RC::INTERNAL;
-      LOG_WARN("failed to optimize logical plan. rc=%s", strrc(rc));
-      return rc;
-    }
-    string phys_plan_str = OptimizerUtils::dump_physical_plan(physical_operator);
-
-    LOG_INFO("cascade physical plan:\n%s", phys_plan_str.c_str());
-  } else {
-    rc = generate_physical_plan(logical_operator, physical_operator, sql_event->session_event()->session());
-    if (rc != RC::SUCCESS) {
-      LOG_WARN("failed to generate physical plan. rc=%s", strrc(rc));
-      return rc;
-    }
+    LOG_TRACE("use_cascade is enabled; using physical plan generator with cost-based join choices");
+  }
+  rc = generate_physical_plan(logical_operator, physical_operator, sql_event->session_event()->session());
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to generate physical plan. rc=%s", strrc(rc));
+    return rc;
   }
 
   sql_event->set_operator(std::move(physical_operator));

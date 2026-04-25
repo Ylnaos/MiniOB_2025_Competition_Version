@@ -397,10 +397,35 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
     LOG_WARN("join operator should have 2 children, but have %d", child_opers.size());
     return RC::INTERNAL;
   }
-  if (session->hash_join_on() && can_use_hash_join(join_oper)) {
-    // your code here
+  if ((session->hash_join_on() || session->use_cascade()) && can_use_hash_join(join_oper)) {
+    auto &join_predicates = join_oper.get_join_predicates();
+    auto *comparison = static_cast<ComparisonExpr *>(join_predicates.front().get());
+    unique_ptr<PhysicalOperator> join_physical_oper(
+        new HashJoinPhysicalOperator(comparison->left()->copy(), comparison->right()->copy()));
+    vector<unique_ptr<Expression>> predicates;
+    for (auto &predicate : join_predicates) {
+      predicates.emplace_back(predicate->copy());
+    }
+    static_cast<HashJoinPhysicalOperator *>(join_physical_oper.get())->set_predicates(std::move(predicates));
+    for (auto &child_oper : child_opers) {
+      unique_ptr<PhysicalOperator> child_physical_oper;
+      rc = create(*child_oper, child_physical_oper, session);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to create physical child oper. rc=%s", strrc(rc));
+        return rc;
+      }
+
+      join_physical_oper->add_child(std::move(child_physical_oper));
+    }
+
+    oper = std::move(join_physical_oper);
   } else {
     unique_ptr<PhysicalOperator> join_physical_oper(new NestedLoopJoinPhysicalOperator());
+    vector<unique_ptr<Expression>> predicates;
+    for (auto &predicate : join_oper.get_join_predicates()) {
+      predicates.emplace_back(predicate->copy());
+    }
+    static_cast<NestedLoopJoinPhysicalOperator *>(join_physical_oper.get())->set_predicates(std::move(predicates));
     for (auto &child_oper : child_opers) {
       unique_ptr<PhysicalOperator> child_physical_oper;
       rc = create(*child_oper, child_physical_oper, session);
@@ -419,7 +444,16 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
 
 bool PhysicalPlanGenerator::can_use_hash_join(JoinLogicalOperator &join_oper)
 {
-  // your code here
+  for (auto &predicate : join_oper.get_join_predicates()) {
+    if (predicate->type() != ExprType::COMPARISON) {
+      continue;
+    }
+    auto *comparison = static_cast<ComparisonExpr *>(predicate.get());
+    if (comparison->comp() == EQUAL_TO && comparison->left()->type() == ExprType::FIELD &&
+        comparison->right()->type() == ExprType::FIELD) {
+      return true;
+    }
+  }
   return false;
 }
 

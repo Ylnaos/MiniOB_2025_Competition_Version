@@ -119,15 +119,42 @@ RC NestedLoopJoinPhysicalOperator::right_next()
     round_done_ = false;
   }
 
-  rc = right_->next();
-  if (rc != RC::SUCCESS) {
-    if (rc == RC::RECORD_EOF) {
-      round_done_ = true;
+  while (true) {
+    rc = right_->next();
+    if (rc != RC::SUCCESS) {
+      if (rc == RC::RECORD_EOF) {
+        round_done_ = true;
+      }
+      return rc;
     }
-    return rc;
-  }
 
-  right_tuple_ = right_->current_tuple();
-  joined_tuple_.set_right(right_tuple_);
-  return rc;
+    right_tuple_ = right_->current_tuple();
+    joined_tuple_.set_right(right_tuple_);
+
+    bool matched = false;
+    rc = predicate_satisfied(matched);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    if (matched) {
+      return RC::SUCCESS;
+    }
+  }
+}
+
+RC NestedLoopJoinPhysicalOperator::predicate_satisfied(bool &matched)
+{
+  matched = true;
+  for (auto &predicate : predicates_) {
+    Value value;
+    RC rc = predicate->get_value(joined_tuple_, value);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    if (!value.get_boolean()) {
+      matched = false;
+      return RC::SUCCESS;
+    }
+  }
+  return RC::SUCCESS;
 }

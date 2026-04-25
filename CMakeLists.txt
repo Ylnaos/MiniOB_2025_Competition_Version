@@ -23,7 +23,7 @@ MESSAGE(STATUS "This is Project source dir " ${PROJECT_SOURCE_DIR})
 MESSAGE(STATUS "This is PROJECT_BINARY_DIR dir " ${PROJECT_BINARY_DIR})
 
 SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
-SET(UNITTEST_OUTPUT_PATH ${PROJECT_BINARY_DIR}/unittest)
+SET(UNITTEST_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 
 SET(CMAKE_PREFIX_PATH "${PROJECT_SOURCE_DIR}/deps/3rd/usr/local;/usr/local;${CMAKE_PREFIX_PATH}")
 SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/cmake)
@@ -41,7 +41,7 @@ OPTION(ENABLE_ASAN "Enable build with address sanitizer" ON)
 OPTION(ENABLE_TSAN "Build with thread sanitizer" OFF)
 OPTION(ENABLE_UBSAN "Build with undefined behavior sanitizer" OFF)
 OPTION(WITH_UNIT_TESTS "Compile miniob with unit tests" ON)
-OPTION(WITH_BENCHMARK "Compile benchmark" OFF)
+OPTION(WITH_BENCHMARK "Compile benchmark" ON)
 # TODO: support MemTracer with sanitizers, currently MemTracer doesn't work with sanitizers.
 OPTION(WITH_MEMTRACER "Compile memtracer" OFF)
 OPTION(ENABLE_COVERAGE "Enable unittest coverage" OFF)

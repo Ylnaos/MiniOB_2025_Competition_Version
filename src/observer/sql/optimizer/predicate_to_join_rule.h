@@ -18,4 +18,11 @@ See the Mulan PSL v2 for more details. */
  * @ingroup Rewriter
  */
 class PredicateToJoinRewriter
-{};
+    : public RewriteRule
+{
+public:
+  PredicateToJoinRewriter()          = default;
+  virtual ~PredicateToJoinRewriter() = default;
+
+  RC rewrite(unique_ptr<LogicalOperator> &oper, bool &change_made) override;
+};

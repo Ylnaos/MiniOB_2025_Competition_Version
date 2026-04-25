@@ -14,6 +14,7 @@ See the Mulan PSL v2 for more details. */
 #include "common/math/random_generator.h"
 #include "common/thread/thread_pool_executor.h"
 #include "common/lang/thread.h"
+#include "common/lang/vector.h"
 
 using namespace oceanbase;
 
@@ -31,7 +32,7 @@ struct Comparator {
   }
 };
 
-TEST(skiplist_test, DISABLED_skiplist_test_basic)
+TEST(skiplist_test, skiplist_test_basic)
 {
   common::RandomGenerator rnd;
   const int N = 2000;
@@ -246,8 +247,10 @@ static void RunConcurrentInsert(int write_parallelism = 4) {
   common::RandomGenerator rnd;
   const int N = 100;
   const int kSize = 10;
+  std::vector<TestState *> states;
   for (int i = 0; i < N; i++) {
     TestState* state = new TestState();
+    states.push_back(state);
     executor_.execute(std::bind(concurrent_reader, state));
     state->wait(TestState::RUNNING);
     int k = 0;
@@ -263,12 +266,16 @@ static void RunConcurrentInsert(int write_parallelism = 4) {
     ASSERT_EQ(k, count);
     state->quit_flag_.store(true, std::memory_order_release);
     state->wait(TestState::DONE);
+  }
+  executor_.shutdown();
+  executor_.await_termination();
+  for (TestState *state : states) {
     delete state;
   }
 }
 
-TEST_F(InlineSkipTest, DISABLED_ConcurrentInsert2) { RunConcurrentInsert(2); }
-TEST_F(InlineSkipTest, DISABLED_ConcurrentInsert3) { RunConcurrentInsert(4); }
+TEST_F(InlineSkipTest, ConcurrentInsert2) { RunConcurrentInsert(2); }
+TEST_F(InlineSkipTest, ConcurrentInsert3) { RunConcurrentInsert(4); }
 
 int main(int argc, char **argv)
 {
