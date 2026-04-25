@@ -50,7 +50,17 @@ See the Mulan PSL v2 for more details. */
 #include "session/session.h"
 #include "storage/db/db.h"
 #include "storage/index/fulltext_index.h"
+#if defined(__has_include)
+#if __has_include("cppjieba/Jieba.hpp")
 #include "cppjieba/Jieba.hpp"
+#define MINIOB_HAS_CPPJIEBA 1
+#else
+#define MINIOB_HAS_CPPJIEBA 0
+#endif
+#else
+#include "cppjieba/Jieba.hpp"
+#define MINIOB_HAS_CPPJIEBA 1
+#endif
 
 using namespace std;
 
@@ -92,6 +102,7 @@ std::string dump_value(const Value &value)
   return value.to_string();
 }
 
+#if MINIOB_HAS_CPPJIEBA
 template <typename JiebaType>
 auto invoke_cut(const JiebaType &jieba, const string &text, vector<string> &out, bool hmm, int)
     -> decltype(jieba.Cut(text, out, hmm), void())
@@ -104,6 +115,7 @@ void invoke_cut(const JiebaType &jieba, const string &text, vector<string> &out,
 {
   jieba.Cut(text, out);
 }
+#endif
 
 static RC parse_string_like_to_vector(const Value &input, Value &output)
 {
@@ -458,6 +470,51 @@ static string normalize_text_for_segmentation(const string &input)
   return output;
 }
 
+#if !MINIOB_HAS_CPPJIEBA
+static void fallback_cut(const string &text, vector<string> &words)
+{
+  words.clear();
+
+  size_t i = 0;
+  while (i < text.size()) {
+    unsigned char lead = static_cast<unsigned char>(text[i]);
+    if (std::isspace(lead)) {
+      ++i;
+      continue;
+    }
+
+    int char_len = utf8_char_length(lead);
+    if (char_len <= 0 || i + char_len > text.size()) {
+      char_len = 1;
+    }
+
+    TokenCharType type = classify_token_char(text, i, char_len);
+    if (type == TokenCharType::ASCII_ALNUM) {
+      size_t begin = i;
+      i += char_len;
+      while (i < text.size()) {
+        unsigned char next_lead = static_cast<unsigned char>(text[i]);
+        int next_len = utf8_char_length(next_lead);
+        if (next_len <= 0 || i + next_len > text.size()) {
+          next_len = 1;
+        }
+        if (classify_token_char(text, i, next_len) != TokenCharType::ASCII_ALNUM) {
+          break;
+        }
+        i += next_len;
+      }
+      words.emplace_back(text.substr(begin, i - begin));
+      continue;
+    }
+
+    if (type == TokenCharType::NON_ASCII) {
+      words.emplace_back(text.substr(i, char_len));
+    }
+    i += char_len;
+  }
+}
+#endif
+
 class JiebaTokenizer
 {
 public:
@@ -489,7 +546,11 @@ public:
     const string normalized = normalize_text_for_segmentation(text);
 
     vector<string> raw;
+#if MINIOB_HAS_CPPJIEBA
     invoke_cut(*ctx.jieba, normalized, raw, true, 0);
+#else
+    fallback_cut(normalized, raw);
+#endif
 
     tokens.clear();
     tokens.reserve(raw.size());
@@ -525,7 +586,9 @@ private:
   {
     std::once_flag init_once;
     RC init_rc = RC::SUCCESS;
+#if MINIOB_HAS_CPPJIEBA
     unique_ptr<cppjieba::Jieba> jieba;
+#endif
     unordered_set<string> stop_words;
     unordered_set<string> dict_words;
     size_t max_dict_word_bytes = 0;
@@ -535,8 +598,13 @@ private:
     {
       dict_dir = detect_jieba_dict_dir();
       if (dict_dir.empty()) {
+#if MINIOB_HAS_CPPJIEBA
         LOG_WARN("Failed to locate jieba dictionary directory");
         return RC::NOTFOUND;
+#else
+        LOG_INFO("cppjieba is unavailable and no dictionary directory was found; using fallback tokenizer");
+        return RC::SUCCESS;
+#endif
       }
 
       const string dict_path     = (dict_dir / "jieba.dict.utf8").string();
@@ -560,12 +628,16 @@ private:
       const string idf_path  = optional_path(idf_path_fs);
       const string stop_path = optional_path(stop_path_fs);
 
+#if MINIOB_HAS_CPPJIEBA
       try {
         jieba = make_unique<cppjieba::Jieba>(dict_path, hmm_path, user_path, idf_path, stop_path);
       } catch (const std::exception &e) {
         LOG_WARN("Failed to initialize jieba tokenizer: %s", e.what());
         return RC::INTERNAL;
       }
+#else
+      LOG_INFO("cppjieba header is unavailable; using fallback tokenizer");
+#endif
 
       string line;
 
