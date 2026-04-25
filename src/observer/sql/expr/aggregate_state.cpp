@@ -55,6 +55,9 @@ void* create_aggregate_state(AggregateExpr::Type aggr_type, AttrType attr_type)
     if (attr_type == AttrType::INTS) {
       state_ptr = malloc(sizeof(SumState<int>));
       new (state_ptr) SumState<int>();
+    } else if (attr_type == AttrType::BIGINTS) {
+      state_ptr = malloc(sizeof(SumState<int64_t>));
+      new (state_ptr) SumState<int64_t>();
     } else if (attr_type == AttrType::FLOATS) {
       state_ptr = malloc(sizeof(SumState<float>));
       new (state_ptr) SumState<float>();
@@ -68,6 +71,9 @@ void* create_aggregate_state(AggregateExpr::Type aggr_type, AttrType attr_type)
     if (attr_type == AttrType::INTS) {
       state_ptr = malloc(sizeof(AvgState<int>));
       new (state_ptr) AvgState<int>();
+    } else if (attr_type == AttrType::BIGINTS) {
+      state_ptr = malloc(sizeof(AvgState<int64_t>));
+      new (state_ptr) AvgState<int64_t>();
     } else if (attr_type == AttrType::FLOATS) {
       state_ptr = malloc(sizeof(AvgState<float>));
       new (state_ptr) AvgState<float>();
@@ -95,6 +101,8 @@ RC aggregate_state_update_by_value(void *state, AggregateExpr::Type aggr_type, A
   if (aggr_type == AggregateExpr::Type::SUM) {
     if (attr_type == AttrType::INTS) {
       static_cast<SumState<int>*>(state)->update(val.get_int());
+    } else if (attr_type == AttrType::BIGINTS) {
+      static_cast<SumState<int64_t>*>(state)->update(val.get_bigint());
     } else if (attr_type == AttrType::FLOATS) {
       static_cast<SumState<float>*>(state)->update(val.get_float());
     } else {
@@ -106,6 +114,8 @@ RC aggregate_state_update_by_value(void *state, AggregateExpr::Type aggr_type, A
   } else if (aggr_type == AggregateExpr::Type::AVG) {
     if (attr_type == AttrType::INTS) {
       static_cast<AvgState<int>*>(state)->update(val.get_int());
+    } else if (attr_type == AttrType::BIGINTS) {
+      static_cast<AvgState<int64_t>*>(state)->update(val.get_bigint());
     } else if (attr_type == AttrType::FLOATS) {
       static_cast<AvgState<float>*>(state)->update(val.get_float());
     } else {
@@ -156,6 +166,15 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
       } else {
         append_to_column<SumState<int>, int>(state, col);
       }
+    } else if (attr_type == AttrType::BIGINTS) {
+      auto *st = reinterpret_cast<SumState<int64_t> *>(state);
+      if (!st->has_value) {
+        Value v; v.set_null();
+        col.set_attr_type(AttrType::NULLS);
+        col.append_value(v);
+      } else {
+        append_to_column<SumState<int64_t>, int64_t>(state, col);
+      }
     } else if (attr_type == AttrType::FLOATS) {
       auto *st = reinterpret_cast<SumState<float> *>(state);
       if (!st->has_value) {
@@ -181,6 +200,15 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
       } else {
         append_to_column<AvgState<int>, float>(state, col);
       }
+    } else if (attr_type == AttrType::BIGINTS) {
+      auto *st = reinterpret_cast<AvgState<int64_t> *>(state);
+      if (st->count == 0) {
+        Value v; v.set_null();
+        col.set_attr_type(AttrType::NULLS);
+        col.append_value(v);
+      } else {
+        append_to_column<AvgState<int64_t>, float>(state, col);
+      }
     } else if (attr_type == AttrType::FLOATS) {
       auto *st = reinterpret_cast<AvgState<float> *>(state);
       if (st->count == 0) {
@@ -193,7 +221,7 @@ RC finialize_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrTyp
     } else {
       rc = RC::UNIMPLEMENTED;
       LOG_WARN("unsupported aggregate value type");
-    }// 
+    }//
   } else if (aggr_type == AggregateExpr::Type::MAX || aggr_type == AggregateExpr::Type::MIN) {
     auto *st = reinterpret_cast<MinMaxState *>(state);
     if (!st->has_value) {
@@ -222,6 +250,10 @@ void reset_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrType 
       auto *st = static_cast<SumState<int> *>(state);
       st->value     = 0;
       st->has_value = false;
+    } else if (attr_type == AttrType::BIGINTS) {
+      auto *st = static_cast<SumState<int64_t> *>(state);
+      st->value     = 0;
+      st->has_value = false;
     } else if (attr_type == AttrType::FLOATS) {
       auto *st = static_cast<SumState<float> *>(state);
       st->value     = 0.0f;
@@ -233,6 +265,10 @@ void reset_aggregate_state(void *state, AggregateExpr::Type aggr_type, AttrType 
   } else if (aggr_type == AggregateExpr::Type::AVG) {
     if (attr_type == AttrType::INTS) {
       auto *st = static_cast<AvgState<int> *>(state);
+      st->value = 0;
+      st->count = 0;
+    } else if (attr_type == AttrType::BIGINTS) {
+      auto *st = static_cast<AvgState<int64_t> *>(state);
       st->value = 0;
       st->count = 0;
     } else if (attr_type == AttrType::FLOATS) {
@@ -260,6 +296,8 @@ RC aggregate_state_update_by_column(void *state, AggregateExpr::Type aggr_type, 
   if (aggr_type == AggregateExpr::Type::SUM) {
     if (attr_type == AttrType::INTS) {
       update_aggregate_state<SumState<int>, int>(state, col);
+    } else if (attr_type == AttrType::BIGINTS) {
+      update_aggregate_state<SumState<int64_t>, int64_t>(state, col);
     } else if (attr_type == AttrType::FLOATS) {
       update_aggregate_state<SumState<float>, float>(state, col);
     } else {
@@ -278,6 +316,8 @@ RC aggregate_state_update_by_column(void *state, AggregateExpr::Type aggr_type, 
   } else if (aggr_type == AggregateExpr::Type::AVG) {
     if (attr_type == AttrType::INTS) {
       update_aggregate_state<AvgState<int>, int>(state, col);
+    } else if (attr_type == AttrType::BIGINTS) {
+      update_aggregate_state<AvgState<int64_t>, int64_t>(state, col);
     } else if (attr_type == AttrType::FLOATS) {
       update_aggregate_state<AvgState<float>, float>(state, col);
     } else {
@@ -302,9 +342,11 @@ RC aggregate_state_update_by_column(void *state, AggregateExpr::Type aggr_type, 
 }
 
 template class SumState<int>;
+template class SumState<int64_t>;
 template class SumState<float>;
 
 template class CountState<int>;
 
 template class AvgState<int>;
+template class AvgState<int64_t>;
 template class AvgState<float>;

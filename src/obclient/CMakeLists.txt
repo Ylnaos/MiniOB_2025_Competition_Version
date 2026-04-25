@@ -2,6 +2,7 @@ ADD_EXECUTABLE(obclient)
 MESSAGE("Begin to build " obclient)
 
 FILE(GLOB_RECURSE ALL_SRC *.cpp)
+LIST(FILTER ALL_SRC EXCLUDE REGEX "/\\._[^/]*\\.cpp$")
 FOREACH (F ${ALL_SRC})
 
     SET(PRJ_SRC ${PRJ_SRC} ${F})

@@ -42,17 +42,27 @@ RC DropIndexStmt::create(Db *db, const DropIndexSqlNode &drop_index, Stmt *&stmt
 
   Table *table = db->find_table(table_name);
   if (nullptr == table) {
+    if (drop_index.if_exists) {
+      // IF EXISTS: 表不存在时也视为成功（创建一个空的 stmt）
+      stmt = new DropIndexStmt(nullptr, drop_index.index_name, true);
+      return RC::SUCCESS;
+    }
     LOG_WARN("no such table. db=%s table=%s", db->name(), table_name);
     return RC::SCHEMA_TABLE_NOT_EXIST;
   }
 
   Index *index = table->find_index(index_name);
   if (nullptr == index) {
+    if (drop_index.if_exists) {
+      // IF EXISTS: 索引不存在时也视为成功
+      stmt = new DropIndexStmt(table, drop_index.index_name, true);
+      return RC::SUCCESS;
+    }
     LOG_WARN("index not exists on table. table=%s index=%s", table_name, index_name);
     return RC::NOT_EXIST;
   }
 
-  stmt = new DropIndexStmt(table, drop_index.index_name);
+  stmt = new DropIndexStmt(table, drop_index.index_name, drop_index.if_exists);
   return RC::SUCCESS;
 }
 

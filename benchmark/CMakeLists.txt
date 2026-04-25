@@ -3,6 +3,7 @@ find_package(benchmark CONFIG REQUIRED)
 INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/observer)
 
 FILE(GLOB_RECURSE ALL_SRC *.cpp)
+LIST(FILTER ALL_SRC EXCLUDE REGEX "/\\._[^/]*\\.cpp$")
 # AUX_SOURCE_DIRECTORY 类似功能
 FOREACH (F ${ALL_SRC})
     get_filename_component(prjName ${F} NAME_WE)

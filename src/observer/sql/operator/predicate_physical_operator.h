@@ -35,6 +35,7 @@ public:
 
   RC open(Trx *trx) override;
   RC next() override;
+  RC next(Chunk &chunk) override;
   RC close() override;
 
   Tuple *current_tuple() override;
@@ -43,4 +44,7 @@ public:
 
 private:
   unique_ptr<Expression> expression_;
+  Chunk                  input_chunk_;
+  Chunk                  filtered_chunk_;
+  vector<uint8_t>        select_;
 };

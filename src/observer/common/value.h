@@ -32,6 +32,7 @@ class Value final
 public:
   friend class DataType;
   friend class IntegerType;
+  friend class BigintType;
   friend class FloatType;
   friend class BooleanType;
   friend class CharType;
@@ -115,6 +116,7 @@ public:
    * 如果当前的类型与期望获取的类型不符，就会执行转换操作
    */
   int      get_int() const;
+  int64_t  get_bigint() const;
   float    get_float() const;
   string   get_string() const;
   string_t get_string_t() const;
@@ -123,6 +125,7 @@ public:
 
 public:
   void set_int(int val);
+  void set_bigint(int64_t val);
   void set_float(float val);
   void set_string(const char *s, int len = 0);
   void set_empty_string(int len);
@@ -138,6 +141,7 @@ private:
   union Val
   {
     int32_t int_value_;
+    int64_t bigint_value_;
     float   float_value_;
     bool    bool_value_;
     char   *pointer_value_;

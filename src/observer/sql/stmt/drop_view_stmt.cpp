@@ -8,22 +8,23 @@ EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
 MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
-#include "sql/stmt/drop_table_stmt.h"
+#include "sql/stmt/drop_view_stmt.h"
 #include "storage/db/db.h"
+#include "storage/view/view.h"
 
-RC DropTableStmt::create(Db *db, const DropTableSqlNode &drop_table, Stmt *&stmt)
+RC DropViewStmt::create(Db *db, const DropViewSqlNode &drop_view, Stmt *&stmt)
 {
-  // 验证表是否存在
-  Table *table = db->find_table(drop_table.relation_name.c_str());
-  if (table == nullptr) {
-    if (drop_table.if_exists) {
-      // IF EXISTS: 表不存在时也视为成功
-      stmt = new DropTableStmt(drop_table.relation_name, true);
+  // 验证视图是否存在
+  View *view = db->find_view(drop_view.view_name.c_str());
+  if (view == nullptr) {
+    if (drop_view.if_exists) {
+      // IF EXISTS: 视图不存在时也视为成功
+      stmt = new DropViewStmt(drop_view.view_name, true);
       return RC::SUCCESS;
     }
-    return RC::SCHEMA_TABLE_NOT_EXIST;
+    return RC::SCHEMA_TABLE_NOT_EXIST;  // 使用通用的不存在错误码
   }
 
-  stmt = new DropTableStmt(drop_table.relation_name, drop_table.if_exists);
+  stmt = new DropViewStmt(drop_view.view_name, drop_view.if_exists);
   return RC::SUCCESS;
 }

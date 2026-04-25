@@ -101,6 +101,8 @@ static size_t default_length_for_attr_type(AttrType type)
     case AttrType::DATES:
     case AttrType::BOOLEANS:
       return 4;
+    case AttrType::BIGINTS:
+      return 8;
     case AttrType::CHARS:
       return 4;
     case AttrType::TEXTS:
@@ -135,6 +137,7 @@ static size_t default_length_for_attr_type(AttrType type)
         RBRACKET
         CREATE
         VIEW
+        MATERIALIZED
         DROP
         ALTER
         GROUP
@@ -162,6 +165,7 @@ static size_t default_length_for_attr_type(AttrType type)
         TRX_COMMIT
         TRX_ROLLBACK
         INT_T
+        BIGINT_T
         STRING_T
         FLOAT_T
         DATE_T
@@ -191,6 +195,7 @@ static size_t default_length_for_attr_type(AttrType type)
         JOIN
         INNER
         IS
+        IF
         ANALYZE
         FIELDS
         TERMINATED
@@ -333,6 +338,8 @@ static size_t default_length_for_attr_type(AttrType type)
 %type <sql_node>            delete_stmt
 %type <sql_node>            create_table_stmt
 %type <sql_node>            create_view_stmt
+%type <sql_node>            create_materialized_view_stmt
+%type <sql_node>            drop_view_stmt
 %type <sql_node>            drop_table_stmt
 %type <sql_node>            alter_table_stmt
 %type <sql_node>            analyze_table_stmt
@@ -373,7 +380,9 @@ command_wrapper:
   | delete_stmt
   | create_table_stmt
   | create_view_stmt
+  | create_materialized_view_stmt
   | drop_table_stmt
+  | drop_view_stmt
   | alter_table_stmt
   | analyze_table_stmt
   | show_tables_stmt
@@ -430,6 +439,12 @@ drop_table_stmt:    /*drop table 语句的语法解析树*/
     DROP TABLE ID {
       $$ = new ParsedSqlNode(SCF_DROP_TABLE);
       $$->drop_table.relation_name = $3;
+      $$->drop_table.if_exists = false;
+    }
+    | DROP TABLE IF EXISTS ID {
+      $$ = new ParsedSqlNode(SCF_DROP_TABLE);
+      $$->drop_table.relation_name = $5;
+      $$->drop_table.if_exists = true;
     };
 
 alter_table_stmt:
@@ -495,6 +510,28 @@ create_view_stmt:
       // 记录 select 子句的原始文本
       $$->create_view.view_select_sql = token_name(sql_string, &@8);
       $$->create_view.select_node.reset($8);
+    }
+    ;
+
+create_materialized_view_stmt:
+    CREATE MATERIALIZED VIEW ID AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_MATERIALIZED_VIEW);
+      $$->create_materialized_view.view_name = $4;
+      $$->create_materialized_view.select_node.reset($6);
+    }
+    ;
+
+drop_view_stmt:      /* drop view 语句的语法解析树 */
+    DROP VIEW ID {
+      $$ = new ParsedSqlNode(SCF_DROP_VIEW);
+      $$->drop_view.view_name = $3;
+      $$->drop_view.if_exists = false;
+    }
+    | DROP VIEW IF EXISTS ID {
+      $$ = new ParsedSqlNode(SCF_DROP_VIEW);
+      $$->drop_view.view_name = $5;
+      $$->drop_view.if_exists = true;
     }
     ;
 
@@ -602,6 +639,14 @@ drop_index_stmt:      /*drop index 语句的语法解析树*/
       $$ = new ParsedSqlNode(SCF_DROP_INDEX);
       $$->drop_index.index_name = $3;
       $$->drop_index.relation_name = $5;
+      $$->drop_index.if_exists = false;
+    }
+    | DROP INDEX IF EXISTS ID ON ID
+    {
+      $$ = new ParsedSqlNode(SCF_DROP_INDEX);
+      $$->drop_index.index_name = $5;
+      $$->drop_index.relation_name = $7;
+      $$->drop_index.if_exists = true;
     }
     ;
 create_table_stmt:    /*create table 语句的语法解析树*/
@@ -610,6 +655,7 @@ create_table_stmt:    /*create table 语句的语法解析树*/
       $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
       CreateTableSqlNode &create_table = $$->create_table;
       create_table.relation_name = $3;
+      create_table.if_not_exists = false;
       //free($3);
 
       create_table.attr_infos.swap(*$5);
@@ -623,11 +669,30 @@ create_table_stmt:    /*create table 语句的语法解析树*/
         create_table.storage_format = $8;
       }
     }
+    | CREATE TABLE IF NOT EXISTS ID LBRACE attr_def_list primary_key RBRACE storage_format
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
+      CreateTableSqlNode &create_table = $$->create_table;
+      create_table.relation_name = $6;
+      create_table.if_not_exists = true;
+
+      create_table.attr_infos.swap(*$8);
+      delete $8;
+
+      if ($9 != nullptr) {
+        create_table.primary_keys.swap(*$9);
+        delete $9;
+      }
+      if ($11 != nullptr) {
+        create_table.storage_format = $11;
+      }
+    }
     | CREATE TABLE ID LBRACE attr_def_list primary_key RBRACE AS select_stmt
     {
       $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
       CreateTableSqlNode &create_table = $$->create_table;
       create_table.relation_name = $3;
+      create_table.if_not_exists = false;
       // keep user-specified columns
       create_table.attr_infos.swap(*$5);
       delete $5;
@@ -642,11 +707,31 @@ create_table_stmt:    /*create table 语句的语法解析树*/
         create_table.as_select.reset($9);
       }
     }
+    | CREATE TABLE IF NOT EXISTS ID LBRACE attr_def_list primary_key RBRACE AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
+      CreateTableSqlNode &create_table = $$->create_table;
+      create_table.relation_name = $6;
+      create_table.if_not_exists = true;
+      create_table.attr_infos.swap(*$8);
+      delete $8;
+      if ($9 != nullptr) {
+        create_table.primary_keys.swap(*$9);
+        delete $9;
+      }
+      if ($12 == nullptr || $12->flag != SCF_SELECT) {
+        delete $$;
+        $$ = nullptr;
+      } else {
+        create_table.as_select.reset($12);
+      }
+    }
     | CREATE TABLE ID LBRACE attr_def_list primary_key RBRACE select_stmt
     {
       $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
       CreateTableSqlNode &create_table = $$->create_table;
       create_table.relation_name = $3;
+      create_table.if_not_exists = false;
       // keep user-specified columns
       create_table.attr_infos.swap(*$5);
       delete $5;
@@ -662,17 +747,50 @@ create_table_stmt:    /*create table 语句的语法解析树*/
         create_table.as_select.reset($8);
       }
     }
+    | CREATE TABLE IF NOT EXISTS ID LBRACE attr_def_list primary_key RBRACE select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
+      CreateTableSqlNode &create_table = $$->create_table;
+      create_table.relation_name = $6;
+      create_table.if_not_exists = true;
+      create_table.attr_infos.swap(*$8);
+      delete $8;
+      if ($9 != nullptr) {
+        create_table.primary_keys.swap(*$9);
+        delete $9;
+      }
+      if ($11 == nullptr || $11->flag != SCF_SELECT) {
+        delete $$;
+        $$ = nullptr;
+      } else {
+        create_table.as_select.reset($11);
+      }
+    }
     | CREATE TABLE ID AS select_stmt
     {
       $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
       CreateTableSqlNode &create_table = $$->create_table;
       create_table.relation_name = $3;
+      create_table.if_not_exists = false;
       if ($5 == nullptr || $5->flag != SCF_SELECT) {
         // 不应发生：select_stmt 规约保证 SCF_SELECT
         delete $$;
         $$ = nullptr;
       } else {
         create_table.as_select.reset($5);
+      }
+    }
+    | CREATE TABLE IF NOT EXISTS ID AS select_stmt
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_TABLE);
+      CreateTableSqlNode &create_table = $$->create_table;
+      create_table.relation_name = $6;
+      create_table.if_not_exists = true;
+      if ($8 == nullptr || $8->flag != SCF_SELECT) {
+        delete $$;
+        $$ = nullptr;
+      } else {
+        create_table.as_select.reset($8);
       }
     }
     ;
@@ -706,8 +824,7 @@ attr_def:
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      // VECTOR 类型默认维度为 2048，其他类型默认为 4
-      $$->length = ($$->type == AttrType::VECTORS) ? 2048 : 4;
+      $$->length = default_length_for_attr_type($$->type);
       $$->nullable = ($3 != 0);
     }
     ;
@@ -716,6 +833,7 @@ number:
     ;
 type:
     INT_T      { $$ = static_cast<int>(AttrType::INTS); }
+    | BIGINT_T { $$ = static_cast<int>(AttrType::BIGINTS); }
     | STRING_T { $$ = static_cast<int>(AttrType::CHARS); }
     | TEXT_T   { $$ = static_cast<int>(AttrType::TEXTS); }
     | FLOAT_T  { $$ = static_cast<int>(AttrType::FLOATS); }

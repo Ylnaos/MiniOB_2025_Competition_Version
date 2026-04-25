@@ -18,6 +18,31 @@ See the Mulan PSL v2 for more details. */
 
 using namespace std;
 
+namespace {
+
+bool supports_chunk_output(const PhysicalOperator &oper)
+{
+  switch (oper.type()) {
+    case PhysicalOperatorType::TABLE_SCAN_VEC:
+    case PhysicalOperatorType::PROJECT_VEC:
+    case PhysicalOperatorType::EXPR_VEC:
+    case PhysicalOperatorType::AGGREGATE_VEC:
+    case PhysicalOperatorType::GROUP_BY_VEC:
+    case PhysicalOperatorType::VECTOR_INDEX_SCAN:
+      return true;
+    case PhysicalOperatorType::PREDICATE:
+    case PhysicalOperatorType::LIMIT:
+    case PhysicalOperatorType::ORDER_BY: {
+      const auto &children = const_cast<PhysicalOperator &>(oper).children();
+      return !children.empty() && supports_chunk_output(*children.front());
+    }
+    default:
+      return false;
+  }
+}
+
+}  // namespace
+
 OrderByPhysicalOperator::OrderByPhysicalOperator(vector<OrderItem> &&order_by_items)
     : order_by_items_(std::move(order_by_items)), merge_heap_(MergeComparator{this})
 {}
@@ -37,10 +62,18 @@ RC OrderByPhysicalOperator::open(Trx *trx)
   }
 
   rows_.clear();
+  vec_rows_.clear();
   run_files_.clear();
   run_cursors_.clear();
+  vec_column_ids_.clear();
+  vec_column_types_.clear();
+  vec_column_lens_.clear();
+  vec_input_chunk_.reset();
+  vec_output_chunk_.reset();
   shared_specs_.reset();
   current_index_               = 0;
+  vec_current_index_           = 0;
+  vector_mode_                 = supports_chunk_output(*children_[0]);
   use_external_sort_           = false;
   has_current_external_row_    = false;
   current_external_row_        = RowWithKeys();
@@ -51,6 +84,67 @@ RC OrderByPhysicalOperator::open(Trx *trx)
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to open child operator. rc=%s", strrc(rc));
     return rc;
+  }
+
+  if (vector_mode_) {
+    while (RC::SUCCESS == (rc = children_[0]->next(vec_input_chunk_))) {
+      const int rows = vec_input_chunk_.rows();
+      if (rows <= 0) {
+        vec_input_chunk_.reset_data();
+        continue;
+      }
+
+      if (vec_column_ids_.empty()) {
+        vec_column_ids_.reserve(vec_input_chunk_.column_num());
+        vec_column_types_.reserve(vec_input_chunk_.column_num());
+        vec_column_lens_.reserve(vec_input_chunk_.column_num());
+        for (int col_idx = 0; col_idx < vec_input_chunk_.column_num(); ++col_idx) {
+          const Column &column = vec_input_chunk_.column(col_idx);
+          vec_column_ids_.push_back(vec_input_chunk_.column_ids(col_idx));
+          vec_column_types_.push_back(column.attr_type());
+          vec_column_lens_.push_back(column.attr_len());
+        }
+      }
+
+      vector<Column> key_columns(order_by_items_.size());
+      for (size_t key_idx = 0; key_idx < order_by_items_.size(); ++key_idx) {
+        RC key_rc = order_by_items_[key_idx].first->get_column(vec_input_chunk_, key_columns[key_idx]);
+        if (OB_FAIL(key_rc)) {
+          LOG_WARN("failed to evaluate vectorized order key. rc=%s", strrc(key_rc));
+          children_[0]->close();
+          return key_rc;
+        }
+      }
+
+      for (int row_idx = 0; row_idx < rows; ++row_idx) {
+        VecRowWithKeys row;
+        row.values.reserve(vec_input_chunk_.column_num());
+        row.sort_keys.reserve(order_by_items_.size());
+        for (int col_idx = 0; col_idx < vec_input_chunk_.column_num(); ++col_idx) {
+          row.values.emplace_back(vec_input_chunk_.get_value(col_idx, row_idx));
+        }
+        for (Column &key_column : key_columns) {
+          row.sort_keys.emplace_back(key_column.get_value(row_idx));
+        }
+        vec_rows_.emplace_back(std::move(row));
+      }
+
+      vec_input_chunk_.reset_data();
+    }
+
+    if (rc != RC::RECORD_EOF) {
+      LOG_WARN("child vector next failed. rc=%s", strrc(rc));
+      children_[0]->close();
+      return rc;
+    }
+
+    std::sort(vec_rows_.begin(), vec_rows_.end(), [this](const VecRowWithKeys &a, const VecRowWithKeys &b) {
+      return compare_keys(a.sort_keys, b.sort_keys) < 0;
+    });
+
+    opened_ = true;
+    vec_current_index_ = 0;
+    return RC::SUCCESS;
   }
 
   while (RC::SUCCESS == (rc = children_[0]->next())) {
@@ -487,6 +581,9 @@ void OrderByPhysicalOperator::cleanup_external_resources()
 
 RC OrderByPhysicalOperator::next()
 {
+  if (vector_mode_) {
+    return RC::UNIMPLEMENTED;
+  }
   if (!opened_) {
     return RC::INTERNAL;
   }
@@ -541,6 +638,40 @@ RC OrderByPhysicalOperator::next()
   return RC::SUCCESS;
 }
 
+RC OrderByPhysicalOperator::next(Chunk &chunk)
+{
+  if (!opened_) {
+    return RC::INTERNAL;
+  }
+  if (!vector_mode_) {
+    return RC::UNIMPLEMENTED;
+  }
+  if (vec_current_index_ >= vec_rows_.size()) {
+    return RC::RECORD_EOF;
+  }
+
+  vec_output_chunk_.reset();
+  for (size_t col_idx = 0; col_idx < vec_column_ids_.size(); ++col_idx) {
+    auto column = make_unique<Column>(
+        vec_column_types_[col_idx], vec_column_lens_[col_idx], Column::DEFAULT_CAPACITY);
+    vec_output_chunk_.add_column(std::move(column), vec_column_ids_[col_idx]);
+  }
+
+  while (vec_current_index_ < vec_rows_.size() && vec_output_chunk_.rows() < vec_output_chunk_.capacity()) {
+    VecRowWithKeys &row = vec_rows_[vec_current_index_];
+    for (size_t col_idx = 0; col_idx < row.values.size(); ++col_idx) {
+      RC rc = vec_output_chunk_.column(col_idx).append_value(row.values[col_idx]);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to append ordered vector value. rc=%s", strrc(rc));
+        return rc;
+      }
+    }
+    ++vec_current_index_;
+  }
+
+  return chunk.reference(vec_output_chunk_);
+}
+
 Tuple *OrderByPhysicalOperator::current_tuple()
 {
   if (!opened_) {
@@ -571,8 +702,16 @@ RC OrderByPhysicalOperator::close()
   }
   cleanup_external_resources();
   rows_.clear();
+  vec_rows_.clear();
+  vec_input_chunk_.reset();
+  vec_output_chunk_.reset();
+  vec_column_ids_.clear();
+  vec_column_types_.clear();
+  vec_column_lens_.clear();
   shared_specs_.reset();
   opened_        = false;
+  vector_mode_    = false;
   current_index_ = 0;
+  vec_current_index_ = 0;
   return RC::SUCCESS;
 }

@@ -29,6 +29,26 @@ RC DropIndexExecutor::execute(SQLStageEvent *sql_event)
   DropIndexStmt *drop_index_stmt = static_cast<DropIndexStmt *>(stmt);
 
   Table *table = drop_index_stmt->table();
+
+  // 处理 IF EXISTS 情况：table 为 nullptr 或索引不存在
+  if (drop_index_stmt->if_exists()) {
+    if (table == nullptr) {
+      // 表不存在，返回成功
+      LOG_INFO("skip dropping index since table does not exist. index=%s",
+               drop_index_stmt->index_name().c_str());
+      return RC::SUCCESS;
+    }
+
+    // 检查索引是否存在
+    Index *index = table->find_index(drop_index_stmt->index_name().c_str());
+    if (index == nullptr) {
+      // 索引不存在，返回成功
+      LOG_INFO("skip dropping index since it does not exist. table=%s, index=%s",
+               table->name(), drop_index_stmt->index_name().c_str());
+      return RC::SUCCESS;
+    }
+  }
+
   return table->drop_index(drop_index_stmt->index_name().c_str());
 }
 

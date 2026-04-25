@@ -86,7 +86,15 @@ public:
       ASSERT(expr->type() == ExprType::AGGREGATION, "expect aggregate expression");
       auto *aggregation_expr = static_cast<AggregateExpr *>(expr);
       aggr_types_.push_back(aggregation_expr->aggregate_type());
-      aggr_child_types_.push_back(aggregation_expr->value_type());
+
+      // 获取聚合子表达式的类型，用于创建正确的聚合状态
+      AttrType child_type = AttrType::INTS;  // 默认值
+      if (aggregation_expr->child() != nullptr) {
+        child_type = aggregation_expr->child()->value_type();
+      } else if (aggregation_expr->aggregate_type() == AggregateExpr::Type::COUNT) {
+        child_type = AttrType::INTS;  // COUNT 总是返回 int
+      }
+      aggr_child_types_.push_back(child_type);
     }
   }
   virtual ~StandardAggregateHashTable()

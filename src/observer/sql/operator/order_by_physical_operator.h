@@ -36,6 +36,7 @@ public:
 
   RC open(Trx *trx) override;
   RC next() override;
+  RC next(Chunk &chunk) override;
   RC close() override;
 
   Tuple *current_tuple() override;
@@ -45,6 +46,11 @@ private:
   struct RowWithKeys {
     ValueListTuple row;
     vector<Value>  sort_keys; // 预计算的排序键值
+  };
+
+  struct VecRowWithKeys {
+    vector<Value> values;
+    vector<Value> sort_keys;
   };
 
   struct RunCursor {
@@ -73,8 +79,11 @@ private:
 private:
   vector<OrderItem>       order_by_items_;
   vector<RowWithKeys>     rows_;
+  vector<VecRowWithKeys>  vec_rows_;
   size_t                  current_index_ = 0;
+  size_t                  vec_current_index_ = 0;
   bool                    opened_        = false;
+  bool                    vector_mode_    = false;
   std::shared_ptr<vector<TupleCellSpec>> shared_specs_;
   bool                    use_external_sort_      = false;
   bool                    has_current_external_row_ = false;
@@ -85,4 +94,9 @@ private:
   vector<std::filesystem::path>      run_files_;
   MergeHeap               merge_heap_;
   size_t                  chunk_limit_rows_ = 0;
+  Chunk                   vec_input_chunk_;
+  Chunk                   vec_output_chunk_;
+  vector<int>             vec_column_ids_;
+  vector<AttrType>        vec_column_types_;
+  vector<int>             vec_column_lens_;
 };

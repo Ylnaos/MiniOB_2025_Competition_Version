@@ -157,6 +157,44 @@ RC PhysicalPlanGenerator::create_vec(LogicalOperator &logical_operator, unique_p
     case LogicalOperatorType::GROUP_BY: {
       return create_vec_plan(static_cast<GroupByLogicalOperator &>(logical_operator), oper, session);
     } break;
+    case LogicalOperatorType::PREDICATE: {
+      auto &pred_oper = static_cast<PredicateLogicalOperator &>(logical_operator);
+      ASSERT(pred_oper.children().size() == 1, "predicate logical operator's child number should be 1");
+
+      unique_ptr<PhysicalOperator> child_phy_oper;
+      rc = create_vec(*pred_oper.children().front(), child_phy_oper, session);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to create vectorized predicate child. rc=%s", strrc(rc));
+        return rc;
+      }
+
+      vector<unique_ptr<Expression>> &expressions = pred_oper.expressions();
+      ASSERT(expressions.size() == 1, "predicate logical operator's expressions should be 1");
+      auto predicate_operator = make_unique<PredicatePhysicalOperator>(std::move(expressions.front()));
+      predicate_operator->add_child(std::move(child_phy_oper));
+      oper = std::move(predicate_operator);
+      return RC::SUCCESS;
+    } break;
+    case LogicalOperatorType::ORDER_BY: {
+      auto &order_logical = static_cast<OrderByLogicalOperator &>(logical_operator);
+      ASSERT(order_logical.children().size() == 1, "order by operator should have 1 child");
+
+      unique_ptr<PhysicalOperator> child_phy_oper;
+      rc = create_vec(*order_logical.children().front(), child_phy_oper, session);
+      if (OB_FAIL(rc)) {
+        LOG_WARN("failed to create vectorized order by child. rc=%s", strrc(rc));
+        return rc;
+      }
+
+      vector<OrderByPhysicalOperator::OrderItem> items;
+      for (auto &item : order_logical.order_by_items()) {
+        items.emplace_back(std::move(item));
+      }
+      auto order_operator = make_unique<OrderByPhysicalOperator>(std::move(items));
+      order_operator->add_child(std::move(child_phy_oper));
+      oper = std::move(order_operator);
+      return RC::SUCCESS;
+    } break;
     case LogicalOperatorType::EXPLAIN: {
       return create_vec_plan(static_cast<ExplainLogicalOperator &>(logical_operator), oper, session);
     } break;
@@ -565,7 +603,14 @@ RC PhysicalPlanGenerator::create_vec_plan(ProjectLogicalOperator &project_oper, 
     project_operator->add_child(std::move(expr_operator));
   }
 
-  oper = std::move(project_operator);
+  if (project_oper.limit() >= 0) {
+    auto limit_operator = make_unique<LimitPhysicalOperator>(project_oper.limit());
+    limit_operator->add_child(std::move(project_operator));
+    oper = std::move(limit_operator);
+    LOG_TRACE("create a vectorized limit physical operator with limit=%d", project_oper.limit());
+  } else {
+    oper = std::move(project_operator);
+  }
 
   LOG_TRACE("create a project physical operator");
   return rc;

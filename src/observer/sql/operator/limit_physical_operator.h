@@ -28,6 +28,7 @@ public:
 
   RC open(Trx *trx) override;
   RC next() override;
+  RC next(Chunk &chunk) override;
   RC close() override;
 
   Tuple *current_tuple() override;
@@ -36,4 +37,6 @@ public:
 private:
   int  limit_;         ///< 最多返回多少行（-1表示不限制）
   int  returned_ = 0;  ///< 已经返回的行数
+  Chunk input_chunk_;
+  Chunk limited_chunk_;
 };

@@ -8,40 +8,41 @@ EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
 MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details. */
 
-#include "sql/executor/drop_table_executor.h"
+#include "sql/executor/drop_view_executor.h"
 
 #include "common/log/log.h"
 #include "event/session_event.h"
 #include "event/sql_event.h"
 #include "session/session.h"
-#include "sql/stmt/drop_table_stmt.h"
+#include "sql/stmt/drop_view_stmt.h"
 #include "storage/db/db.h"
+#include "storage/view/view.h"
 
-RC DropTableExecutor::execute(SQLStageEvent *sql_event)
+RC DropViewExecutor::execute(SQLStageEvent *sql_event)
 {
   Stmt    *stmt    = sql_event->stmt();
   Session *session = sql_event->session_event()->session();
-  ASSERT(stmt->type() == StmtType::DROP_TABLE,
-      "drop table executor can not run this command: %d",
+  ASSERT(stmt->type() == StmtType::DROP_VIEW,
+      "drop view executor can not run this command: %d",
       static_cast<int>(stmt->type()));
 
-  DropTableStmt *drop_table_stmt = static_cast<DropTableStmt *>(stmt);
+  DropViewStmt *drop_view_stmt = static_cast<DropViewStmt *>(stmt);
 
-  const char *table_name = drop_table_stmt->table_name().c_str();
+  const char *view_name = drop_view_stmt->view_name().c_str();
 
-  // 检查表是否存在（如果 stmt 中已经标记了 if_exists，说明 create 阶段表不存在）
+  // 检查视图是否存在（如果 stmt 中已经标记了 if_exists，说明 create 阶段视图不存在）
   // 在这种情况下，跳过删除并返回成功
-  if (drop_table_stmt->if_exists()) {
-    // 再次检查表是否存在
-    Table *table = session->get_current_db()->find_table(table_name);
-    if (table == nullptr) {
-      // 表不存在，返回成功
-      LOG_INFO("skip dropping table since it does not exist. table=%s", table_name);
+  if (drop_view_stmt->if_exists()) {
+    // 再次检查视图是否存在
+    View *view = session->get_current_db()->find_view(view_name);
+    if (view == nullptr) {
+      // 视图不存在，返回成功
+      LOG_INFO("skip dropping view since it does not exist. view=%s", view_name);
       return RC::SUCCESS;
     }
   }
 
-  RC rc = session->get_current_db()->drop_table(table_name);
+  RC rc = session->get_current_db()->drop_view(view_name);
 
   return rc;
 }

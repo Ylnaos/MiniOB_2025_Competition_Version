@@ -20,9 +20,24 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "common/lang/unordered_set.h"
 #include "event/sql_debug.h"
+#include "storage/db/db.h"
+#include "storage/table/table.h"
 
 RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt *&stmt)
 {
+  // 检查表是否已存在
+  Table *existing_table = db->find_table(create_table.relation_name.c_str());
+  if (existing_table != nullptr) {
+    if (create_table.if_not_exists) {
+      // IF NOT EXISTS: 表已存在时也视为成功
+      // 创建一个虚拟的 stmt（executor 会检查并跳过实际创建）
+      stmt = new CreateTableStmt(create_table.relation_name, create_table.attr_infos,
+                                 create_table.primary_keys, StorageFormat::ROW_FORMAT, true);
+      return RC::SUCCESS;
+    }
+    return RC::SCHEMA_TABLE_EXIST;
+  }
+
   StorageFormat storage_format = get_storage_format(create_table.storage_format.c_str());
   if (storage_format == StorageFormat::UNKNOWN_FORMAT) {
     return RC::INVALID_ARGUMENT;
@@ -122,7 +137,7 @@ RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt 
       }
     }
 
-    auto *create_stmt = new CreateTableStmt(create_table.relation_name, attrs, {} /*pks*/, storage_format);
+    auto *create_stmt = new CreateTableStmt(create_table.relation_name, attrs, {} /*pks*/, storage_format, create_table.if_not_exists);
     // attach select stmt (owned)
     // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
     create_stmt->as_select_stmt_ = select_stmt;
@@ -132,7 +147,7 @@ RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt 
   }
 
   // Normal CREATE TABLE
-  stmt = new CreateTableStmt(create_table.relation_name, create_table.attr_infos, create_table.primary_keys, storage_format);
+  stmt = new CreateTableStmt(create_table.relation_name, create_table.attr_infos, create_table.primary_keys, storage_format, create_table.if_not_exists);
   sql_debug("create table statement: table name %s", create_table.relation_name.c_str());
   return RC::SUCCESS;
 }

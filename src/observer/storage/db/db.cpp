@@ -22,6 +22,7 @@ See the Mulan PSL v2 for more details. */
 #include <cstring>
 #include <functional>
 #include <cerrno>
+#include <cctype>
 
 #include "common/lang/string.h"
 #include "common/log/log.h"
@@ -42,6 +43,9 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/record_manager.h"
 #include "storage/record/record_scanner.h"
 #include "sql/stmt/alter_table_stmt.h"
+#include "sql/stmt/select_stmt.h"
+#include "sql/expr/expression.h"
+#include "common/lang/unordered_set.h"
 #include "json/json.h"
 
 using namespace common;
@@ -1260,6 +1264,86 @@ RC Db::create_view(const char *view_name, const char *select_sql, const vector<s
   opened_views_[view_name] = view;
   LOG_INFO("Create view success. name=%s", view_name);
   return RC::SUCCESS;
+}
+
+RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
+{
+  if (is_blank(view_name) || nullptr == select_stmt) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  // 检查名称冲突
+  if (opened_tables_.count(view_name) > 0) {
+    return RC::SCHEMA_TABLE_EXIST;
+  }
+  if (opened_views_.count(view_name) > 0) {
+    return RC::EXIST;
+  }
+
+  vector<AttrInfoSqlNode> attrs;
+  attrs.reserve(select_stmt->query_expressions().size());
+
+  unordered_set<string> used_names;
+  auto make_unique_name = [&used_names](string name) -> string {
+    if (name.empty()) {
+      name = "col";
+    }
+    size_t pos = name.rfind('.');
+    if (pos != string::npos && pos + 1 < name.size()) {
+      name = name.substr(pos + 1);
+    }
+    for (char &ch : name) {
+      ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+    }
+
+    if (used_names.insert(name).second) {
+      return name;
+    }
+    for (int suffix = 1;; ++suffix) {
+      string candidate = name + "_" + to_string(suffix);
+      if (used_names.insert(candidate).second) {
+        return candidate;
+      }
+    }
+  };
+
+  for (const auto &expr_ptr : select_stmt->query_expressions()) {
+    const Expression *expr = expr_ptr.get();
+    AttrInfoSqlNode   attr;
+
+    const char *alias = expr->alias();
+    attr.name         = make_unique_name(alias != nullptr ? string(alias) : string(expr->name()));
+    attr.type         = expr->value_type();
+    attr.nullable     = true;
+
+    const int value_length = expr->value_length();
+    switch (attr.type) {
+      case AttrType::INTS:
+      case AttrType::FLOATS:
+      case AttrType::DATES:
+        attr.length = 4;
+        break;
+      case AttrType::BIGINTS:
+        attr.length = 8;
+        break;
+      case AttrType::CHARS:
+        attr.length = value_length > 0 ? static_cast<size_t>(value_length) : static_cast<size_t>(128);
+        break;
+      case AttrType::TEXTS:
+        attr.length = 0;
+        break;
+      case AttrType::VECTORS:
+        attr.length = value_length > 0 ? static_cast<size_t>(value_length) : static_cast<size_t>(16);
+        break;
+      default:
+        attr.length = value_length > 0 ? static_cast<size_t>(value_length) : static_cast<size_t>(4);
+        break;
+    }
+
+    attrs.emplace_back(std::move(attr));
+  }
+
+  return create_table(view_name, attrs, {}, StorageFormat::ROW_FORMAT);
 }
 
 RC Db::drop_view(const char *view_name)

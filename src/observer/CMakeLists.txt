@@ -18,6 +18,7 @@ bison_target(yacc ${PARSER_WORKDIR}/yacc_sql.y "${PARSER_SOURCES}" DEFINES_FILE 
 add_flex_bison_dependency(lex yacc)
 
 FILE(GLOB_RECURSE ALL_SRC *.cpp *.c)
+LIST(FILTER ALL_SRC EXCLUDE REGEX "/\\._[^/]*\\.(cpp|c)$")
 SET(MAIN_SRC ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
 MESSAGE("MAIN SRC: " ${MAIN_SRC})
 SET(LIB_SRC ${LIB_SRC} ${LEXER_SOURCES} ${PARSER_SOURCES})

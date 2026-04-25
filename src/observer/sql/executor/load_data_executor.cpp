@@ -22,6 +22,110 @@ See the Mulan PSL v2 for more details. */
 
 using namespace common;
 
+/**
+ * RFC 4180 兼容的 CSV 解析器
+ * 支持：
+ * - ENCLOSED BY（字段引号）
+ * - TERMINATED BY（字段分隔符）
+ * - 引号内的引号（双引号转义）
+ * - 引号内的换行符和分隔符
+ *
+ * @param input 输入流
+ * @param row 输出：解析的一行数据
+ * @param terminated 字段分隔符
+ * @param enclosed 字段引号字符
+ * @return true 如果成功读取一行，false 如果到达文件末尾
+ */
+bool parse_csv_line(std::istream &input, std::vector<std::string> &row, char terminated, char enclosed)
+{
+  row.clear();
+
+  if (input.eof()) {
+    return false;
+  }
+
+  std::string field;
+  field.reserve(256);  // 预分配空间优化性能
+
+  enum class State {
+    NORMAL,            // 正常状态（未引号内）
+    IN_QUOTED,         // 在引号内
+    QUOTE_IN_QUOTED    // 在引号内遇到引号（可能是转义或结束）
+  };
+
+  State state = State::NORMAL;
+  char ch;
+  bool has_content = false;
+
+  while (input.get(ch)) {
+    has_content = true;
+
+    switch (state) {
+      case State::NORMAL:
+        if (ch == enclosed && field.empty()) {
+          // 字段开始处的引号，进入引号模式
+          state = State::IN_QUOTED;
+        } else if (ch == terminated) {
+          // 遇到分隔符，保存当前字段
+          row.push_back(field);
+          field.clear();
+        } else if (ch == '\n') {
+          // 遇到换行符，行结束
+          row.push_back(field);
+          return true;
+        } else if (ch == '\r') {
+          // 忽略 \r（处理 Windows 换行符 \r\n）
+          // 继续读取，期待下一个字符是 \n
+        } else {
+          field += ch;
+        }
+        break;
+
+      case State::IN_QUOTED:
+        if (ch == enclosed) {
+          // 在引号内遇到引号，可能是转义或字段结束
+          state = State::QUOTE_IN_QUOTED;
+        } else {
+          // 引号内的普通字符（包括换行符和分隔符）
+          field += ch;
+        }
+        break;
+
+      case State::QUOTE_IN_QUOTED:
+        if (ch == enclosed) {
+          // 两个连续引号，转义为一个引号
+          field += enclosed;
+          state = State::IN_QUOTED;
+        } else if (ch == terminated) {
+          // 引号后紧跟分隔符，字段结束
+          row.push_back(field);
+          field.clear();
+          state = State::NORMAL;
+        } else if (ch == '\n') {
+          // 引号后紧跟换行符，行结束
+          row.push_back(field);
+          return true;
+        } else if (ch == '\r') {
+          // 忽略 \r，等待 \n
+          state = State::QUOTE_IN_QUOTED;
+        } else {
+          // 引号后跟其他字符（RFC 4180 不推荐，但我们容错处理）
+          field += ch;
+          state = State::NORMAL;
+        }
+        break;
+    }
+  }
+
+  // 文件结束，保存最后一个字段
+  if (has_content) {
+    row.push_back(field);
+    return true;
+  }
+
+  return false;
+}
+
 RC LoadDataExecutor::execute(SQLStageEvent *sql_event)
 {
   RC            rc         = RC::SUCCESS;
@@ -85,13 +189,11 @@ RC insert_record_from_file(
 // TODO: pax format and row format
 void LoadDataExecutor::load_data(Table *table, const char *file_name, char terminated, char enclosed, SqlResult *sql_result)
 {
-  // your code here
   stringstream result_string;
 
   fstream fs;
   fs.open(file_name, ios_base::in | ios_base::binary);
   if (!fs.is_open()) {
-    result_string << "Failed to open file: " << file_name << ". system error=" << strerror(errno) << endl;
     sql_result->set_return_code(RC::FILE_NOT_EXIST);
     sql_result->set_state_string(result_string.str());
     return;
@@ -100,49 +202,99 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
   struct timespec begin_time;
   clock_gettime(CLOCK_MONOTONIC, &begin_time);
   const int field_num     = table->table_meta().visible_field_num();
+  const int sys_field_num = table->table_meta().sys_field_num();
 
-  vector<Value>       record_values(field_num);
-  string              line;
-  vector<string> file_values;
-  const string        delim("|");
-  int                      line_num        = 0;
-  int                      insertion_count = 0;
-  RC                       rc              = RC::SUCCESS;
-  while (!fs.eof() && RC::SUCCESS == rc) {
-    getline(fs, line);
-    line_num++;
-    if (common::is_blank(line.c_str())) {
-      continue;
+  vector<string>      file_values;
+  int                 insertion_count = 0;
+  RC                  rc              = RC::SUCCESS;
+
+  if (table->table_meta().storage_format() == StorageFormat::PAX_FORMAT) {
+    // PAX 格式：批量插入优化
+    const int BATCH_SIZE = 1000;  // 每批处理的行数
+    Chunk chunk;
+
+    // 初始化 Chunk 的列
+    for (int i = 0; i < field_num; ++i) {
+      const FieldMeta *field = table->table_meta().field(i + sys_field_num);
+      auto col = make_unique<Column>(field->type(), field->len(), BATCH_SIZE);
+      chunk.add_column(std::move(col), field->field_id());
     }
 
-    file_values.clear();
-    common::split_string(line, delim, file_values);
-    stringstream errmsg;
+    vector<Value> record_values(field_num);
+    int batch_count = 0;
 
-    if (table->table_meta().storage_format() == StorageFormat::ROW_FORMAT) {
+    while (parse_csv_line(fs, file_values, terminated, enclosed)) {
+      if (file_values.size() < static_cast<size_t>(field_num)) {
+        rc = RC::SCHEMA_FIELD_MISSING;
+        break;
+      }
+
+      // 解析每个字段
+      bool parse_success = true;
+      for (int i = 0; i < field_num && parse_success; i++) {
+        const FieldMeta *field = table->table_meta().field(i + sys_field_num);
+        string &file_value = file_values[i];
+        if (!is_string_type(field->type())) {
+          common::strip(file_value);
+        }
+        rc = DataType::type_instance(field->type())->set_value_from_str(record_values[i], file_value);
+        if (rc != RC::SUCCESS) {
+          parse_success = false;
+        }
+      }
+
+      if (!parse_success) {
+        continue;
+      }
+
+      // 将数据追加到 Chunk
+      for (int i = 0; i < field_num; i++) {
+        chunk.column(i).append_value(record_values[i]);
+      }
+      batch_count++;
+
+      // 当达到批量大小或文件结束时，执行批量插入
+      if (batch_count >= BATCH_SIZE) {
+        rc = table->insert_chunk(chunk);
+        if (rc != RC::SUCCESS) {
+          break;
+        }
+        insertion_count += batch_count;
+        batch_count = 0;
+        chunk.reset_data();
+      }
+    }
+
+    // 插入剩余的数据
+    if (batch_count > 0 && rc == RC::SUCCESS) {
+      rc = table->insert_chunk(chunk);
+      if (rc == RC::SUCCESS) {
+        insertion_count += batch_count;
+      }
+    }
+  } else {
+    // ROW 格式：逐行插入
+    vector<Value> record_values(field_num);
+
+    while (parse_csv_line(fs, file_values, terminated, enclosed)) {
+      stringstream errmsg;
       rc = insert_record_from_file(table, file_values, record_values, errmsg);
       if (rc != RC::SUCCESS) {
-        result_string << "Line:" << line_num << " insert record failed:" << errmsg.str() << ". error:" << strrc(rc)
-                      << endl;
-      } else {
-        insertion_count++;
+        break;
       }
-    } else if (table->table_meta().storage_format() == StorageFormat::PAX_FORMAT) {
-      // your code here
-      // Todo: 参照insert_record_from_file实现
-      rc = RC::UNIMPLEMENTED;
-    } else {
-      rc = RC::UNSUPPORTED;
-      result_string << "Unsupported storage format: " << strrc(rc) << endl;
+      insertion_count++;
     }
   }
+
   fs.close();
 
   struct timespec end_time;
   clock_gettime(CLOCK_MONOTONIC, &end_time);
-  if (RC::SUCCESS == rc) {
-    result_string << strrc(rc);
-  }
-  LOG_INFO("load data done. row num: %s, result: %s", insertion_count, strrc(rc));
-  sql_result->set_return_code(RC::SUCCESS);
+  double elapsed_time = (end_time.tv_sec - begin_time.tv_sec) +
+                        (end_time.tv_nsec - begin_time.tv_nsec) / 1000000000.0;
+
+  // 成功时不输出额外信息，只通过RC状态码返回
+  LOG_INFO("load data done. row num: %d, result: %s, time: %.2fs", insertion_count, strrc(rc), elapsed_time);
+  sql_result->set_return_code(rc);
+  sql_result->set_state_string(result_string.str());
 }

@@ -39,6 +39,16 @@ RC CreateTableExecutor::execute(SQLStageEvent *sql_event)
   CreateTableStmt *create_table_stmt = static_cast<CreateTableStmt *>(stmt);
 
   const char *table_name = create_table_stmt->table_name().c_str();
+
+  // 如果设置了 IF NOT EXISTS 且表已存在，直接返回成功
+  if (create_table_stmt->if_not_exists()) {
+    Table *existing_table = session->get_current_db()->find_table(table_name);
+    if (existing_table != nullptr) {
+      LOG_INFO("skip creating table since it already exists. table=%s", table_name);
+      return RC::SUCCESS;
+    }
+  }
+
   RC rc = session->get_current_db()->create_table(table_name, create_table_stmt->attr_infos(), create_table_stmt->primary_keys(), create_table_stmt->storage_format());
 
   if (rc != RC::SUCCESS) {

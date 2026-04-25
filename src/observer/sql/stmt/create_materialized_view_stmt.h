@@ -10,30 +10,29 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
-#include "common/lang/string.h"
 #include "sql/stmt/stmt.h"
+#include "sql/stmt/select_stmt.h"
 
 class Db;
 
 /**
- * @brief 表示删除表的语句
- * @ingroup Statement
+ * @brief 表示 CREATE MATERIALIZED VIEW 语句
  */
-class DropTableStmt : public Stmt
+class CreateMaterializedViewStmt : public Stmt
 {
 public:
-  DropTableStmt(const string &table_name, bool if_exists = false)
-    : table_name_(table_name), if_exists_(if_exists) {}
-  virtual ~DropTableStmt() = default;
+  CreateMaterializedViewStmt() = default;
+  ~CreateMaterializedViewStmt() override = default;
 
-  StmtType type() const override { return StmtType::DROP_TABLE; }
+  StmtType type() const override { return StmtType::CREATE_MATERIALIZED_VIEW; }
 
-  const string &table_name() const { return table_name_; }
-  bool          if_exists() const { return if_exists_; }
+public:
+  static RC create(Db *db, const CreateMaterializedViewSqlNode &create_view, Stmt *&stmt);
 
-  static RC create(Db *db, const DropTableSqlNode &drop_table, Stmt *&stmt);
+  const std::string &view_name() const { return view_name_; }
+  SelectStmt *select_stmt() const { return select_stmt_.get(); }
 
 private:
-  string table_name_;
-  bool   if_exists_;
+  std::string view_name_;
+  std::unique_ptr<SelectStmt> select_stmt_;
 };

@@ -10,6 +10,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/operator/limit_physical_operator.h"
 #include "common/log/log.h"
+#include <algorithm>
 
 RC LimitPhysicalOperator::open(Trx *trx)
 {
@@ -48,12 +49,59 @@ RC LimitPhysicalOperator::next()
   return rc;
 }
 
+RC LimitPhysicalOperator::next(Chunk &chunk)
+{
+  if (limit_ < 0) {
+    return children_[0]->next(chunk);
+  }
+
+  if (returned_ >= limit_) {
+    return RC::RECORD_EOF;
+  }
+
+  while (returned_ < limit_) {
+    input_chunk_.reset();
+    RC rc = children_[0]->next(input_chunk_);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+
+    const int input_rows = input_chunk_.rows();
+    if (input_rows <= 0) {
+      continue;
+    }
+
+    const int rows_to_take = std::min(input_rows, limit_ - returned_);
+    limited_chunk_.reset();
+    for (int col_idx = 0; col_idx < input_chunk_.column_num(); ++col_idx) {
+      const Column &input_column = input_chunk_.column(col_idx);
+      auto output_column = make_unique<Column>(
+          input_column.attr_type(), input_column.attr_len(), std::max(rows_to_take, 1));
+      for (int row_idx = 0; row_idx < rows_to_take; ++row_idx) {
+        rc = output_column->append_value(input_column.get_value(row_idx));
+        if (OB_FAIL(rc)) {
+          LOG_WARN("failed to append limited value. rc=%s", strrc(rc));
+          return rc;
+        }
+      }
+      limited_chunk_.add_column(std::move(output_column), input_chunk_.column_ids(col_idx));
+    }
+
+    returned_ += rows_to_take;
+    return chunk.reference(limited_chunk_);
+  }
+
+  return RC::RECORD_EOF;
+}
+
 RC LimitPhysicalOperator::close()
 {
   if (!children_.empty()) {
     children_[0]->close();
   }
   returned_ = 0;
+  input_chunk_.reset();
+  limited_chunk_.reset();
   return RC::SUCCESS;
 }
 

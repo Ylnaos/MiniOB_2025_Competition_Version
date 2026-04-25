@@ -129,6 +129,29 @@ RC Column::append_value(const Value &value)
     return RC::INTERNAL;
   }
 
+  if (attr_type_ == AttrType::TEXTS) {
+    if (attr_len_ < static_cast<int>(sizeof(string_t))) {
+      LOG_WARN("TEXT column slot too small. attr_len=%d", attr_len_);
+      return RC::INTERNAL;
+    }
+
+    const char *text_data = value.data();
+    int         text_len  = value.length();
+    string_t    text_ref;
+    if (text_data != nullptr && text_len > 0) {
+      text_ref = add_text(text_data, text_len);
+    } else {
+      text_ref = string_t("", 0);
+    }
+
+    memcpy(data_ + count_ * attr_len_, &text_ref, sizeof(string_t));
+    if (attr_len_ > static_cast<int>(sizeof(string_t))) {
+      memset(data_ + count_ * attr_len_ + sizeof(string_t), 0, attr_len_ - sizeof(string_t));
+    }
+    count_ += 1;
+    return RC::SUCCESS;
+  }
+
   size_t total_bytes = std::min(static_cast<size_t>(value.length()), static_cast<size_t>(attr_len_));
   memcpy(data_ + count_ * attr_len_, value.data(), total_bytes);
   if (total_bytes < static_cast<size_t>(attr_len_))
@@ -153,6 +176,18 @@ Value Column::get_value(int index) const
   }
   if (index >= count_ || index < 0) {
     return Value();
+  }
+  if (attr_type_ == AttrType::TEXTS) {
+    if (attr_len_ < static_cast<int>(sizeof(string_t))) {
+      LOG_WARN("TEXT column slot too small. attr_len=%d", attr_len_);
+      return Value();
+    }
+
+    const auto *text_ref = reinterpret_cast<const string_t *>(&data_[index * attr_len_]);
+    Value       value;
+    value.set_type(AttrType::TEXTS);
+    value.set_data(text_ref->data(), text_ref->size());
+    return value;
   }
   return Value(attr_type_, &data_[index * attr_len_], attr_len_);
 }
