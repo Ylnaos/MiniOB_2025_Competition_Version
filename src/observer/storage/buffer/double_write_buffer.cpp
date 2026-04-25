@@ -93,51 +93,8 @@ RC DiskDoubleWriteBuffer::flush_page()
 
 RC DiskDoubleWriteBuffer::add_page(DiskBufferPool *bp, PageNum page_num, Page &page)
 {
-  scoped_lock lock_guard(lock_);
-  DoubleWritePageKey key{bp->id(), page_num};
-  auto iter = dblwr_pages_.find(key);
-  if (iter != dblwr_pages_.end()) {
-    iter->second->page = page;
-    LOG_TRACE("[cache hit]add page into double write buffer. buffer_pool_id:%d,page_num:%d,lsn=%d, dwb size=%d",
-              bp->id(), page_num, page.lsn, static_cast<int>(dblwr_pages_.size()));
-    return write_page_internal(iter->second);
-  }
-
-  int64_t          page_cnt   = dblwr_pages_.size();
-  DoubleWritePage *dblwr_page = new DoubleWritePage(bp->id(), page_num, page_cnt, page);
-  dblwr_pages_.insert(pair<DoubleWritePageKey, DoubleWritePage *>(key, dblwr_page));
-  LOG_TRACE("insert page into double write buffer. buffer_pool_id:%d,page_num:%d,lsn=%d, dwb size:%d",
-            bp->id(), page_num, page.lsn, static_cast<int>(dblwr_pages_.size()));
-
-  RC rc = write_page_internal(dblwr_page);
-  if (OB_FAIL(rc)) {
-    LOG_WARN("failed to write page into double write buffer. rc=%s buffer_pool_id:%d,page_num:%d,lsn=%d.",
-        strrc(rc), bp->id(), page_num, page.lsn);
-    return rc;
-  }
-
-  if (page_cnt + 1 > header_.page_cnt) {
-    header_.page_cnt = page_cnt + 1;
-    if (lseek(file_desc_, 0, SEEK_SET) == -1) {
-      LOG_ERROR("Failed to add page header due to failed to seek %s.", strerror(errno));
-      return RC::IOERR_SEEK;
-    }
-
-    if (writen(file_desc_, &header_, sizeof(header_)) != 0) {
-      LOG_ERROR("Failed to add page header due to %s.", strerror(errno));
-      return RC::IOERR_WRITE;
-    }
-  }
-
-  if (static_cast<int>(dblwr_pages_.size()) >= max_pages_) {
-    RC rc = flush_page();
-    if (rc != RC::SUCCESS) {
-      LOG_ERROR("Failed to flush pages in double write buffer");
-      return rc;
-    }
-  }
-
-  return RC::SUCCESS;
+  (void)max_pages_;
+  return bp->write_page(page_num, page);
 }
 
 RC DiskDoubleWriteBuffer::write_page_internal(DoubleWritePage *page)

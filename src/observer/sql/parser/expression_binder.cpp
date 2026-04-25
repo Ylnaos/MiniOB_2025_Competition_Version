@@ -748,6 +748,9 @@ RC ExpressionBinder::bind_unbound_field_expression(
     }
     LOG_DEBUG("bind unbound field: table=%s qualifier=%s field=%s alias=%s",
         table->name(), qualifier.c_str(), field_name, field_expr->name());
+    if (expr->alias() != nullptr) {
+      field_expr->set_alias(expr->alias());
+    }
     bound_expressions.emplace_back(field_expr);
   }
 

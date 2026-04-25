@@ -107,6 +107,110 @@ static unique_ptr<Expression> condition_to_expr(const ConditionSqlNode &conditio
   return make_unique<ComparisonExpr>(condition.comp, std::move(left), std::move(right));
 }
 
+struct ViewStarColumn
+{
+  string relation_name;
+  string field_name;
+};
+
+static bool relation_matches_star(const RelationSqlNode &rel, const char *star_tbl)
+{
+  if (star_tbl == nullptr || star_tbl[0] == '\0') {
+    return true;
+  }
+  return (!rel.alias.empty() && 0 == strcasecmp(rel.alias.c_str(), star_tbl)) ||
+         0 == strcasecmp(rel.relation_name.c_str(), star_tbl);
+}
+
+static void collect_star_columns(
+    Db *db, const vector<RelationSqlNode> &view_rels, const StarExpr *star, vector<ViewStarColumn> &columns)
+{
+  const char *star_tbl = star == nullptr ? nullptr : star->table_name();
+
+  for (const auto &rel : view_rels) {
+    if (!relation_matches_star(rel, star_tbl)) {
+      continue;
+    }
+
+    Table *tbl = db->find_table(rel.relation_name.c_str());
+    if (tbl == nullptr) {
+      continue;
+    }
+
+    const TableMeta &tm = tbl->table_meta();
+    const string     qn = rel.alias.empty() ? rel.relation_name : rel.alias;
+    for (int i = tm.sys_field_num(); i < tm.field_num(); ++i) {
+      const FieldMeta *fm = tm.field(i);
+      if (fm == nullptr) {
+        continue;
+      }
+      columns.push_back({qn, fm->name()});
+    }
+
+    if (star_tbl != nullptr && star_tbl[0] != '\0') {
+      break;
+    }
+  }
+}
+
+static string view_output_label(const vector<string> &view_field_names, int output_index, const string &fallback)
+{
+  if (output_index >= 0 &&
+      output_index < static_cast<int>(view_field_names.size()) &&
+      !view_field_names[output_index].empty()) {
+    return view_field_names[output_index];
+  }
+  return fallback;
+}
+
+static vector<unique_ptr<Expression>> copy_view_output_expressions(
+    Db *db,
+    const vector<RelationSqlNode> &view_rels,
+    const vector<unique_ptr<Expression>> &view_exprs,
+    const vector<string> &view_field_names)
+{
+  vector<unique_ptr<Expression>> output_exprs;
+  int output_index = 0;
+
+  for (const auto &expr : view_exprs) {
+    if (expr == nullptr) {
+      continue;
+    }
+
+    if (expr->type() == ExprType::STAR) {
+      vector<ViewStarColumn> columns;
+      collect_star_columns(db, view_rels, static_cast<const StarExpr *>(expr.get()), columns);
+      for (const auto &column : columns) {
+        string label = view_output_label(view_field_names, output_index, column.field_name);
+        auto expanded = make_unique<UnboundFieldExpr>(column.relation_name, column.field_name);
+        if (!label.empty()) {
+          expanded->set_alias(label);
+          expanded->set_name(label);
+        }
+        output_exprs.emplace_back(std::move(expanded));
+        output_index++;
+      }
+    } else {
+      unique_ptr<Expression> copied = expr->copy();
+      string fallback;
+      if (copied->alias() != nullptr && copied->alias()[0] != '\0') {
+        fallback = copied->alias();
+      } else if (copied->name() != nullptr && copied->name()[0] != '\0') {
+        fallback = copied->name();
+      }
+      string label = view_output_label(view_field_names, output_index, fallback);
+      if (!label.empty() && output_index < static_cast<int>(view_field_names.size())) {
+        copied->set_alias(label);
+        copied->set_name(label);
+      }
+      output_exprs.emplace_back(std::move(copied));
+      output_index++;
+    }
+  }
+
+  return output_exprs;
+}
+
 // 从视图的 SELECT 列表推导列名到底层字段(表.列)的映射
 // 支持两类：
 // 1) 未绑定字段（直接映射 列名 -> 表.列）
@@ -123,64 +227,37 @@ static void build_view_output_mapping(
   name_to_relattr.clear();
   name_to_expr.clear();
 
-  auto add_table_columns = [&](const RelationSqlNode &rel) {
-    Table *tbl = db->find_table(rel.relation_name.c_str());
-    if (tbl == nullptr) return;  // 底层不是物理表，忽略
-
-    const TableMeta &tm = tbl->table_meta();
-    const string     qn = rel.alias.empty() ? rel.relation_name : rel.alias; // 使用别名优先
-    for (int i = tm.sys_field_num(); i < tm.field_num(); ++i) {
-      const FieldMeta *fm = tm.field(i);
-      if (fm == nullptr) continue;
-      string key = fm->name();
-      common::str_to_lower(key);
-      name_to_relattr[key] = {qn, fm->name()};
-    }
-  };
-
+  int output_index = 0;
   for (size_t i = 0; i < view_exprs.size(); ++i) {
     const auto &expr = view_exprs[i];
     if (expr == nullptr) continue;
 
     if (expr->type() == ExprType::UNBOUND_FIELD) {
       // 如果视图有定义列名，使用视图定义的列名；否则使用别名或字段名
-      string label;
-      if (i < view_field_names.size() && !view_field_names[i].empty()) {
-        label = view_field_names[i];
-      } else {
-        label = expr->alias() && expr->alias()[0] != '\0'
-                    ? string(expr->alias())
-                    : string(static_cast<UnboundFieldExpr *>(expr.get())->field_name());
-      }
-
       auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
+      string label = view_output_label(view_field_names,
+          output_index,
+          expr->alias() && expr->alias()[0] != '\0' ? string(expr->alias()) : string(uf->field_name()));
       string key = label;
       common::str_to_lower(key);
       name_to_relattr[key] = {uf->table_name(), uf->field_name()};
+      output_index++;
     } else if (expr->type() == ExprType::STAR) {
-      // 仅当能唯一确定底层表时，展开映射
-      const char *star_tbl = static_cast<const StarExpr *>(expr.get())->table_name();
-      if (star_tbl != nullptr && star_tbl[0] != '\0') {
-        // 优先用别名匹配，否则用表名匹配
-        bool matched = false;
-        for (const auto &rel : view_rels) {
-          if ((!rel.alias.empty() && 0 == strcasecmp(rel.alias.c_str(), star_tbl)) ||
-              0 == strcasecmp(rel.relation_name.c_str(), star_tbl)) {
-            add_table_columns(rel);
-            matched = true;
-            break;
-          }
-        }
-        (void)matched; // 未匹配到则忽略
-      } else if (view_rels.size() == 1) {
-        add_table_columns(view_rels[0]);
+      vector<ViewStarColumn> columns;
+      collect_star_columns(db, view_rels, static_cast<const StarExpr *>(expr.get()), columns);
+      for (const auto &column : columns) {
+        string label = view_output_label(view_field_names, output_index, column.field_name);
+        string key = label;
+        common::str_to_lower(key);
+        name_to_relattr[key] = {column.relation_name, column.field_name};
+        output_index++;
       }
     } else {
       // 复杂表达式：存储表达式副本,用于后续展开
       // 优先使用视图定义的列名，其次使用别名
       string label;
-      if (i < view_field_names.size() && !view_field_names[i].empty()) {
-        label = view_field_names[i];
+      if (output_index < static_cast<int>(view_field_names.size()) && !view_field_names[output_index].empty()) {
+        label = view_field_names[output_index];
       } else if (expr->alias() != nullptr && expr->alias()[0] != '\0') {
         label = expr->alias();
       }
@@ -191,6 +268,7 @@ static void build_view_output_mapping(
         // 复制表达式用于后续重写
         name_to_expr[key] = expr->copy();
       }
+      output_index++;
     }
   }
 
@@ -558,7 +636,8 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
               return rc;
             }
           }
-          select_sql.expressions.swap(node->selection.expressions);
+          select_sql.expressions = copy_view_output_expressions(
+              db, select_sql.relations, node->selection.expressions, view_fields);
           // 同步 group/order（如果视图中带有）
           if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
             select_sql.group_by.swap(node->selection.group_by);
@@ -695,8 +774,10 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
                      (select_sql.expressions[0] != nullptr) &&
                      (select_sql.expressions[0]->type() == ExprType::STAR);
     if (only_star) {
-      // SELECT * 的情况：直接用嵌套视图的表达式替换
-      select_sql.expressions.swap(node->selection.expressions);
+      // SELECT * 的情况：按嵌套视图输出列替换，显式列名列表需要按位置生效
+      const vector<string> &nested_view_fields = nested_view->view_fields();
+      select_sql.expressions = copy_view_output_expressions(
+          db, select_sql.relations, node->selection.expressions, nested_view_fields);
       if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
         select_sql.group_by.swap(node->selection.group_by);
       }

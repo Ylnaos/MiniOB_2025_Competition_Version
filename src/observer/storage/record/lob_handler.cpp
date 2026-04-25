@@ -18,6 +18,7 @@ RC LobFileHandler::create_file(const char *file_name)
   if (OB_SUCC(rc)) {
     append_offset_ = 0;
     append_buffer_.clear();
+    append_buffer_.reserve(APPEND_BUFFER_LIMIT);
   }
   return rc;
 }
@@ -34,6 +35,7 @@ RC LobFileHandler::open_file(const char *file_name)
       }
       append_offset_ = st.st_size;
       append_buffer_.clear();
+      append_buffer_.reserve(APPEND_BUFFER_LIMIT);
     }
     return rc;
   } else {
@@ -88,7 +90,7 @@ RC LobFileHandler::insert_data(int64_t &offset, int64_t length, const char *data
     offset = append_offset_;
   }
 
-  append_buffer_.insert(append_buffer_.end(), data, data + length);
+  append_buffer_.append(data, static_cast<size_t>(length));
   return RC::SUCCESS;
 }
 

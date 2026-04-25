@@ -40,8 +40,12 @@ bool parse_csv_line(std::istream &input, std::vector<std::string> &row, char ter
 {
   row.clear();
 
-  if (input.eof()) {
+  std::string line;
+  if (!std::getline(input, line)) {
     return false;
+  }
+  if (!line.empty() && line.back() == '\r') {
+    line.pop_back();
   }
 
   std::string field;
@@ -54,76 +58,72 @@ bool parse_csv_line(std::istream &input, std::vector<std::string> &row, char ter
   };
 
   State state = State::NORMAL;
-  char ch;
-  bool has_content = false;
 
-  while (input.get(ch)) {
-    has_content = true;
+  while (true) {
+    for (char ch : line) {
+      switch (state) {
+        case State::NORMAL:
+          if (ch == enclosed && field.empty()) {
+            // 字段开始处的引号，进入引号模式
+            state = State::IN_QUOTED;
+          } else if (ch == terminated) {
+            // 遇到分隔符，保存当前字段
+            row.emplace_back(std::move(field));
+            field.clear();
+            field.reserve(256);
+          } else if (ch == '\r') {
+            // 忽略 \r（处理 Windows 换行符 \r\n）
+          } else {
+            field += ch;
+          }
+          break;
 
-    switch (state) {
-      case State::NORMAL:
-        if (ch == enclosed && field.empty()) {
-          // 字段开始处的引号，进入引号模式
-          state = State::IN_QUOTED;
-        } else if (ch == terminated) {
-          // 遇到分隔符，保存当前字段
-          row.push_back(field);
-          field.clear();
-        } else if (ch == '\n') {
-          // 遇到换行符，行结束
-          row.push_back(field);
-          return true;
-        } else if (ch == '\r') {
-          // 忽略 \r（处理 Windows 换行符 \r\n）
-          // 继续读取，期待下一个字符是 \n
-        } else {
-          field += ch;
-        }
-        break;
+        case State::IN_QUOTED:
+          if (ch == enclosed) {
+            // 在引号内遇到引号，可能是转义或字段结束
+            state = State::QUOTE_IN_QUOTED;
+          } else {
+            // 引号内的普通字符（包括分隔符）
+            field += ch;
+          }
+          break;
 
-      case State::IN_QUOTED:
-        if (ch == enclosed) {
-          // 在引号内遇到引号，可能是转义或字段结束
-          state = State::QUOTE_IN_QUOTED;
-        } else {
-          // 引号内的普通字符（包括换行符和分隔符）
-          field += ch;
-        }
-        break;
+        case State::QUOTE_IN_QUOTED:
+          if (ch == enclosed) {
+            // 两个连续引号，转义为一个引号
+            field += enclosed;
+            state = State::IN_QUOTED;
+          } else if (ch == terminated) {
+            // 引号后紧跟分隔符，字段结束
+            row.emplace_back(std::move(field));
+            field.clear();
+            field.reserve(256);
+            state = State::NORMAL;
+          } else if (ch == '\r') {
+            // 忽略 \r，等待行尾或分隔符
+          } else {
+            // 引号后跟其他字符（RFC 4180 不推荐，但我们容错处理）
+            field += ch;
+            state = State::NORMAL;
+          }
+          break;
+      }
+    }
 
-      case State::QUOTE_IN_QUOTED:
-        if (ch == enclosed) {
-          // 两个连续引号，转义为一个引号
-          field += enclosed;
-          state = State::IN_QUOTED;
-        } else if (ch == terminated) {
-          // 引号后紧跟分隔符，字段结束
-          row.push_back(field);
-          field.clear();
-          state = State::NORMAL;
-        } else if (ch == '\n') {
-          // 引号后紧跟换行符，行结束
-          row.push_back(field);
-          return true;
-        } else if (ch == '\r') {
-          // 忽略 \r，等待 \n
-          state = State::QUOTE_IN_QUOTED;
-        } else {
-          // 引号后跟其他字符（RFC 4180 不推荐，但我们容错处理）
-          field += ch;
-          state = State::NORMAL;
-        }
-        break;
+    if (state != State::IN_QUOTED) {
+      row.emplace_back(std::move(field));
+      return true;
+    }
+
+    field += '\n';
+    if (!std::getline(input, line)) {
+      row.emplace_back(std::move(field));
+      return true;
+    }
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
     }
   }
-
-  // 文件结束，保存最后一个字段
-  if (has_content) {
-    row.push_back(field);
-    return true;
-  }
-
-  return false;
 }
 
 RC LoadDataExecutor::execute(SQLStageEvent *sql_event)
@@ -209,12 +209,18 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
 
   if (table->table_meta().storage_format() == StorageFormat::PAX_FORMAT) {
     // PAX 格式：批量插入优化
-    const int BATCH_SIZE = 1000;  // 每批处理的行数
+    const int BATCH_SIZE = Chunk::MAX_ROWS;  // 每批处理的行数
     Chunk chunk;
+    vector<DataType *> data_types(field_num);
+    vector<bool>       string_fields(field_num);
+    vector<bool>       text_fields(field_num);
 
     // 初始化 Chunk 的列
     for (int i = 0; i < field_num; ++i) {
       const FieldMeta *field = table->table_meta().field(i + sys_field_num);
+      data_types[i]    = DataType::type_instance(field->type());
+      string_fields[i] = is_string_type(field->type());
+      text_fields[i]   = field->type() == AttrType::TEXTS;
       auto col = make_unique<Column>(field->type(), field->len(), BATCH_SIZE);
       chunk.add_column(std::move(col), field->field_id());
     }
@@ -231,12 +237,14 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
       // 解析每个字段
       bool parse_success = true;
       for (int i = 0; i < field_num && parse_success; i++) {
-        const FieldMeta *field = table->table_meta().field(i + sys_field_num);
         string &file_value = file_values[i];
-        if (!is_string_type(field->type())) {
+        if (!string_fields[i]) {
           common::strip(file_value);
         }
-        rc = DataType::type_instance(field->type())->set_value_from_str(record_values[i], file_value);
+        if (text_fields[i]) {
+          continue;
+        }
+        rc = data_types[i]->set_value_from_str(record_values[i], file_value);
         if (rc != RC::SUCCESS) {
           parse_success = false;
         }
@@ -248,7 +256,12 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
 
       // 将数据追加到 Chunk
       for (int i = 0; i < field_num; i++) {
-        rc = chunk.column(i).append_value(record_values[i]);
+        if (text_fields[i]) {
+          const string &file_value = file_values[i];
+          rc = chunk.column(i).append_text(file_value.data(), static_cast<int>(file_value.size()));
+        } else {
+          rc = chunk.column(i).append_value(record_values[i]);
+        }
         if (rc != RC::SUCCESS) {
           break;
         }

@@ -25,7 +25,7 @@ See the Mulan PSL v2 for more details. */
 
 using namespace common;
 
-static const int MEM_POOL_ITEM_NUM = 20;
+static const int MEM_POOL_ITEM_NUM = 32;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -81,7 +81,6 @@ int BPFrameManager::purge_frames(int count, function<RC(Frame *frame)> purger)
   };
 
   frames_.foreach_reverse(purge_finder);
-  LOG_INFO("purge frames find %ld pages total", frames_can_purge.size());
 
   /// 当前还在frameManager的锁内，而 purger 是一个非常耗时的操作
   /// 他需要把脏页数据刷新到磁盘上去，所以这里会极大地降低并发度
@@ -405,9 +404,6 @@ RC DiskBufferPool::allocate_page(Frame **frame)
     return rc;
   }
 
-  LOG_INFO("allocate new page by extending bufferpool. buffer_pool_id=%d, pageNum=%d, pin=%d",
-           id(), page_num, allocated_frame->pin_count());
-
   file_header_->allocated_pages++;
   file_header_->page_count++;
 
@@ -420,13 +416,6 @@ RC DiskBufferPool::allocate_page(Frame **frame)
   allocated_frame->access();
   allocated_frame->clear_page();
   allocated_frame->set_page_num(file_header_->page_count - 1);
-
-  // Use flush operation to extension file
-  if ((rc = flush_page_internal(*allocated_frame)) != RC::SUCCESS) {
-    LOG_WARN("Failed to alloc page %s , due to failed to extend one page.", file_name_.c_str());
-    // skip return false, delay flush the extended page
-    // return tmp;
-  }
 
   lock_.unlock();
 
@@ -561,7 +550,6 @@ RC DiskBufferPool::flush_page_internal(Frame &frame)
   }
 
   frame.clear_dirty();
-  LOG_DEBUG("Flush block. file desc=%d, frame=%s", file_desc_, frame.to_string().c_str());
 
   return RC::SUCCESS;
 }
@@ -610,7 +598,6 @@ RC DiskBufferPool::write_page(PageNum page_num, Page &page)
     return RC::IOERR_WRITE;
   }
 
-  LOG_TRACE("write_page: buffer_pool_id:%d, page_num:%d, lsn=%d, check_sum=%d", id(), page_num, page.lsn, page.check_sum);
   return RC::SUCCESS;
 }
 
@@ -920,4 +907,3 @@ RC BufferPoolManager::get_buffer_pool(int32_t id, DiskBufferPool *&bp)
   bp = iter->second;
   return RC::SUCCESS;
 }
-

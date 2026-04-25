@@ -161,6 +161,43 @@ RC Column::append_value(const Value &value)
   return RC::SUCCESS;
 }
 
+RC Column::append_text(const char *data, int len)
+{
+  if (!own_) {
+    LOG_WARN("append data to non-owned column");
+    return RC::INTERNAL;
+  }
+  if (count_ >= capacity_) {
+    LOG_WARN("append data to full column");
+    return RC::INTERNAL;
+  }
+  if (attr_type_ != AttrType::TEXTS) {
+    LOG_WARN("append text to non-TEXT column. attr_type=%d", attr_type_);
+    return RC::INVALID_ARGUMENT;
+  }
+  if (attr_len_ < static_cast<int>(sizeof(string_t))) {
+    LOG_WARN("TEXT column slot too small. attr_len=%d", attr_len_);
+    return RC::INTERNAL;
+  }
+  if (len < 0 || (len > 0 && data == nullptr)) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  string_t text_ref;
+  if (data != nullptr && len > 0) {
+    text_ref = add_text(data, len);
+  } else {
+    text_ref = string_t("", 0);
+  }
+
+  memcpy(data_ + count_ * attr_len_, &text_ref, sizeof(string_t));
+  if (attr_len_ > static_cast<int>(sizeof(string_t))) {
+    memset(data_ + count_ * attr_len_ + sizeof(string_t), 0, attr_len_ - sizeof(string_t));
+  }
+  count_ += 1;
+  return RC::SUCCESS;
+}
+
 string_t Column::add_text(const char *data, int length)
 {
   if (vector_buffer_ == nullptr) {

@@ -118,6 +118,59 @@ static vector<PaxSegment> build_pax_segments(const TableMeta *table_meta, int re
   return segments;
 }
 
+static vector<int> build_field_id_to_pax_segment(const TableMeta *table_meta, int record_size)
+{
+  vector<int> mapping;
+  if (table_meta == nullptr || record_size <= 0) {
+    return mapping;
+  }
+
+  int max_field_id = -1;
+  for (int i = 0; i < table_meta->field_num(); ++i) {
+    const FieldMeta *field = table_meta->field(i);
+    if (field != nullptr && field->visible()) {
+      max_field_id = std::max(max_field_id, field->field_id());
+    }
+  }
+  if (max_field_id < 0) {
+    return mapping;
+  }
+  mapping.assign(max_field_id + 1, -1);
+
+  int  segment_id  = 0;
+  int  next_offset = 0;
+  bool ordered     = true;
+  for (int i = 0; i < table_meta->field_num(); ++i) {
+    const FieldMeta *field = table_meta->field(i);
+    if (field == nullptr || field->offset() < next_offset || field->offset() < 0 || field->len() <= 0 ||
+        field->offset() + field->len() > record_size) {
+      ordered = false;
+      break;
+    }
+    if (field->offset() > next_offset) {
+      segment_id++;
+    }
+    if (field->visible() && field->field_id() >= 0) {
+      mapping[field->field_id()] = segment_id;
+    }
+    segment_id++;
+    next_offset = field->offset() + field->len();
+  }
+
+  if (ordered) {
+    return mapping;
+  }
+
+  mapping.assign(max_field_id + 1, -1);
+  vector<PaxSegment> segments = build_pax_segments(table_meta, record_size);
+  for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
+    if (segments[i].visible && segments[i].field_id >= 0 && segments[i].field_id < static_cast<int>(mapping.size())) {
+      mapping[segments[i].field_id] = i;
+    }
+  }
+  return mapping;
+}
+
 static const FieldMeta *find_field_by_id(const TableMeta *table_meta, int field_id)
 {
   if (table_meta == nullptr) {
@@ -646,24 +699,7 @@ RC PaxRecordPageHandler::insert_chunk(const Chunk &chunk, int start_row, int &in
     return RC::SUCCESS;
   }
 
-  vector<int> field_id_to_segment;
-  if (table_meta_has_record_layout(table_meta_, page_header_->record_real_size)) {
-    vector<PaxSegment> segments = build_pax_segments(table_meta_, page_header_->record_real_size);
-    int max_field_id = -1;
-    for (const PaxSegment &segment : segments) {
-      if (segment.visible) {
-        max_field_id = std::max(max_field_id, segment.field_id);
-      }
-    }
-    if (max_field_id >= 0) {
-      field_id_to_segment.assign(max_field_id + 1, -1);
-      for (int i = 0; i < static_cast<int>(segments.size()); ++i) {
-        if (segments[i].visible && segments[i].field_id >= 0) {
-          field_id_to_segment[segments[i].field_id] = i;
-        }
-      }
-    }
-  }
+  vector<int> field_id_to_segment = build_field_id_to_pax_segment(table_meta_, page_header_->record_real_size);
 
   vector<int> column_segment_ids(chunk.column_num(), -1);
   vector<int> column_field_lens(chunk.column_num(), 0);

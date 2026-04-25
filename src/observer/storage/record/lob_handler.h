@@ -12,7 +12,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/lang/mutex.h"
 #include "common/lang/sstream.h"
-#include "common/lang/vector.h"
+#include "common/lang/string.h"
 #include "common/types.h"
 #include "storage/persist/persist.h"
 
@@ -40,9 +40,9 @@ public:
   RC flush();
 
 private:
-  static constexpr int64_t APPEND_BUFFER_LIMIT = 1024 * 1024;
+  static constexpr int64_t APPEND_BUFFER_LIMIT = 8 * 1024 * 1024;
 
   PersistHandler file_;
   int64_t        append_offset_ = 0;
-  vector<char>   append_buffer_;
+  string         append_buffer_;
 };

@@ -74,6 +74,7 @@ public:
   RC append_one(const char *data);
 
   RC append_value(const Value &val);
+  RC append_text(const char *data, int len);
 
   /**
    * @brief 向 Column 追加写入数据
