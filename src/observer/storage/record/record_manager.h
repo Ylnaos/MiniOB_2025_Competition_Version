@@ -304,6 +304,8 @@ public:
    * @param record 返回指定的数据。这里不会将数据复制出来，而是使用指针，所以调用者必须保证数据使用期间受到保护
    */
   virtual RC get_record(const RID &rid, Record &record) override;
+
+  virtual RC get_chunk(Chunk &chunk) override;
 };
 
 /**

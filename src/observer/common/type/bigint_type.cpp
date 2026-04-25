@@ -14,7 +14,9 @@ See the Mulan PSL v2 for more details. */
 #include "common/type/bigint_type.h"
 #include "common/value.h"
 #include "storage/common/column.h"
+#include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 
 int BigintType::compare(const Value &left, const Value &right) const
@@ -174,18 +176,30 @@ RC BigintType::negative(const Value &val, Value &result) const
 
 RC BigintType::set_value_from_str(Value &val, const string &data) const
 {
-  RC                rc = RC::SUCCESS;
-  stringstream deserialize_stream;
-  deserialize_stream.clear();
-  deserialize_stream.str(data);
-  int64_t bigint_value;
-  deserialize_stream >> bigint_value;
-  if (!deserialize_stream || !deserialize_stream.eof()) {
-    rc = RC::SCHEMA_FIELD_TYPE_MISMATCH;
-  } else {
-    val.set_bigint(bigint_value);
+  if (data.empty()) {
+    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
   }
-  return rc;
+
+  const char *begin = data.c_str();
+  char       *end   = nullptr;
+  errno             = 0;
+  long long parsed  = std::strtoll(begin, &end, 10);
+  if (end != begin && *end == '\0' && errno != ERANGE) {
+    val.set_bigint(static_cast<int64_t>(parsed));
+    return RC::SUCCESS;
+  }
+
+  if (data[0] != '-') {
+    end = nullptr;
+    errno = 0;
+    unsigned long long unsigned_parsed = std::strtoull(begin, &end, 10);
+    if (end != begin && *end == '\0' && errno != ERANGE) {
+      val.set_bigint(static_cast<int64_t>(unsigned_parsed));
+      return RC::SUCCESS;
+    }
+  }
+
+  return RC::SCHEMA_FIELD_TYPE_MISMATCH;
 }
 
 RC BigintType::to_string(const Value &val, string &result) const

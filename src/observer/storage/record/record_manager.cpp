@@ -118,6 +118,20 @@ static vector<PaxSegment> build_pax_segments(const TableMeta *table_meta, int re
   return segments;
 }
 
+static const FieldMeta *find_field_by_id(const TableMeta *table_meta, int field_id)
+{
+  if (table_meta == nullptr) {
+    return nullptr;
+  }
+  for (int i = 0; i < table_meta->field_num(); ++i) {
+    const FieldMeta *field = table_meta->field(i);
+    if (field != nullptr && field->field_id() == field_id) {
+      return field;
+    }
+  }
+  return nullptr;
+}
+
 /**
  * @brief 计算指定大小的页面，可以容纳多少个记录
  *
@@ -496,6 +510,74 @@ RC RowRecordPageHandler::get_record(const RID &rid, Record &record)
   return RC::SUCCESS;
 }
 
+RC RowRecordPageHandler::get_chunk(Chunk &chunk)
+{
+  if (table_meta_ == nullptr) {
+    return RC::INVALID_ARGUMENT;
+  }
+
+  Bitmap bitmap(bitmap_, page_header_->record_capacity);
+  vector<char> lob_buffer;
+
+  for (int slot_num = 0; slot_num < page_header_->record_capacity; ++slot_num) {
+    if (!bitmap.get_bit(slot_num)) {
+      continue;
+    }
+
+    char *record_data = get_record_data(slot_num);
+    for (int col_idx = 0; col_idx < chunk.column_num(); ++col_idx) {
+      const int field_id = chunk.column_ids(col_idx);
+      const FieldMeta *field = find_field_by_id(table_meta_, field_id);
+      if (field == nullptr) {
+        LOG_WARN("invalid field id when reading row chunk. field_id=%d", field_id);
+        return RC::INVALID_ARGUMENT;
+      }
+
+      Column &column = chunk.column(col_idx);
+      const char *field_data = record_data + field->offset();
+      if (field->type() != AttrType::TEXTS) {
+        RC rc = column.append(field_data, 1);
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+        continue;
+      }
+
+      const auto *lob_ref = reinterpret_cast<const LobRef *>(field_data);
+      if (lob_ref->length < 0) {
+        LOG_WARN("invalid LOB length when reading row chunk. field=%s length=%d", field->name(), lob_ref->length);
+        return RC::INTERNAL;
+      }
+
+      Value text_value;
+      text_value.set_type(AttrType::TEXTS);
+      if (lob_ref->length > 0) {
+        if (lob_handler_ == nullptr) {
+          LOG_WARN("LOB handler not initialized when reading row TEXT chunk. field=%s", field->name());
+          return RC::INTERNAL;
+        }
+        if (static_cast<size_t>(lob_ref->length) > lob_buffer.size()) {
+          lob_buffer.resize(lob_ref->length);
+        }
+        RC rc = lob_handler_->get_data(lob_ref->offset, lob_ref->length, lob_buffer.data());
+        if (OB_FAIL(rc)) {
+          return rc;
+        }
+        text_value.set_data(lob_buffer.data(), lob_ref->length);
+      } else {
+        text_value.set_data(static_cast<char *>(nullptr), 0);
+      }
+
+      RC rc = column.append_value(text_value);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
+  }
+
+  return RC::SUCCESS;
+}
+
 PageNum RecordPageHandler::get_page_num() const
 {
   if (nullptr == page_header_) {
@@ -598,8 +680,37 @@ RC PaxRecordPageHandler::insert_chunk(const Chunk &chunk, int start_row, int &in
       char *field_data = get_field_data(slot_num, col_id);
       int field_len = get_field_len(col_id);
 
-      // 从 Chunk 的列中复制数据
-      memcpy(field_data, column.data() + chunk_row * column.attr_len(), field_len);
+      if (column.attr_type() == AttrType::TEXTS) {
+        if (field_len < static_cast<int>(sizeof(LobRef))) {
+          LOG_WARN("TEXT PAX field is too small for LobRef. field_len=%d", field_len);
+          return RC::INTERNAL;
+        }
+        if (lob_handler_ == nullptr) {
+          LOG_WARN("LOB handler not initialized when inserting PAX TEXT chunk");
+          return RC::INTERNAL;
+        }
+
+        const auto *text_ref = reinterpret_cast<const string_t *>(column.data() + chunk_row * column.attr_len());
+        const int text_len = static_cast<int>(text_ref->size());
+        if (text_len > TEXT_MAX_LENGTH) {
+          LOG_WARN("TEXT too long when inserting PAX chunk. len=%d", text_len);
+          return RC::IOERR_TOO_LONG;
+        }
+
+        LobRef lob_ref;
+        lob_ref.length = text_len;
+        lob_ref.offset = 0;
+        if (text_len > 0) {
+          RC rc = lob_handler_->insert_data(lob_ref.offset, text_len, text_ref->data());
+          if (OB_FAIL(rc)) {
+            return rc;
+          }
+        }
+        memcpy(field_data, &lob_ref, sizeof(LobRef));
+      } else {
+        // 从 Chunk 的列中复制数据
+        memcpy(field_data, column.data() + chunk_row * column.attr_len(), field_len);
+      }
     }
 
     insert_rows++;

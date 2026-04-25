@@ -14,6 +14,9 @@ See the Mulan PSL v2 for more details. */
 #include "common/type/integer_type.h"
 #include "common/value.h"
 #include "storage/common/column.h"
+#include <cerrno>
+#include <cstdlib>
+#include <cstdint>
 
 int IntegerType::compare(const Value &left, const Value &right) const
 {
@@ -108,18 +111,30 @@ RC IntegerType::negative(const Value &val, Value &result) const
 
 RC IntegerType::set_value_from_str(Value &val, const string &data) const
 {
-  RC                rc = RC::SUCCESS;
-  stringstream deserialize_stream;
-  deserialize_stream.clear();  // 清理stream的状态，防止多次解析出现异常
-  deserialize_stream.str(data);
-  int int_value;
-  deserialize_stream >> int_value;
-  if (!deserialize_stream || !deserialize_stream.eof()) {
-    rc = RC::SCHEMA_FIELD_TYPE_MISMATCH;
-  } else {
-    val.set_int(int_value);
+  if (data.empty()) {
+    return RC::SCHEMA_FIELD_TYPE_MISMATCH;
   }
-  return rc;
+
+  const char *begin = data.c_str();
+  char       *end   = nullptr;
+  errno             = 0;
+  long long parsed  = std::strtoll(begin, &end, 10);
+  if (end != begin && *end == '\0' && errno != ERANGE) {
+    val.set_int(static_cast<int32_t>(parsed));
+    return RC::SUCCESS;
+  }
+
+  if (data[0] != '-') {
+    end = nullptr;
+    errno = 0;
+    unsigned long long unsigned_parsed = std::strtoull(begin, &end, 10);
+    if (end != begin && *end == '\0' && errno != ERANGE) {
+      val.set_int(static_cast<int32_t>(unsigned_parsed));
+      return RC::SUCCESS;
+    }
+  }
+
+  return RC::SCHEMA_FIELD_TYPE_MISMATCH;
 }
 
 RC IntegerType::to_string(const Value &val, string &result) const
