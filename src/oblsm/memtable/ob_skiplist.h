@@ -17,10 +17,9 @@ See the Mulan PSL v2 for more details. */
 // Thread safety
 // -------------
 //
-// Writes require external synchronization, most likely a mutex.
-// Reads require a guarantee that the ObSkipList will not be destroyed
-// while the read is in progress. Apart from that, reads progress
-// without any internal locking or synchronization.
+// Inserts use atomic compare-and-swap on next pointers and may run concurrently.
+// Reads require a guarantee that the ObSkipList will not be destroyed while the
+// read is in progress.
 //
 // Invariants:
 //
@@ -30,13 +29,10 @@ See the Mulan PSL v2 for more details. */
 //
 // (2) The contents of a Node except for the next/prev pointers are
 // immutable after the Node has been linked into the ObSkipList.
-// Only insert() modifies the list, and it is careful to initialize
-// a node and use release-stores to publish the nodes in one or
-// more lists.
+// Only insert() modifies the list, and it is careful to initialize a node and
+// use release-stores to publish the nodes in one or more lists.
 //
 // ... prev vs. next pointer ordering ...
-
-#include <mutex>
 
 #include "common/math/random_generator.h"
 #include "common/lang/atomic.h"
@@ -165,17 +161,9 @@ private:
 
   Node *const head_;
 
-  // Modified only by insert().  Read racily by readers, but stale
-  // values are ok.
+  // Modified by insert().  Read racily by readers, but stale values are ok.
   atomic<int> max_height_;  // Height of the entire list
-
-  mutable std::mutex mutex_;
-
-  static common::RandomGenerator rnd;
 };
-
-template <typename Key, class ObComparator>
-common::RandomGenerator ObSkipList<Key, ObComparator>::rnd = common::RandomGenerator();
 
 // Implementation details follow
 template <typename Key, class ObComparator>
@@ -296,6 +284,7 @@ template <typename Key, class ObComparator>
 int ObSkipList<Key, ObComparator>::random_height()
 {
   // Increase height with probability 1 in kBranching
+  static thread_local common::RandomGenerator rnd;
   static const unsigned int kBranching = 4;
   int                       height     = 1;
   while (height < kMaxHeight && rnd.next(kBranching) == 0) {
@@ -396,27 +385,7 @@ ObSkipList<Key, ObComparator>::~ObSkipList()
 template <typename Key, class ObComparator>
 void ObSkipList<Key, ObComparator>::insert(const Key &key)
 {
-  std::lock_guard<std::mutex> guard(mutex_);
-
-  Node *prev[kMaxHeight];
-  Node *x = find_greater_or_equal(key, prev);
-  ASSERT(x == nullptr || !equal(key, x->key), "Duplicate keys are not allowed");
-
-  int height         = random_height();
-  int current_height = get_max_height();
-  if (height > current_height) {
-    for (int i = current_height; i < height; i++) {
-      prev[i] = head_;
-    }
-    max_height_.store(height, std::memory_order_relaxed);
-  }
-
-  Node *new_node_ptr = new_node(key, height);
-  for (int i = 0; i < height; i++) {
-    Node *next = prev[i]->next(i);
-    new_node_ptr->set_next(i, next);
-    prev[i]->set_next(i, new_node_ptr);
-  }
+  insert_concurrently(key);
 }
 
 template <typename Key, class ObComparator>
