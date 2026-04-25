@@ -100,7 +100,7 @@ RC RecordPageIterator::next(Record &record)
 RecordPageHandler::~RecordPageHandler() { cleanup(); }
 
 RC RecordPageHandler::init(DiskBufferPool &buffer_pool, LogHandler &log_handler, PageNum page_num, ReadWriteMode mode,
-    LobFileHandler *lob_handler)
+    LobFileHandler *lob_handler, TableMeta *table_meta)
 {
   if (disk_buffer_pool_ != nullptr) {
     if (frame_->page_num() == page_num) {
@@ -111,6 +111,7 @@ RC RecordPageHandler::init(DiskBufferPool &buffer_pool, LogHandler &log_handler,
     }
   }
   lob_handler_ = lob_handler;
+  table_meta_  = table_meta;
 
   RC ret = RC::SUCCESS;
   if ((ret = buffer_pool.get_this_page(page_num, &frame_)) != RC::SUCCESS) {
@@ -169,6 +170,7 @@ RC RecordPageHandler::init_empty_page(DiskBufferPool &buffer_pool, LogHandler &l
 {
   RC rc        = init(buffer_pool, log_handler, page_num, ReadWriteMode::READ_WRITE);
   lob_handler_ = lob_handler;
+  table_meta_  = table_meta;
   if (OB_FAIL(rc)) {
     LOG_ERROR("Failed to init empty page page_num:record_size %d:%d. rc=%s", page_num, record_size, strrc(rc));
     return rc;
@@ -224,6 +226,8 @@ RC RecordPageHandler::init_empty_page(DiskBufferPool &buffer_pool, LogHandler &l
     int record_size, int column_num, const char *col_idx_data, LobFileHandler *lob_handler)
 {
   RC rc = init(buffer_pool, log_handler, page_num, ReadWriteMode::READ_WRITE);
+  lob_handler_ = lob_handler;
+  table_meta_  = nullptr;
   if (OB_FAIL(rc)) {
     LOG_ERROR("Failed to init empty page page_num:record_size %d:%d. rc=%s", page_num, record_size, strrc(rc));
     return rc;
@@ -445,11 +449,15 @@ RC PaxRecordPageHandler::insert_record(const char *data, RID *rid)
         disk_buffer_pool_->file_desc(), frame_->page_num(), strrc(rc));
   }
 
-  int data_offset = 0;
   for (int col_id = 0; col_id < page_header_->column_num; col_id++) {
     const int field_len = get_field_len(col_id);
-    memcpy(get_field_data(index, col_id), data + data_offset, field_len);
-    data_offset += field_len;
+    const int field_offset = get_field_offset(col_id);
+    if (field_offset < 0 || field_offset + field_len > page_header_->record_real_size) {
+      LOG_WARN("Invalid field offset. col_id=%d offset=%d len=%d record_size=%d",
+          col_id, field_offset, field_len, page_header_->record_real_size);
+      return RC::INTERNAL;
+    }
+    memcpy(get_field_data(index, col_id), data + field_offset, field_len);
   }
 
   frame_->mark_dirty();
@@ -541,12 +549,18 @@ RC PaxRecordPageHandler::get_record(const RID &rid, Record &record)
     LOG_ERROR("Failed to allocate memory for record data");
     return RC::NOMEM;
   }
+  memset(row_data, 0, page_header_->record_real_size);
 
-  int data_offset = 0;
   for (int col_id = 0; col_id < page_header_->column_num; col_id++) {
     const int field_len = get_field_len(col_id);
-    memcpy(row_data + data_offset, get_field_data(rid.slot_num, col_id), field_len);
-    data_offset += field_len;
+    const int field_offset = get_field_offset(col_id);
+    if (field_offset < 0 || field_offset + field_len > page_header_->record_real_size) {
+      LOG_WARN("Invalid field offset. col_id=%d offset=%d len=%d record_size=%d",
+          col_id, field_offset, field_len, page_header_->record_real_size);
+      free(row_data);
+      return RC::INTERNAL;
+    }
+    memcpy(row_data + field_offset, get_field_data(rid.slot_num, col_id), field_len);
   }
 
   record.set_rid(rid);
@@ -635,6 +649,22 @@ int PaxRecordPageHandler::get_field_len(int col_id)
   }
 }
 
+int PaxRecordPageHandler::get_field_offset(int col_id)
+{
+  if (table_meta_ != nullptr && col_id >= 0 && col_id < table_meta_->field_num()) {
+    const int field_offset = table_meta_->field(col_id)->offset();
+    if (field_offset >= 0) {
+      return field_offset;
+    }
+  }
+
+  int offset = 0;
+  for (int i = 0; i < col_id; i++) {
+    offset += get_field_len(i);
+  }
+  return offset;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 RecordFileHandler::~RecordFileHandler() { this->close(); }
@@ -684,7 +714,8 @@ RC RecordFileHandler::init_free_pages()
   while (bp_iterator.has_next()) {
     current_page_num = bp_iterator.next();
 
-    rc = record_page_handler->init(*disk_buffer_pool_, *log_handler_, current_page_num, ReadWriteMode::READ_ONLY);
+    rc = record_page_handler->init(
+        *disk_buffer_pool_, *log_handler_, current_page_num, ReadWriteMode::READ_ONLY, lob_handler_, table_meta_);
     if (rc != RC::SUCCESS) {
       LOG_WARN("failed to init record page handler. page num=%d, rc=%d:%s", current_page_num, rc, strrc(rc));
       return rc;
@@ -714,7 +745,8 @@ RC RecordFileHandler::insert_record(const char *data, int record_size, RID *rid)
   while (!free_pages_.empty()) {
     current_page_num = *free_pages_.begin();
 
-    ret = record_page_handler->init(*disk_buffer_pool_, *log_handler_, current_page_num, ReadWriteMode::READ_WRITE);
+    ret = record_page_handler->init(
+        *disk_buffer_pool_, *log_handler_, current_page_num, ReadWriteMode::READ_WRITE, lob_handler_, table_meta_);
     if (OB_FAIL(ret)) {
       lock_.unlock();
       LOG_WARN("failed to init record page handler. page num=%d, rc=%d:%s", current_page_num, ret, strrc(ret));
@@ -783,7 +815,8 @@ RC RecordFileHandler::insert_chunk(const Chunk &chunk, int record_size)
     while (!free_pages_.empty()) {
       current_page_num = *free_pages_.begin();
 
-      ret = record_page_handler->init(*disk_buffer_pool_, *log_handler_, current_page_num, ReadWriteMode::READ_WRITE);
+      ret = record_page_handler->init(
+          *disk_buffer_pool_, *log_handler_, current_page_num, ReadWriteMode::READ_WRITE, lob_handler_, table_meta_);
       if (OB_FAIL(ret)) {
         lock_.unlock();
         LOG_WARN("failed to init record page handler. page num=%d, rc=%s", current_page_num, strrc(ret));
@@ -865,7 +898,8 @@ RC RecordFileHandler::delete_record(const RID *rid)
 
   unique_ptr<RecordPageHandler> record_page_handler(RecordPageHandler::create(storage_format_));
 
-  rc = record_page_handler->init(*disk_buffer_pool_, *log_handler_, rid->page_num, ReadWriteMode::READ_WRITE);
+  rc = record_page_handler->init(
+      *disk_buffer_pool_, *log_handler_, rid->page_num, ReadWriteMode::READ_WRITE, lob_handler_, table_meta_);
   if (OB_FAIL(rc)) {
     LOG_ERROR("Failed to init record page handler.page number=%d. rc=%s", rid->page_num, strrc(rc));
     return rc;
@@ -892,7 +926,8 @@ RC RecordFileHandler::get_record(const RID &rid, Record &record)
   unique_ptr<RecordPageHandler> page_handler(RecordPageHandler::create(storage_format_));
 
   // 仅为读取记录内容，使用只读模式避免在持有读锁时再尝试写锁导致的锁冲突
-  RC rc = page_handler->init(*disk_buffer_pool_, *log_handler_, rid.page_num, ReadWriteMode::READ_ONLY);
+  RC rc = page_handler->init(
+      *disk_buffer_pool_, *log_handler_, rid.page_num, ReadWriteMode::READ_ONLY, lob_handler_, table_meta_);
   if (OB_FAIL(rc)) {
     LOG_ERROR("Failed to init record page handler.page number=%d", rid.page_num);
     return rc;
@@ -914,7 +949,8 @@ RC RecordFileHandler::update_record(const RID &rid, const char *data)
 {
   unique_ptr<RecordPageHandler> page_handler(RecordPageHandler::create(storage_format_));
 
-  RC rc = page_handler->init(*disk_buffer_pool_, *log_handler_, rid.page_num, ReadWriteMode::READ_WRITE);
+  RC rc = page_handler->init(
+      *disk_buffer_pool_, *log_handler_, rid.page_num, ReadWriteMode::READ_WRITE, lob_handler_, table_meta_);
   if (OB_FAIL(rc)) {
     LOG_ERROR("Failed to init record page handler. page number=%d", rid.page_num);
     return rc;
@@ -933,7 +969,8 @@ RC RecordFileHandler::visit_record(const RID &rid, function<bool(Record &)> upda
 {
   unique_ptr<RecordPageHandler> page_handler(RecordPageHandler::create(storage_format_));
 
-  RC rc = page_handler->init(*disk_buffer_pool_, *log_handler_, rid.page_num, ReadWriteMode::READ_WRITE);
+  RC rc = page_handler->init(
+      *disk_buffer_pool_, *log_handler_, rid.page_num, ReadWriteMode::READ_WRITE, lob_handler_, table_meta_);
   if (OB_FAIL(rc)) {
     LOG_ERROR("Failed to init record page handler.page number=%d", rid.page_num);
     return rc;
@@ -1007,7 +1044,8 @@ RC ChunkFileScanner::next_chunk(Chunk &chunk)
   while (bp_iterator_.has_next()) {
     PageNum page_num = bp_iterator_.next();
     record_page_handler_->cleanup();
-    rc = record_page_handler_->init(*disk_buffer_pool_, *log_handler_, page_num, rw_mode_, table_->lob_handler());
+    TableMeta *table_meta = table_ == nullptr ? nullptr : const_cast<TableMeta *>(&table_->table_meta());
+    rc = record_page_handler_->init(*disk_buffer_pool_, *log_handler_, page_num, rw_mode_, table_->lob_handler(), table_meta);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to init record page handler. page_num=%d, rc=%s", page_num, strrc(rc));
       return rc;

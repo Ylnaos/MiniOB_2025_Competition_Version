@@ -138,7 +138,7 @@ public:
    * @param mode        是否只读。在访问页面时，需要对页面加锁
    */
   RC init(DiskBufferPool &buffer_pool, LogHandler &log_handler, PageNum page_num, ReadWriteMode mode,
-      LobFileHandler *lob_handler = nullptr);
+      LobFileHandler *lob_handler = nullptr, TableMeta *table_meta = nullptr);
 
   /**
    * @brief 数据库恢复时，与普通的运行场景有所不同，不做任何并发操作，也不需要加锁
@@ -267,6 +267,7 @@ protected:
   char           *bitmap_      = nullptr;  ///< 当前页面上record分配状态信息bitmap内存起始位置
   StorageFormat   storage_format_;
   LobFileHandler *lob_handler_ = nullptr;
+  TableMeta      *table_meta_  = nullptr;
 
 protected:
   friend class RecordPageIterator;
@@ -356,6 +357,8 @@ private:
 
   // get the field length by `column id`, all columns are fixed length.
   int get_field_len(int col_id);
+
+  int get_field_offset(int col_id);
 };
 /**
  * @brief 管理整个文件中记录的增删改查

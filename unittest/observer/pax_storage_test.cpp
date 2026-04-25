@@ -347,6 +347,83 @@ TEST_P(PaxPageHandlerTestWithParam, DISABLED_PaxPageHandler)
   delete bpm;
 }
 
+TEST(PaxPageHandler, DISABLED_PaxPageHandlerWithRowHeaderOffset)
+{
+  VacuousLogHandler log_handler;
+
+  const char *record_manager_file = "record_manager_offset.bp";
+  ::remove(record_manager_file);
+
+  BufferPoolManager *bpm = new BufferPoolManager();
+  ASSERT_EQ(RC::SUCCESS, bpm->init(make_unique<VacuousDoubleWriteBuffer>()));
+  DiskBufferPool *bp = nullptr;
+  RC              rc = bpm->create_file(record_manager_file);
+  ASSERT_EQ(rc, RC::SUCCESS);
+
+  rc = bpm->open_file(log_handler, record_manager_file, bp);
+  ASSERT_EQ(rc, RC::SUCCESS);
+
+  Frame *frame = nullptr;
+  rc           = bp->allocate_page(&frame);
+  ASSERT_EQ(rc, RC::SUCCESS);
+
+  TableMeta table_meta;
+  table_meta.fields_.resize(2);
+  table_meta.fields_[0].attr_type_   = AttrType::INTS;
+  table_meta.fields_[0].attr_offset_ = 1;
+  table_meta.fields_[0].attr_len_    = 4;
+  table_meta.fields_[0].field_id_    = 0;
+  table_meta.fields_[1].attr_type_   = AttrType::INTS;
+  table_meta.fields_[1].attr_offset_ = 5;
+  table_meta.fields_[1].attr_len_    = 4;
+  table_meta.fields_[1].field_id_    = 1;
+
+  const int          record_size        = 9;
+  RecordPageHandler *record_page_handle = new PaxRecordPageHandler();
+  rc = record_page_handle->init_empty_page(*bp, log_handler, frame->page_num(), record_size, &table_meta);
+  ASSERT_EQ(rc, RC::SUCCESS);
+
+  char buf[record_size];
+  memset(buf, 0, sizeof(buf));
+  RID rid;
+  for (int i = 0; i < 60; i++) {
+    const int id  = i + 1;
+    const int num = 1;
+    memcpy(buf + 1, &id, sizeof(id));
+    memcpy(buf + 5, &num, sizeof(num));
+    rc = record_page_handle->insert_record(buf, &rid);
+    ASSERT_EQ(rc, RC::SUCCESS);
+  }
+
+  Chunk     chunk;
+  FieldMeta fm;
+  fm.init("num", AttrType::INTS, 5, 4, true, 1);
+  chunk.add_column(make_unique<Column>(fm, 2048), 1);
+  rc = record_page_handle->get_chunk(chunk);
+  ASSERT_EQ(rc, RC::SUCCESS);
+  ASSERT_EQ(chunk.rows(), 60);
+
+  int sum = 0;
+  for (int i = 0; i < chunk.rows(); i++) {
+    sum += chunk.get_value(0, i).get_int();
+  }
+  ASSERT_EQ(sum, 60);
+
+  Record record;
+  rc = record_page_handle->get_record(rid, record);
+  ASSERT_EQ(rc, RC::SUCCESS);
+  int num = 0;
+  ASSERT_EQ(record.data()[0], 0);
+  memcpy(&num, record.data() + 5, sizeof(num));
+  ASSERT_EQ(num, 1);
+
+  rc = record_page_handle->cleanup();
+  ASSERT_EQ(rc, RC::SUCCESS);
+  delete record_page_handle;
+  bpm->close_file(record_manager_file);
+  delete bpm;
+}
+
 INSTANTIATE_TEST_SUITE_P(PaxFileScannerTests, PaxRecordFileScannerWithParam, testing::Values(1, 10, 100, 1000, 2000, 10000));
 
 INSTANTIATE_TEST_SUITE_P(PaxPageTests, PaxPageHandlerTestWithParam, testing::Values(1, 10, 100, 337));

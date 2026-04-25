@@ -56,7 +56,8 @@ RC HeapRecordScanner::fetch_next_record()
   while (bp_iterator_.has_next()) {
     PageNum page_num = bp_iterator_.next();
     record_page_handler_->cleanup();
-    rc = record_page_handler_->init(*disk_buffer_pool_, *log_handler_, page_num, rw_mode_);
+    TableMeta *table_meta = table_ == nullptr ? nullptr : const_cast<TableMeta *>(&table_->table_meta());
+    rc = record_page_handler_->init(*disk_buffer_pool_, *log_handler_, page_num, rw_mode_, nullptr, table_meta);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to init record page handler. page_num=%d, rc=%s", page_num, strrc(rc));
       return rc;
