@@ -50,7 +50,12 @@ See the Mulan PSL v2 for more details. */
 #include "session/session.h"
 #include "storage/db/db.h"
 #include "storage/index/fulltext_index.h"
+#if __has_include("cppjieba/Jieba.hpp")
 #include "cppjieba/Jieba.hpp"
+#define MINIOB_HAVE_CPPJIEBA 1
+#else
+#define MINIOB_HAVE_CPPJIEBA 0
+#endif
 
 using namespace std;
 
@@ -474,6 +479,7 @@ public:
       return RC::UNIMPLEMENTED;
     }
 
+#if MINIOB_HAVE_CPPJIEBA
     LOG_INFO("JiebaTokenizer::tokenize getting context");
     auto &ctx = context();
     std::call_once(ctx.init_once, [&ctx]() {
@@ -518,6 +524,16 @@ public:
       tokens.push_back(word);
     }
     return RC::SUCCESS;
+#else
+    const string normalized = normalize_text_for_segmentation(text);
+    istringstream input(normalized);
+    string token;
+    tokens.clear();
+    while (input >> token) {
+      tokens.emplace_back(std::move(token));
+    }
+    return RC::SUCCESS;
+#endif
   }
 
 private:
@@ -525,7 +541,9 @@ private:
   {
     std::once_flag init_once;
     RC init_rc = RC::SUCCESS;
+#if MINIOB_HAVE_CPPJIEBA
     unique_ptr<cppjieba::Jieba> jieba;
+#endif
     unordered_set<string> stop_words;
     unordered_set<string> dict_words;
     size_t max_dict_word_bytes = 0;
@@ -560,12 +578,14 @@ private:
       const string idf_path  = optional_path(idf_path_fs);
       const string stop_path = optional_path(stop_path_fs);
 
+#if MINIOB_HAVE_CPPJIEBA
       try {
         jieba = make_unique<cppjieba::Jieba>(dict_path, hmm_path, user_path, idf_path, stop_path);
       } catch (const std::exception &e) {
         LOG_WARN("Failed to initialize jieba tokenizer: %s", e.what());
         return RC::INTERNAL;
       }
+#endif
 
       string line;
 
