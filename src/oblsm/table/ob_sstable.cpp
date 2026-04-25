@@ -51,6 +51,11 @@ void ObSSTable::init()
     candidates.push_back({offset, footer_size});
   };
 
+  string footer4 = file_reader_->read_pos(file_size - sizeof(uint32_t), sizeof(uint32_t));
+  if (footer4.size() == sizeof(uint32_t)) {
+    add_candidate(get_numeric<uint32_t>(footer4.data()), sizeof(uint32_t));
+  }
+
   string footer8;
   if (file_size >= 2 * sizeof(uint32_t)) {
     footer8 = file_reader_->read_pos(file_size - 2 * sizeof(uint32_t), 2 * sizeof(uint32_t));
@@ -59,17 +64,6 @@ void ObSSTable::init()
       add_candidate(get_numeric<uint32_t>(ptr), 2 * sizeof(uint32_t));
       add_candidate(get_numeric<uint32_t>(ptr + sizeof(uint32_t)), 2 * sizeof(uint32_t));
     }
-  }
-
-  string footer4;
-  if (!footer8.empty()) {
-    footer4.assign(footer8.data() + sizeof(uint32_t), sizeof(uint32_t));
-  } else {
-    footer4 = file_reader_->read_pos(file_size - sizeof(uint32_t), sizeof(uint32_t));
-  }
-
-  if (footer4.size() == sizeof(uint32_t)) {
-    add_candidate(get_numeric<uint32_t>(footer4.data()), sizeof(uint32_t));
   }
 
   auto try_parse_metadata = [&](uint32_t offset, uint32_t footer_size) -> bool {
@@ -94,6 +88,10 @@ void ObSSTable::init()
     uint32_t    block_cnt = get_numeric<uint32_t>(cursor);
     cursor += sizeof(uint32_t);
     remaining -= sizeof(uint32_t);
+    const size_t min_meta_size = 5 * sizeof(uint32_t);
+    if (block_cnt > remaining / min_meta_size) {
+      return false;
+    }
 
     vector<BlockMeta> metas;
     metas.reserve(block_cnt);

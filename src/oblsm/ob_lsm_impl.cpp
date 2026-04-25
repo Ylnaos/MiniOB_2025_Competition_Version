@@ -10,6 +10,8 @@ See the Mulan PSL v2 for more details. */
 
 #include "oblsm/ob_lsm_impl.h"
 
+#include <algorithm>
+
 #include "common/log/log.h"
 #include "common/sys/rc.h"
 #include "oblsm/include/ob_lsm.h"
@@ -78,6 +80,14 @@ RC ObLsmImpl::recover()
 
   // Recover memtable from WAL file.
   wal_ = std::make_unique<WAL>();
+  if (new_memtable_record) {
+    memtable_id_.store(new_memtable_record->memtable_id);
+  }
+  rc = recover_from_wal();
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to recover from wal, rc=%s", strrc(rc));
+    return rc;
+  }
 
   // After recover from the old manifest file, write the snapshot into a new manifest file.
   if (!compaction_records.empty()) {
@@ -169,7 +179,11 @@ RC ObLsmImpl::try_freeze_memtable()
   frozen_wals_.emplace_back(std::move(wal_));
   wal_                     = std::make_unique<WAL>();
   uint64_t new_memtable_id = memtable_id_.fetch_add(1) + 1;
-  wal_->open(get_wal_path(new_memtable_id));
+  rc                       = wal_->open(get_wal_path(new_memtable_id));
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to open wal file, rc=%s", strrc(rc));
+    return rc;
+  }
   std::shared_ptr<ObLsmBgCompactCtx> background_compaction_ctx = make_shared<ObLsmBgCompactCtx>(new_memtable_id);
   auto bg_task = [this, background_compaction_ctx]() { this->background_compaction(background_compaction_ctx); };
   int  ret     = executor_.execute(bg_task);
@@ -214,6 +228,9 @@ void ObLsmImpl::try_major_compaction()
 {
   unique_lock<mutex>             lock(mu_);
   unique_ptr<ObCompactionPicker> picker(ObCompactionPicker::create(options_.type, &options_));
+  if (picker == nullptr) {
+    return;
+  }
   unique_ptr<ObCompaction>       picked = picker->pick(sstables_);
   ObManifestCompaction           mf_record;
   lock.unlock();
@@ -222,12 +239,12 @@ void ObLsmImpl::try_major_compaction()
   }
   vector<shared_ptr<ObSSTable>> results = do_compaction(picked.get());
 
-  SSTablesPtr new_sstables = make_shared<vector<vector<shared_ptr<ObSSTable>>>>();
+  SSTablesPtr new_sstables = make_shared<vector<vector<shared_ptr<ObSSTable>>>>(*sstables_);
   lock.lock();
-  size_t levels_size        = sstables_->size();
-  bool   insert_new_sstable = false;
-  auto   find_sstable       = [](const vector<shared_ptr<ObSSTable>> &picked, const shared_ptr<ObSSTable> &sstable) {
-    for (auto &p : picked) {
+  size_t source_level = picked->level();
+  size_t target_level = std::min(source_level + 1, sstables_->size() - 1);
+  auto   find_sstable = [](const vector<shared_ptr<ObSSTable>> &picked, const shared_ptr<ObSSTable> &sstable) {
+    for (const auto &p : picked) {
       if (p->sst_id() == sstable->sst_id()) {
         return true;
       }
@@ -236,31 +253,28 @@ void ObLsmImpl::try_major_compaction()
   };
 
   vector<shared_ptr<ObSSTable>> picked_sstables;
-  picked_sstables      = picked->inputs(0);
-  const auto &level_i1 = picked->inputs(1);
-  if (level_i1.size() > 0) {
-    picked_sstables.insert(picked_sstables.end(), level_i1.begin(), level_i1.end());
-  }
-  // TODO: unify the new sstables logic in all compaction type
-  if (options_.type == CompactionType::TIRED) {
-    for (int i = levels_size - 1; i >= 0; --i) {
-      const vector<shared_ptr<ObSSTable>> &level_i = sstables_->at(i);
-      for (auto &sstable : level_i) {
-        if (find_sstable(picked_sstables, sstable)) {
-          if (!insert_new_sstable) {
-            new_sstables->insert(new_sstables->begin(), results);
-            insert_new_sstable = true;
-          }
-        } else {
-          new_sstables->insert(new_sstables->begin(), level_i);
-          break;
-        }
-      }
-    }
-  } else if (options_.type == CompactionType::LEVELED) {
-    // TODO: apply the compaction results to sstable
-  }
+  picked_sstables = picked->inputs(0);
+  picked_sstables.insert(picked_sstables.end(), picked->inputs(1).begin(), picked->inputs(1).end());
 
+  auto remove_picked_from_level = [&](size_t level, const vector<shared_ptr<ObSSTable>> &to_remove) {
+    auto &tables = new_sstables->at(level);
+    tables.erase(std::remove_if(tables.begin(), tables.end(),
+                     [&](const shared_ptr<ObSSTable> &sstable) { return find_sstable(to_remove, sstable); }),
+        tables.end());
+    for (const auto &sstable : to_remove) {
+      mf_record.deleted_tables.emplace_back(sstable->sst_id(), static_cast<int>(level));
+    }
+  };
+
+  remove_picked_from_level(source_level, picked->inputs(0));
+  remove_picked_from_level(target_level, picked->inputs(1));
+  auto &target_tables = new_sstables->at(target_level);
+  for (const auto &sstable : results) {
+    target_tables.emplace_back(sstable);
+    mf_record.added_tables.emplace_back(sstable->sst_id(), static_cast<int>(target_level));
+  }
+  std::sort(target_tables.begin(), target_tables.end(),
+      [](const shared_ptr<ObSSTable> &a, const shared_ptr<ObSSTable> &b) { return a->first_key() < b->first_key(); });
   sstables_ = new_sstables;
   lock.unlock();
 
@@ -275,7 +289,63 @@ void ObLsmImpl::try_major_compaction()
   try_major_compaction();
 }
 
-vector<shared_ptr<ObSSTable>> ObLsmImpl::do_compaction(ObCompaction *picked) { return {}; }
+vector<shared_ptr<ObSSTable>> ObLsmImpl::do_compaction(ObCompaction *picked)
+{
+  vector<shared_ptr<ObSSTable>> results;
+  if (picked == nullptr || picked->size() == 0) {
+    return results;
+  }
+
+  vector<unique_ptr<ObLsmIterator>> iters;
+  for (int which = 0; which < 2; ++which) {
+    for (const auto &sstable : picked->inputs(which)) {
+      iters.emplace_back(sstable->new_iterator());
+    }
+  }
+
+  unique_ptr<ObLsmIterator> iter(new_merging_iterator(&internal_key_comparator_, std::move(iters)));
+  iter->seek_to_first();
+
+  shared_ptr<ObMemTable> memtable = make_shared<ObMemTable>();
+  bool                   has_data = false;
+  auto flush_memtable = [&]() -> RC {
+    if (!has_data) {
+      return RC::SUCCESS;
+    }
+    unique_ptr<ObSSTableBuilder> builder = make_unique<ObSSTableBuilder>(&default_comparator_, block_cache_.get());
+    uint64_t                     sstable_id = sstable_id_.fetch_add(1);
+    RC                           rc = builder->build(memtable, get_sstable_path(sstable_id), sstable_id);
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to build compaction sstable, rc=%s", strrc(rc));
+      return rc;
+    }
+    results.emplace_back(builder->get_built_table());
+    memtable = make_shared<ObMemTable>();
+    has_data = false;
+    return RC::SUCCESS;
+  };
+
+  while (iter->valid()) {
+    string_view internal_key = iter->key();
+    string_view user_key     = extract_user_key(internal_key);
+    uint64_t    seq          = extract_sequence(internal_key);
+    memtable->put(seq, user_key, iter->value());
+    has_data = true;
+    if (memtable->appro_memory_usage() >= options_.table_size) {
+      RC rc = flush_memtable();
+      if (rc != RC::SUCCESS) {
+        return {};
+      }
+    }
+    iter->next();
+  }
+
+  RC rc = flush_memtable();
+  if (rc != RC::SUCCESS) {
+    return {};
+  }
+  return results;
+}
 
 void ObLsmImpl::build_sstable(shared_ptr<ObMemTable> imem)
 {
@@ -315,7 +385,6 @@ string ObLsmImpl::get_wal_path(uint64_t memtable_id)
 RC ObLsmImpl::get(const string_view &key, string *value)
 {
   RC                 rc = RC::SUCCESS;
-  unique_lock<mutex> lock(mu_);
   auto               iter = unique_ptr<ObLsmIterator>(new_iterator(ObLsmReadOptions{}));
   iter->seek(key);
   if (iter->valid() && iter->key() == key) {
@@ -370,8 +439,38 @@ void ObLsmImpl::dump_sstables()
       cout << sst->sst_id() << ": " << sst->size() << ";";
       level_size += sst->size();
     }
-    cout << "level size " << level_size << endl;
+  cout << "level size " << level_size << endl;
   }
+}
+
+RC ObLsmImpl::recover_from_wal()
+{
+  if (wal_ == nullptr) {
+    wal_ = std::make_unique<WAL>();
+  }
+
+  const string wal_path = get_wal_path(memtable_id_.load());
+  if (filesystem::exists(wal_path)) {
+    vector<WalRecord> records;
+    RC                rc = wal_->recover(wal_path, records);
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to recover wal file, file=%s, rc=%s", wal_path.c_str(), strrc(rc));
+      return rc;
+    }
+
+    uint64_t next_seq = seq_.load();
+    for (const auto &record : records) {
+      mem_table_->put(record.seq, record.key, record.val);
+      next_seq = std::max(next_seq, record.seq + 1);
+    }
+    seq_.store(next_seq);
+  }
+
+  RC rc = wal_->open(wal_path);
+  if (rc != RC::SUCCESS) {
+    LOG_ERROR("Failed to open wal file, file=%s, rc=%s", wal_path.c_str(), strrc(rc));
+  }
+  return rc;
 }
 
 RC ObLsmImpl::recover_from_manifest_records(const std::vector<ObManifestCompaction> &records)

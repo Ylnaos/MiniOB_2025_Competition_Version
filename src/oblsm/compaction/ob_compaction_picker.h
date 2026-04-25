@@ -76,4 +76,18 @@ public:
 private:
 };
 
+/**
+ * @class LeveledCompactionPicker
+ * @brief A class implementing the leveled compaction strategy.
+ */
+class LeveledCompactionPicker : public ObCompactionPicker
+{
+public:
+  LeveledCompactionPicker(ObLsmOptions *options) : ObCompactionPicker(options) {}
+
+  ~LeveledCompactionPicker() = default;
+
+  unique_ptr<ObCompaction> pick(SSTablesPtr sstables) override;
+};
+
 }  // namespace oceanbase

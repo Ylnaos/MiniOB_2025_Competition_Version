@@ -106,20 +106,47 @@ string BlockMeta::encode() const
 
 RC BlockMeta::decode(const string &data)
 {
-  RC rc = RC::SUCCESS;
-  const char *data_ptr       = data.c_str();
-  uint32_t    first_key_size = get_numeric<uint32_t>(data_ptr);
+  const char *data_ptr  = data.data();
+  size_t      remaining = data.size();
+
+  if (remaining < sizeof(uint32_t)) {
+    return RC::INVALID_ARGUMENT;
+  }
+  uint32_t first_key_size = get_numeric<uint32_t>(data_ptr);
   data_ptr += sizeof(uint32_t);
+  remaining -= sizeof(uint32_t);
+  if (first_key_size > remaining) {
+    return RC::INVALID_ARGUMENT;
+  }
   first_key_.assign(data_ptr, first_key_size);
   data_ptr += first_key_size;
+  remaining -= first_key_size;
+
+  if (remaining < sizeof(uint32_t)) {
+    return RC::INVALID_ARGUMENT;
+  }
   uint32_t last_key_size = get_numeric<uint32_t>(data_ptr);
   data_ptr += sizeof(uint32_t);
+  remaining -= sizeof(uint32_t);
+  if (last_key_size > remaining) {
+    return RC::INVALID_ARGUMENT;
+  }
   last_key_.assign(data_ptr, last_key_size);
   data_ptr += last_key_size;
+  remaining -= last_key_size;
+
+  if (remaining < 2 * sizeof(uint32_t)) {
+    return RC::INVALID_ARGUMENT;
+  }
   offset_ = get_numeric<uint32_t>(data_ptr);
   data_ptr += sizeof(uint32_t);
+  remaining -= sizeof(uint32_t);
   size_ = get_numeric<uint32_t>(data_ptr);
-  return rc;
+  remaining -= sizeof(uint32_t);
+  if (remaining != 0) {
+    return RC::INVALID_ARGUMENT;
+  }
+  return RC::SUCCESS;
 }
 
 void BlockIterator::seek(const string_view &lookup_key)
