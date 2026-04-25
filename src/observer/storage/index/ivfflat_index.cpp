@@ -255,24 +255,45 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
 
   centroids_.assign(k, vector<float>(dim, 0.0f));
 
-  std::random_device rd;
-  std::mt19937        gen(rd());
-  std::uniform_int_distribution<size_t> dis(0, n - 1);
+  std::mt19937 gen(42);
 
-  size_t first_idx = dis(gen);
+  vector<size_t> training_indices;
+  if (use_mini_batch) {
+    const size_t training_limit = std::min(n, std::max<size_t>(8192, static_cast<size_t>(k) * 32));
+    training_indices.resize(n);
+    std::iota(training_indices.begin(), training_indices.end(), 0);
+    std::shuffle(training_indices.begin(), training_indices.end(), gen);
+    training_indices.resize(training_limit);
+    LOG_INFO("Using %zu sampled vectors to train IVF-Flat centroids for n=%zu", training_indices.size(), n);
+  } else {
+    training_indices.resize(n);
+    std::iota(training_indices.begin(), training_indices.end(), 0);
+  }
+
+  const size_t training_size = training_indices.size();
+  if (training_size < static_cast<size_t>(k)) {
+    k = static_cast<int>(training_size);
+    centroids_.assign(k, vector<float>(dim, 0.0f));
+    LOG_INFO("Adjusted k to %d due to insufficient training vectors", k);
+  }
+
+  std::uniform_int_distribution<size_t> dis(0, training_size - 1);
+
+  size_t first_idx = training_indices[dis(gen)];
   centroids_[0]     = vectors[first_idx];
 
-  vector<float> min_distances(n, std::numeric_limits<float>::max());
+  vector<float> min_distances(training_size, std::numeric_limits<float>::max());
 
   const size_t max_threads       = static_cast<size_t>(std::max(1u, std::thread::hardware_concurrency()));
-  const size_t init_worker_count = std::max<size_t>(1, std::min(max_threads, n));
-  const size_t init_block_size   = (n + init_worker_count - 1) / init_worker_count;
+  const size_t init_worker_count = std::max<size_t>(1, std::min(max_threads, training_size));
+  const size_t init_block_size   = (training_size + init_worker_count - 1) / init_worker_count;
 
   for (int i = 1; i < k; ++i) {
     const float *prev_centroid = centroids_[i - 1].data();
     auto         update_distances = [&](size_t start_idx, size_t end_idx) {
       for (size_t j = start_idx; j < end_idx; ++j) {
-        float dist_sq = l2_squared_unrolled(vectors[j].data(), prev_centroid, dim);
+        const size_t data_idx = training_indices[j];
+        float dist_sq = l2_squared_unrolled(vectors[data_idx].data(), prev_centroid, dim);
         if (dist_sq < min_distances[j]) {
           min_distances[j] = dist_sq;
         }
@@ -280,16 +301,16 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     };
 
     if (init_worker_count == 1) {
-      update_distances(0, n);
+      update_distances(0, training_size);
     } else {
       std::vector<std::thread> workers;
       workers.reserve(init_worker_count);
       for (size_t t = 0; t < init_worker_count; ++t) {
         size_t start_idx = t * init_block_size;
-        if (start_idx >= n) {
+        if (start_idx >= training_size) {
           break;
         }
-        size_t end_idx = std::min(start_idx + init_block_size, n);
+        size_t end_idx = std::min(start_idx + init_block_size, training_size);
         workers.emplace_back(update_distances, start_idx, end_idx);
       }
       for (auto &worker : workers) {
@@ -305,8 +326,8 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     }
 
     if (sum < 1e-9f) {
-      std::uniform_int_distribution<size_t> fallback_dis(0, n - 1);
-      centroids_[i] = vectors[fallback_dis(gen)];
+      std::uniform_int_distribution<size_t> fallback_dis(0, training_size - 1);
+      centroids_[i] = vectors[training_indices[fallback_dis(gen)]];
       continue;
     }
 
@@ -315,7 +336,7 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
 
     float  cumsum   = 0.0f;
     size_t next_idx = 0;
-    for (size_t j = 0; j < n; ++j) {
+    for (size_t j = 0; j < training_size; ++j) {
       cumsum += min_distances[j];
       if (cumsum >= target) {
         next_idx = j;
@@ -323,16 +344,14 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
       }
     }
 
-    centroids_[i] = vectors[next_idx];
+    centroids_[i] = vectors[training_indices[next_idx]];
   }
 
   size_t batch_size = n;
   if (use_mini_batch) {
-    size_t desired_lists = static_cast<size_t>(std::max(1, lists_));
-    size_t desired = std::max<size_t>(static_cast<size_t>(k) * 8, desired_lists * 8);
-    desired        = std::max<size_t>(desired, 1024);
-    batch_size     = std::min(desired, n);
-    LOG_INFO("Using Mini-Batch K-Means with batch_size=%zu for n=%zu vectors", batch_size, n);
+    size_t desired = std::max<size_t>(static_cast<size_t>(k) * 12, 4096);
+    batch_size     = std::min(desired, training_size);
+    LOG_INFO("Using Mini-Batch K-Means with batch_size=%zu for %zu training vectors", batch_size, training_size);
   }
 
   vector<int> assignments(n, -1);
@@ -345,7 +364,7 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
 
   int effective_max_iter = std::max(1, max_iter);
   if (use_mini_batch) {
-    effective_max_iter = std::min(effective_max_iter, 40);
+    effective_max_iter = std::min(effective_max_iter, 8);
   }
 
   for (int iter = 0; iter < effective_max_iter; ++iter) {
@@ -355,9 +374,9 @@ void IvfflatIndex::kmeans_clustering(const vector<vector<float>> &vectors, int k
     std::vector<size_t> sample_indices;
     if (use_mini_batch) {
       sample_indices.reserve(batch_size);
-      std::uniform_int_distribution<size_t> sample_dis(0, n - 1);
+      std::uniform_int_distribution<size_t> sample_dis(0, training_size - 1);
       for (size_t idx = 0; idx < batch_size; ++idx) {
-        sample_indices.push_back(sample_dis(gen));
+        sample_indices.push_back(training_indices[sample_dis(gen)]);
       }
     } else {
       sample_indices.resize(n);
@@ -549,8 +568,8 @@ RC IvfflatIndex::extract_vector_from_record(const char *record, vector<float> &v
     return RC::INTERNAL;
   }
 
-  const float *float_data = reinterpret_cast<const float *>(payload);
-  vec.assign(float_data, float_data + actual_dim);
+  vec.resize(actual_dim);
+  std::memcpy(vec.data(), payload, static_cast<size_t>(payload_len));
 
   return RC::SUCCESS;
 }
@@ -649,8 +668,9 @@ RC IvfflatIndex::create(Table *table, const char *file_name, const IndexMeta &in
   // 鎵弿琛紝鏀堕泦鎵€鏈夊悜閲忔暟鎹?
   vector<vector<float>> all_vectors;
   vector<RID> all_rids;
-  all_vectors.reserve(1000);  // 鍐呭瓨浼樺寲锛氶鍒嗛厤绌洪棿
-  all_rids.reserve(1000);
+  const size_t initial_reserve = std::max<size_t>(1000, static_cast<size_t>(std::max(1, lists_)) * 256);
+  all_vectors.reserve(initial_reserve);
+  all_rids.reserve(initial_reserve);
 
   RecordScanner *scanner = nullptr;
   RC rc = table_->get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);

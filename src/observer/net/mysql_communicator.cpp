@@ -14,6 +14,9 @@ See the Mulan PSL v2 for more details. */
 
 #include <string.h>
 
+#include <algorithm>
+#include <cctype>
+
 #include "common/io/io.h"
 #include "common/log/log.h"
 #include "event/session_event.h"
@@ -573,6 +576,40 @@ RC create_version_comment_sql_result(SqlResult *sql_result)
   return RC::SUCCESS;
 }
 
+static string normalize_mysql_query(string query)
+{
+  auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+  query.erase(query.begin(), std::find_if(query.begin(), query.end(), [&](char c) {
+                return !is_space(static_cast<unsigned char>(c));
+              }));
+  while (!query.empty() && (is_space(static_cast<unsigned char>(query.back())) || query.back() == ';')) {
+    query.pop_back();
+  }
+  std::transform(query.begin(), query.end(), query.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return query;
+}
+
+static bool starts_with(const string &text, const char *prefix)
+{
+  const size_t prefix_len = strlen(prefix);
+  return text.size() >= prefix_len && text.compare(0, prefix_len, prefix) == 0;
+}
+
+static bool is_mysql_client_init_query(const string &query)
+{
+  string normalized = normalize_mysql_query(query);
+  normalized.erase(std::remove_if(normalized.begin(), normalized.end(), [](unsigned char c) {
+                     return std::isspace(c) != 0;
+                   }),
+      normalized.end());
+
+  return starts_with(normalized, "setnames") || starts_with(normalized, "setcharacter_set")
+         || starts_with(normalized, "setautocommit") || starts_with(normalized, "setsql_mode")
+         || starts_with(normalized, "settime_zone");
+}
+
 /**
  * @brief MySQL链接做初始化，需要进行握手和一些预处理
  * @ingroup MySQLProtocol
@@ -690,6 +727,12 @@ RC MysqlCommunicator::read_event(SessionEvent *&event)
     if (query_packet.query.find("select @@version_comment") != string::npos) {
       bool need_disconnect;
       return handle_version_comment(need_disconnect);
+    }
+    if (is_mysql_client_init_query(query_packet.query)) {
+      OkPacket ok_packet(sequence_id_);
+      rc = send_packet(ok_packet);
+      writer_->flush();
+      return rc;
     }
 
     event = new SessionEvent(this);

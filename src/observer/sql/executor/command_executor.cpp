@@ -27,6 +27,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/executor/show_tables_executor.h"
 #include "sql/executor/trx_begin_executor.h"
 #include "sql/executor/trx_end_executor.h"
+#include "sql/stmt/create_index_stmt.h"
 #include "sql/stmt/stmt.h"
 
 RC CommandExecutor::execute(SQLStageEvent *sql_event)
@@ -106,7 +107,16 @@ RC CommandExecutor::execute(SQLStageEvent *sql_event)
     } break;
   }
 
-  if (OB_SUCC(rc) && stmt_type_ddl(stmt->type())) {
+  bool need_sync_after_ddl = stmt_type_ddl(stmt->type());
+  if (OB_SUCC(rc) && stmt->type() == StmtType::CREATE_INDEX) {
+    auto *create_index_stmt = static_cast<CreateIndexStmt *>(stmt);
+    if (create_index_stmt->is_vector_index()) {
+      need_sync_after_ddl = false;
+      LOG_INFO("skip full db sync after vector index creation");
+    }
+  }
+
+  if (OB_SUCC(rc) && need_sync_after_ddl) {
     // 每次做完DDL之后，做一次sync，保证元数据与日志保持一致
     rc = sql_event->session_event()->session()->get_current_db()->sync();
     LOG_INFO("sync db after ddl. rc=%d", rc);
