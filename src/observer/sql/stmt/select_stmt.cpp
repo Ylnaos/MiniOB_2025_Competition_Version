@@ -80,6 +80,33 @@ static bool contains_aggregation(const unique_ptr<Expression> &expr)
   }
 }
 
+static unique_ptr<Expression> condition_operand_to_expr(const ConditionSqlNode &condition, bool left)
+{
+  const unique_ptr<Expression> &expr = left ? condition.left_expr : condition.right_expr;
+  if (expr) {
+    return expr->copy();
+  }
+
+  const int is_attr = left ? condition.left_is_attr : condition.right_is_attr;
+  if (is_attr == 1) {
+    const RelAttrSqlNode &attr = left ? condition.left_attr : condition.right_attr;
+    return make_unique<UnboundFieldExpr>(attr.relation_name, attr.attribute_name);
+  }
+
+  const Value &value = left ? condition.left_value : condition.right_value;
+  return make_unique<ValueExpr>(value);
+}
+
+static unique_ptr<Expression> condition_to_expr(const ConditionSqlNode &condition)
+{
+  unique_ptr<Expression> left  = condition_operand_to_expr(condition, true);
+  unique_ptr<Expression> right = condition_operand_to_expr(condition, false);
+  if (condition.comp == IN_OP || condition.comp == NOT_IN_OP) {
+    return make_unique<InExpr>(std::move(left), std::move(right), condition.comp == NOT_IN_OP);
+  }
+  return make_unique<ComparisonExpr>(condition.comp, std::move(left), std::move(right));
+}
+
 // 从视图的 SELECT 列表推导列名到底层字段(表.列)的映射
 // 支持两类：
 // 1) 未绑定字段（直接映射 列名 -> 表.列）
@@ -426,11 +453,12 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             }
 
           }
+          BinderContext subquery_binder_context;
+          subquery_binder_context.set_inner_view_stmt(inner_select);
+          ExpressionBinder subquery_binder(subquery_binder_context);
+
           vector<unique_ptr<Expression>> final_exprs;
           if (!bound_exprs.empty()) {
-            BinderContext subquery_binder_context;
-            subquery_binder_context.set_inner_view_stmt(inner_select);
-            ExpressionBinder subquery_binder(subquery_binder_context);
             for (auto &candidate : bound_exprs) {
               if (candidate != nullptr && candidate->type() == ExprType::UNBOUND_FIELD) {
                 // 绑定 UNBOUND_FIELD（如 SELECT * 展开的列）
@@ -461,6 +489,36 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
             }
           }
           outer_select->query_expressions().swap(final_exprs);
+          outer_select->limit_ = select_sql.limit;
+
+          vector<unique_ptr<Expression>> predicate_exprs;
+          predicate_exprs.reserve(select_sql.conditions.size() + (select_sql.where_expr ? 1 : 0));
+          for (const ConditionSqlNode &condition : select_sql.conditions) {
+            predicate_exprs.emplace_back(condition_to_expr(condition));
+          }
+          if (select_sql.where_expr) {
+            predicate_exprs.emplace_back(std::move(select_sql.where_expr));
+          }
+
+          if (!predicate_exprs.empty()) {
+            unique_ptr<Expression> predicate_expr;
+            if (predicate_exprs.size() == 1) {
+              predicate_expr = std::move(predicate_exprs[0]);
+            } else {
+              predicate_expr = make_unique<ConjunctionExpr>(ConjunctionExpr::Type::AND, std::move(predicate_exprs));
+            }
+
+            subquery_binder_context.set_binding_context(BinderContext::BindingContext::WHERE);
+            vector<unique_ptr<Expression>> bound_predicates;
+            RC bind_rc = subquery_binder.bind_expression(predicate_expr, bound_predicates);
+            subquery_binder_context.set_binding_context(BinderContext::BindingContext::SELECT);
+            if (OB_FAIL(bind_rc) || bound_predicates.size() != 1) {
+              LOG_WARN("Failed to bind outer predicate for aggregate view. rc=%s, size=%zu",
+                  strrc(bind_rc), bound_predicates.size());
+              return bind_rc == RC::SUCCESS ? RC::INVALID_ARGUMENT : bind_rc;
+            }
+            outer_select->where_expr_.reset(bound_predicates[0].release());
+          }
 
           stmt = outer_select_guard.release();
           return RC::SUCCESS;

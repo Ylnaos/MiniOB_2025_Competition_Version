@@ -119,6 +119,29 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
     // 3. 将SubqueryLogicalOperator作为数据源，构建外层查询
     // 外层可能包含GROUP BY、WHERE等操作
     unique_ptr<LogicalOperator> last_oper = std::move(subquery_oper);
+    unique_ptr<LogicalOperator> predicate_oper;
+    unique_ptr<LogicalOperator> having_pred;
+
+    rc = create_plan(select_stmt->filter_stmt(), predicate_oper);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("Failed to create predicate plan for outer query. rc=%s", strrc(rc));
+      return rc;
+    }
+
+    if (select_stmt->where_expr()) {
+      auto extra_pred = make_unique<PredicateLogicalOperator>(std::move(select_stmt->where_expr()));
+      if (predicate_oper) {
+        extra_pred->add_child(std::move(predicate_oper));
+        predicate_oper = std::move(extra_pred);
+      } else {
+        predicate_oper = std::move(extra_pred);
+      }
+    }
+
+    if (predicate_oper) {
+      predicate_oper->add_child(std::move(last_oper));
+      last_oper = std::move(predicate_oper);
+    }
 
     // 构建外层的GROUP BY逻辑（如果有聚合函数）
     unique_ptr<LogicalOperator> group_by_oper;
@@ -147,6 +170,19 @@ RC LogicalPlanGenerator::create_plan(SelectStmt *select_stmt, unique_ptr<Logical
       } else {
         // 外层查询没有聚合表达式(如 SELECT * FROM view),不需要 GroupBy 算子
       }
+    }
+
+    if (select_stmt->having_expr()) {
+      having_pred = make_unique<PredicateLogicalOperator>(std::move(select_stmt->having_expr()));
+      having_pred->add_child(std::move(last_oper));
+      last_oper = std::move(having_pred);
+    }
+
+    unique_ptr<LogicalOperator> order_by_oper;
+    if (!select_stmt->order_by().empty()) {
+      order_by_oper = make_unique<OrderByLogicalOperator>(std::move(select_stmt->order_by()));
+      order_by_oper->add_child(std::move(last_oper));
+      last_oper = std::move(order_by_oper);
     }
 
     // 添加外层的PROJECT算子

@@ -128,13 +128,12 @@ bool parse_csv_line(std::istream &input, std::vector<std::string> &row, char ter
 
 RC LoadDataExecutor::execute(SQLStageEvent *sql_event)
 {
-  RC            rc         = RC::SUCCESS;
   SqlResult    *sql_result = sql_event->session_event()->sql_result();
   LoadDataStmt *stmt       = static_cast<LoadDataStmt *>(sql_event->stmt());
   Table        *table      = stmt->table();
   const char   *file_name  = stmt->filename();
   load_data(table, file_name, stmt->terminated(), stmt->enclosed(), sql_result);
-  return rc;
+  return sql_result->return_code();
 }
 
 /**
@@ -249,7 +248,13 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
 
       // 将数据追加到 Chunk
       for (int i = 0; i < field_num; i++) {
-        chunk.column(i).append_value(record_values[i]);
+        rc = chunk.column(i).append_value(record_values[i]);
+        if (rc != RC::SUCCESS) {
+          break;
+        }
+      }
+      if (rc != RC::SUCCESS) {
+        break;
       }
       batch_count++;
 

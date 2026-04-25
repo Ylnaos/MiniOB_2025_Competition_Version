@@ -540,6 +540,11 @@ RC Db::drop_table(const char *table_name)
     LOG_WARN("Failed to remove table data file: %s", table_data_file_path.c_str());
   }
 
+  string table_lob_file_path = table_lob_file(path_.c_str(), table_name);
+  if (unlink(table_lob_file_path.c_str()) != 0 && errno != ENOENT) {
+    LOG_WARN("Failed to remove table lob file: %s", table_lob_file_path.c_str());
+  }
+
   // 删除表的索引文件（如果存在）
   // 这里需要枚举所有可能的索引文件，但为了简化，我们只删除基本文件
   // 在实际实现中，应该查询表的元数据来获取所有索引信息
