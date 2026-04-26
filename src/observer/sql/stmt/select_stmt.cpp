@@ -22,6 +22,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/parser/parse.h"
 #include "storage/view/view.h"
 #include "sql/expr/expression.h"
+#include <algorithm>
 
 using namespace std;
 using namespace common;
@@ -122,6 +123,23 @@ static string view_output_label(const vector<string> &view_field_names, int outp
     return view_field_names[output_index];
   }
   return fallback;
+}
+
+static void apply_view_output_field_names(SelectStmt *select_stmt, const vector<string> &view_field_names)
+{
+  if (select_stmt == nullptr || view_field_names.empty()) {
+    return;
+  }
+
+  vector<unique_ptr<Expression>> &output_exprs = select_stmt->query_expressions();
+  const size_t output_count = std::min(output_exprs.size(), view_field_names.size());
+  for (size_t i = 0; i < output_count; i++) {
+    if (output_exprs[i] == nullptr || view_field_names[i].empty()) {
+      continue;
+    }
+    output_exprs[i]->set_alias(view_field_names[i]);
+    output_exprs[i]->set_name(view_field_names[i]);
+  }
 }
 
 static bool relation_matches_star(const RelationSqlNode &rel, const char *star_tbl)
@@ -556,6 +574,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           }
           unique_ptr<SelectStmt> inner_select_guard(static_cast<SelectStmt *>(inner_stmt));
           SelectStmt *inner_select = inner_select_guard.get();
+          apply_view_output_field_names(inner_select, view->view_fields());
 
           // 2. 创建外层SelectStmt,将内层查询设置为子查询数据源
           unique_ptr<SelectStmt> outer_select_guard(new SelectStmt());
@@ -981,6 +1000,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         }
 
         SelectStmt *view_select_stmt = static_cast<SelectStmt *>(view_stmt);
+        apply_view_output_field_names(view_select_stmt, view->view_fields());
 
         // 确定别名（如果没有指定别名，使用视图名）
         string alias_token = r.alias.empty() ? string(table_name) : r.alias;
