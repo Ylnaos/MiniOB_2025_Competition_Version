@@ -140,47 +140,6 @@ static bool is_blank_csv_record(const std::vector<std::string> &row)
   return true;
 }
 
-static void split_preserve_empty_fields(const std::string &line, char delimiter, std::vector<std::string> &row)
-{
-  row.clear();
-
-  size_t start = 0;
-  while (start <= line.size()) {
-    size_t end = line.find(delimiter, start);
-    if (end == std::string::npos) {
-      row.emplace_back(line.substr(start));
-      break;
-    }
-    row.emplace_back(line.substr(start, end - start));
-    start = end + 1;
-  }
-}
-
-static void try_parse_tab_separated_record(std::vector<std::string> &row, int expected_fields, char parsed_delimiter)
-{
-  if (parsed_delimiter == '\t' || row.size() >= static_cast<size_t>(expected_fields)) {
-    return;
-  }
-
-  std::string original_line;
-  for (size_t i = 0; i < row.size(); i++) {
-    if (i > 0) {
-      original_line += parsed_delimiter;
-    }
-    original_line += row[i];
-  }
-
-  if (original_line.find('\t') == std::string::npos) {
-    return;
-  }
-
-  std::vector<std::string> tab_values;
-  split_preserve_empty_fields(original_line, '\t', tab_values);
-  if (tab_values.size() >= static_cast<size_t>(expected_fields)) {
-    row.swap(tab_values);
-  }
-}
-
 RC LoadDataExecutor::execute(SQLStageEvent *sql_event)
 {
   SqlResult    *sql_result = sql_event->session_event()->sql_result();
@@ -284,7 +243,6 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
     int batch_count = 0;
 
     while (parse_csv_line(fs, file_values, terminated, enclosed)) {
-      try_parse_tab_separated_record(file_values, field_num, terminated);
       if (file_values.size() < static_cast<size_t>(field_num)) {
         if (is_blank_csv_record(file_values)) {
           continue;
@@ -355,7 +313,6 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
     vector<Value> record_values(field_num);
 
     while (parse_csv_line(fs, file_values, terminated, enclosed)) {
-      try_parse_tab_separated_record(file_values, field_num, terminated);
       if (file_values.size() < static_cast<size_t>(field_num) && is_blank_csv_record(file_values)) {
         continue;
       }
