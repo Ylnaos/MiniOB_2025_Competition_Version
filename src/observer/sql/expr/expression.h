@@ -21,6 +21,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/field/field.h"
 #include "sql/expr/aggregator.h"
 #include "storage/common/chunk.h"
+#include <cstdint>
 
 class Tuple;
 class ParsedSqlNode;
@@ -490,7 +491,19 @@ public:
   ExprType type() const override { return ExprType::ARITHMETIC; }
 
   AttrType value_type() const override;
-  int value_length() const override { return std::max(left_->value_length(), right_ ? right_->value_length() : 0); };
+  int value_length() const override
+  {
+    switch (value_type()) {
+      case AttrType::INTS:
+        return sizeof(int);
+      case AttrType::BIGINTS:
+        return sizeof(int64_t);
+      case AttrType::FLOATS:
+        return sizeof(float);
+      default:
+        return std::max(left_->value_length(), right_ ? right_->value_length() : 0);
+    }
+  };
 
   RC get_value(const Tuple &tuple, Value &value) const override;
 

@@ -54,6 +54,44 @@ static void wildcard_fields(
   }
 }
 
+static string derived_output_column_name(const Expression *expr, size_t idx)
+{
+  const char *col_name = expr == nullptr ? nullptr : expr->alias();
+  if (is_blank(col_name) && expr != nullptr) {
+    col_name = expr->name();
+  }
+
+  string candidate_name;
+  if (!is_blank(col_name)) {
+    candidate_name = col_name;
+  } else {
+    candidate_name = string("COLUMN_") + std::to_string(idx + 1);
+  }
+
+  size_t dot_pos = candidate_name.rfind('.');
+  if (dot_pos != string::npos && dot_pos + 1 < candidate_name.size()) {
+    candidate_name = candidate_name.substr(dot_pos + 1);
+  }
+  common::str_to_upper(candidate_name);
+  return candidate_name;
+}
+
+static bool is_star_expression(const Expression *expr)
+{
+  if (expr == nullptr) {
+    return false;
+  }
+  if (expr->type() == ExprType::STAR) {
+    return true;
+  }
+  if (expr->type() != ExprType::UNBOUND_FIELD) {
+    return false;
+  }
+  const auto *field_expr = static_cast<const UnboundFieldExpr *>(expr);
+  const char *field_name = field_expr->field_name();
+  return field_name != nullptr && 0 == strcmp(field_name, "*");
+}
+
 RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique_ptr<Expression>> &bound_expressions)
 {
   if (nullptr == expr) {
@@ -453,17 +491,7 @@ RC ExpressionBinder::bind_star_expression(
         continue;
       }
 
-      const char *col_name = output_expr->alias();
-      if (is_blank(col_name)) {
-        col_name = output_expr->name();
-      }
-      string candidate_name;
-      if (!is_blank(col_name)) {
-        candidate_name = col_name;
-      } else {
-        candidate_name = string("COLUMN_") + std::to_string(idx + 1);
-      }
-      common::str_to_upper(candidate_name);
+      string candidate_name = derived_output_column_name(output_expr.get(), idx);
 
       auto *field_expr = new FieldExpr();
       field_expr->set_pos(static_cast<int>(idx));
@@ -512,17 +540,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
       if (!inner_expr) {
         continue;
       }
-      const char *candidate = inner_expr->alias();
-      if (is_blank(candidate)) {
-        candidate = inner_expr->name();
-      }
-      string candidate_name;
-      if (!is_blank(candidate)) {
-        candidate_name = candidate;
-      } else {
-        candidate_name = string("COLUMN_") + std::to_string(idx + 1);
-      }
-      common::str_to_upper(candidate_name);
+      string candidate_name = derived_output_column_name(inner_expr.get(), idx);
       if (candidate_name == target_name) {
         auto *field_expr = new FieldExpr();
         field_expr->set_pos(static_cast<int>(idx));
@@ -574,17 +592,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
           continue;
         }
 
-        const char *col_name = output_expr->alias();
-        if (is_blank(col_name)) {
-          col_name = output_expr->name();
-        }
-        string candidate_name;
-        if (!is_blank(col_name)) {
-          candidate_name = col_name;
-        } else {
-          candidate_name = string("COLUMN_") + std::to_string(idx + 1);
-        }
-        common::str_to_upper(candidate_name);
+        string candidate_name = derived_output_column_name(output_expr.get(), idx);
 
         if (candidate_name == target_name) {
           auto *field_expr = new FieldExpr();
@@ -631,17 +639,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
               continue;
             }
 
-            const char *col_name = output_expr->alias();
-            if (is_blank(col_name)) {
-              col_name = output_expr->name();
-            }
-            string candidate_name;
-            if (!is_blank(col_name)) {
-              candidate_name = col_name;
-            } else {
-              candidate_name = string("COLUMN_") + std::to_string(idx + 1);
-            }
-            common::str_to_upper(candidate_name);
+            string candidate_name = derived_output_column_name(output_expr.get(), idx);
 
             auto *field_expr = new FieldExpr();
             field_expr->set_pos(static_cast<int>(idx));
@@ -665,17 +663,7 @@ RC ExpressionBinder::bind_unbound_field_expression(
               continue;
             }
 
-            const char *col_name = output_expr->alias();
-            if (is_blank(col_name)) {
-              col_name = output_expr->name();
-            }
-            string candidate_name;
-            if (!is_blank(col_name)) {
-              candidate_name = col_name;
-            } else {
-              candidate_name = string("COLUMN_") + std::to_string(idx + 1);
-            }
-            common::str_to_upper(candidate_name);
+            string candidate_name = derived_output_column_name(output_expr.get(), idx);
 
             if (candidate_name == target_name) {
               auto *field_expr = new FieldExpr();
@@ -1023,7 +1011,7 @@ RC ExpressionBinder::bind_aggregate_expression(
   unique_ptr<Expression>        &child_expr = unbound_aggregate_expr->child();
   vector<unique_ptr<Expression>> child_bound_expressions;
 
-  if (child_expr->type() == ExprType::STAR && aggregate_type == AggregateExpr::Type::COUNT) {
+  if (is_star_expression(child_expr.get()) && aggregate_type == AggregateExpr::Type::COUNT) {
     ValueExpr *value_expr = new ValueExpr(Value(1));
     child_expr.reset(value_expr);
   } else {

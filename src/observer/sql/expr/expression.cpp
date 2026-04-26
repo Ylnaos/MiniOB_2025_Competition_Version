@@ -97,6 +97,53 @@ std::string dump_value(const Value &value)
   return value.to_string();
 }
 
+template <typename T>
+bool column_matches_type(const Column &column)
+{
+  if constexpr (std::is_same_v<T, int>) {
+    return column.attr_type() == AttrType::INTS;
+  } else if constexpr (std::is_same_v<T, int64_t>) {
+    return column.attr_type() == AttrType::BIGINTS;
+  } else if constexpr (std::is_same_v<T, float>) {
+    return column.attr_type() == AttrType::FLOATS;
+  }
+  return false;
+}
+
+template <typename T>
+T numeric_column_value(const Column &column, int index)
+{
+  if (column.column_type() == Column::Type::CONSTANT_COLUMN) {
+    index = 0;
+  }
+
+  switch (column.attr_type()) {
+    case AttrType::INTS:
+      return static_cast<T>(reinterpret_cast<const int *>(column.data())[index]);
+    case AttrType::BIGINTS:
+      return static_cast<T>(reinterpret_cast<const int64_t *>(column.data())[index]);
+    case AttrType::FLOATS:
+      return static_cast<T>(reinterpret_cast<const float *>(column.data())[index]);
+    default:
+      return T {};
+  }
+}
+
+template <typename T, bool CONSTANT>
+T *numeric_column_data(const Column &column, std::vector<T> &buffer, int rows)
+{
+  if (column_matches_type<T>(column)) {
+    return reinterpret_cast<T *>(column.data());
+  }
+
+  const int value_count = CONSTANT ? 1 : rows;
+  buffer.resize(value_count);
+  for (int i = 0; i < value_count; ++i) {
+    buffer[i] = numeric_column_value<T>(column, i);
+  }
+  return buffer.data();
+}
+
 template <typename JiebaType>
 auto invoke_cut(const JiebaType &jieba, const string &text, vector<string> &out, bool hmm, int)
     -> decltype(jieba.Cut(text, out, hmm), void())
@@ -1459,9 +1506,13 @@ AttrType ArithmeticExpr::value_type() const
     return AttrType::FLOATS;
   }
 
-  // 其余运算：双 INT 产出 INT，否则 FLOAT
+  // 其余运算：保留整数宽度，避免 BIGINT 列在向量化算术中被当作 FLOAT/INT 处理
   if ((left_->value_type() == AttrType::INTS) && (right_->value_type() == AttrType::INTS)) {
     return AttrType::INTS;
+  }
+  if ((left_->value_type() == AttrType::BIGINTS || left_->value_type() == AttrType::INTS) &&
+      (right_->value_type() == AttrType::BIGINTS || right_->value_type() == AttrType::INTS)) {
+    return AttrType::BIGINTS;
   }
 
   return AttrType::FLOATS;
@@ -1537,23 +1588,14 @@ RC ArithmeticExpr::execute_calc(
       // 一元负号，仅使用左列
       if (attr_type == AttrType::INTS) {
         unary_operator<LEFT_CONSTANT, int, NegateOperator>((int *)left.data(), (int *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::BIGINTS) {
+        std::vector<int64_t> left_buf;
+        int64_t *            lptr = numeric_column_data<int64_t, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        unary_operator<LEFT_CONSTANT, int64_t, NegateOperator>(lptr, (int64_t *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
-        // 保证输入视图为 float
         std::vector<float> left_buf;
-        const float *      lptr = nullptr;
-        if (left.attr_type() == AttrType::FLOATS) {
-          lptr = reinterpret_cast<const float *>(left.data());
-        } else {
-          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
-          if (LEFT_CONSTANT) {
-            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(left.data());
-            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
-          }
-          lptr = left_buf.data();
-        }
-        unary_operator<LEFT_CONSTANT, float, NegateOperator>(const_cast<float *>(lptr), (float *)result.data(), result.capacity());
+        float *            lptr = numeric_column_data<float, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        unary_operator<LEFT_CONSTANT, float, NegateOperator>(lptr, (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -1562,41 +1604,20 @@ RC ArithmeticExpr::execute_calc(
       if (attr_type == AttrType::INTS) {
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, AddOperator>(
             (int *)left.data(), (int *)right.data(), (int *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::BIGINTS) {
+        std::vector<int64_t> left_buf;
+        std::vector<int64_t> right_buf;
+        int64_t *            lptr = numeric_column_data<int64_t, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        int64_t *            rptr = numeric_column_data<int64_t, RIGHT_CONSTANT>(right, right_buf, result.capacity());
+        binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int64_t, AddOperator>(
+            lptr, rptr, (int64_t *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
-        // 准备浮点视图：当输入列为 INT 时，先转成对应的 FLOAT 缓冲区
         std::vector<float> left_buf;
         std::vector<float> right_buf;
-        const float *      lptr = nullptr;
-        const float *      rptr = nullptr;
-
-        if (left.attr_type() == AttrType::FLOATS) {
-          lptr = reinterpret_cast<const float *>(left.data());
-        } else {
-          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
-          if (LEFT_CONSTANT) {
-            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(left.data());
-            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
-          }
-          lptr = left_buf.data();
-        }
-
-        if (right.attr_type() == AttrType::FLOATS) {
-          rptr = reinterpret_cast<const float *>(right.data());
-        } else {
-          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
-          if (RIGHT_CONSTANT) {
-            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(right.data());
-            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
-          }
-          rptr = right_buf.data();
-        }
-
+        float *            lptr = numeric_column_data<float, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        float *            rptr = numeric_column_data<float, RIGHT_CONSTANT>(right, right_buf, result.capacity());
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, AddOperator>(
-            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
+            lptr, rptr, (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -1605,37 +1626,20 @@ RC ArithmeticExpr::execute_calc(
       if (attr_type == AttrType::INTS) {
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, SubtractOperator>(
             (int *)left.data(), (int *)right.data(), (int *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::BIGINTS) {
+        std::vector<int64_t> left_buf;
+        std::vector<int64_t> right_buf;
+        int64_t *            lptr = numeric_column_data<int64_t, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        int64_t *            rptr = numeric_column_data<int64_t, RIGHT_CONSTANT>(right, right_buf, result.capacity());
+        binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int64_t, SubtractOperator>(
+            lptr, rptr, (int64_t *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
         std::vector<float> left_buf;
         std::vector<float> right_buf;
-        const float *      lptr = nullptr;
-        const float *      rptr = nullptr;
-        if (left.attr_type() == AttrType::FLOATS) {
-          lptr = reinterpret_cast<const float *>(left.data());
-        } else {
-          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
-          if (LEFT_CONSTANT) {
-            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(left.data());
-            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
-          }
-          lptr = left_buf.data();
-        }
-        if (right.attr_type() == AttrType::FLOATS) {
-          rptr = reinterpret_cast<const float *>(right.data());
-        } else {
-          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
-          if (RIGHT_CONSTANT) {
-            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(right.data());
-            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
-          }
-          rptr = right_buf.data();
-        }
+        float *            lptr = numeric_column_data<float, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        float *            rptr = numeric_column_data<float, RIGHT_CONSTANT>(right, right_buf, result.capacity());
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, SubtractOperator>(
-            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
+            lptr, rptr, (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -1644,37 +1648,20 @@ RC ArithmeticExpr::execute_calc(
       if (attr_type == AttrType::INTS) {
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int, MultiplyOperator>(
             (int *)left.data(), (int *)right.data(), (int *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::BIGINTS) {
+        std::vector<int64_t> left_buf;
+        std::vector<int64_t> right_buf;
+        int64_t *            lptr = numeric_column_data<int64_t, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        int64_t *            rptr = numeric_column_data<int64_t, RIGHT_CONSTANT>(right, right_buf, result.capacity());
+        binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, int64_t, MultiplyOperator>(
+            lptr, rptr, (int64_t *)result.data(), result.capacity());
       } else if (attr_type == AttrType::FLOATS) {
         std::vector<float> left_buf;
         std::vector<float> right_buf;
-        const float *      lptr = nullptr;
-        const float *      rptr = nullptr;
-        if (left.attr_type() == AttrType::FLOATS) {
-          lptr = reinterpret_cast<const float *>(left.data());
-        } else {
-          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
-          if (LEFT_CONSTANT) {
-            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(left.data());
-            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
-          }
-          lptr = left_buf.data();
-        }
-        if (right.attr_type() == AttrType::FLOATS) {
-          rptr = reinterpret_cast<const float *>(right.data());
-        } else {
-          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
-          if (RIGHT_CONSTANT) {
-            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(right.data());
-            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
-          }
-          rptr = right_buf.data();
-        }
+        float *            lptr = numeric_column_data<float, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        float *            rptr = numeric_column_data<float, RIGHT_CONSTANT>(right, right_buf, result.capacity());
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, MultiplyOperator>(
-            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
+            lptr, rptr, (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -1686,34 +1673,10 @@ RC ArithmeticExpr::execute_calc(
       } else if (attr_type == AttrType::FLOATS) {
         std::vector<float> left_buf;
         std::vector<float> right_buf;
-        const float *      lptr = nullptr;
-        const float *      rptr = nullptr;
-        if (left.attr_type() == AttrType::FLOATS) {
-          lptr = reinterpret_cast<const float *>(left.data());
-        } else {
-          left_buf.resize(LEFT_CONSTANT ? 1 : left.count());
-          if (LEFT_CONSTANT) {
-            left_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(left.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(left.data());
-            for (int i = 0; i < left.count(); ++i) left_buf[i] = static_cast<float>(src[i]);
-          }
-          lptr = left_buf.data();
-        }
-        if (right.attr_type() == AttrType::FLOATS) {
-          rptr = reinterpret_cast<const float *>(right.data());
-        } else {
-          right_buf.resize(RIGHT_CONSTANT ? 1 : right.count());
-          if (RIGHT_CONSTANT) {
-            right_buf[0] = static_cast<float>(*reinterpret_cast<const int *>(right.data()));
-          } else {
-            auto src = reinterpret_cast<const int *>(right.data());
-            for (int i = 0; i < right.count(); ++i) right_buf[i] = static_cast<float>(src[i]);
-          }
-          rptr = right_buf.data();
-        }
+        float *            lptr = numeric_column_data<float, LEFT_CONSTANT>(left, left_buf, result.capacity());
+        float *            rptr = numeric_column_data<float, RIGHT_CONSTANT>(right, right_buf, result.capacity());
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, DivideOperator>(
-            const_cast<float *>(lptr), const_cast<float *>(rptr), (float *)result.data(), result.capacity());
+            lptr, rptr, (float *)result.data(), result.capacity());
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -1804,7 +1767,7 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
 
   if (arithmetic_type_ == Type::NEGATIVE) {
     const bool left_const = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
-    column.init(target_type, left_column.attr_len(), left_column.count());
+    column.init(target_type, value_length(), left_column.count());
     column.set_column_type(left_const ? Column::Type::CONSTANT_COLUMN : Column::Type::NORMAL_COLUMN);
     if (left_const) {
       rc = execute_calc<true, false>(left_column, right_column, column, arithmetic_type_, target_type);
@@ -1817,7 +1780,7 @@ RC ArithmeticExpr::calc_column(const Column &left_column, const Column &right_co
     const bool left_const  = left_column.column_type() == Column::Type::CONSTANT_COLUMN;
     const bool right_const = right_column.column_type() == Column::Type::CONSTANT_COLUMN;
     const int  rows        = std::max(left_column.count(), right_column.count());
-    column.init(target_type, left_column.attr_len(), rows);
+    column.init(target_type, value_length(), rows);
     if (left_const && right_const) {
       column.set_column_type(Column::Type::CONSTANT_COLUMN);
       rc = execute_calc<true, true>(left_column, right_column, column, arithmetic_type_, target_type);

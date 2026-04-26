@@ -146,6 +146,17 @@ static unique_ptr<StarExpr> make_star_from_unbound_field(const Expression *expr)
   return make_unique<StarExpr>(uf->table_name());
 }
 
+static bool select_list_is_only_star(const vector<unique_ptr<Expression>> &expressions)
+{
+  if (expressions.size() != 1 || expressions[0] == nullptr) {
+    return false;
+  }
+  if (expressions[0]->type() == ExprType::STAR) {
+    return true;
+  }
+  return make_star_from_unbound_field(expressions[0].get()) != nullptr;
+}
+
 static bool view_definition_can_flatten(Db *db, const SelectSqlNode &selection)
 {
   if (selection.limit >= 0 || !selection.order_by.empty() || !selection.set_operations.empty()) {
@@ -682,7 +693,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           return RC::SUCCESS;
         }
 
-        if (view_definition_can_flatten(db, node->selection)) {
+        if (!select_list_is_only_star(select_sql.expressions) && view_definition_can_flatten(db, node->selection)) {
           // 1) 展开 FROM。外层 WHERE/GROUP/ORDER 仍按视图输出列解析，需先重写，再并入视图自身条件。
           select_sql.relations.swap(node->selection.relations);
           // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
@@ -699,9 +710,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
               db, select_sql.relations, node->selection.expressions, view_fields, name_to_relattr, name_to_expr);
 
           // 2) 如果是 SELECT *，用视图 SELECT 列替换
-          bool only_star = (select_sql.expressions.size() == 1) &&
-                           (select_sql.expressions[0] != nullptr) &&
-                           (select_sql.expressions[0]->type() == ExprType::STAR);
+          bool only_star = select_list_is_only_star(select_sql.expressions);
           if (only_star) {
             for (auto &gexpr : select_sql.group_by) {
               RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
@@ -827,7 +836,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       break;
     }
 
-    if (!view_definition_can_flatten(db, node->selection)) {
+    if (select_list_is_only_star(select_sql.expressions) || !view_definition_can_flatten(db, node->selection)) {
       LOG_INFO("Nested view '%s' is not safe to flatten", nested_view->name());
       break;
     }
@@ -858,9 +867,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
 
     // 处理表达式映射和重写
-    bool only_star = (select_sql.expressions.size() == 1) &&
-                     (select_sql.expressions[0] != nullptr) &&
-                     (select_sql.expressions[0]->type() == ExprType::STAR);
+    bool only_star = select_list_is_only_star(select_sql.expressions);
     unordered_map<string, pair<string, string>> name_to_relattr;
     unordered_map<string, unique_ptr<Expression>> name_to_expr;
     const vector<string> &nested_view_fields = nested_view->view_fields();
