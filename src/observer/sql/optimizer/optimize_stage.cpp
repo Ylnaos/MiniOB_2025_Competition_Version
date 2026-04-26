@@ -172,7 +172,27 @@ RC OptimizeStage::generate_physical_plan(
     LOG_TRACE("chunk iterator plan contains aggregation");
   }
 
-  if (!plan_has_subquery && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+  std::function<bool(LogicalOperator &)> contains_tuple_only_operator = [&](LogicalOperator &op) -> bool {
+    switch (op.type()) {
+      case LogicalOperatorType::JOIN:
+      case LogicalOperatorType::UNION:
+      case LogicalOperatorType::SUBQUERY:
+        return true;
+      default:
+        break;
+    }
+
+    for (auto &child : op.children()) {
+      if (child && contains_tuple_only_operator(*child)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const bool plan_needs_tuple_iterator = plan_has_subquery || contains_tuple_only_operator(*logical_operator);
+
+  if (!plan_needs_tuple_iterator && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
       LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);
