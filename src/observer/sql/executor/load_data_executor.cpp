@@ -126,6 +126,20 @@ bool parse_csv_line(std::istream &input, std::vector<std::string> &row, char ter
   }
 }
 
+static bool is_blank_csv_record(const std::vector<std::string> &row)
+{
+  if (row.empty()) {
+    return true;
+  }
+
+  for (const std::string &field : row) {
+    if (!common::is_blank(field.c_str())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 RC LoadDataExecutor::execute(SQLStageEvent *sql_event)
 {
   SqlResult    *sql_result = sql_event->session_event()->sql_result();
@@ -230,6 +244,9 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
 
     while (parse_csv_line(fs, file_values, terminated, enclosed)) {
       if (file_values.size() < static_cast<size_t>(field_num)) {
+        if (is_blank_csv_record(file_values)) {
+          continue;
+        }
         rc = RC::SCHEMA_FIELD_MISSING;
         break;
       }
@@ -251,6 +268,7 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
       }
 
       if (!parse_success) {
+        rc = RC::SUCCESS;
         continue;
       }
 
@@ -295,6 +313,9 @@ void LoadDataExecutor::load_data(Table *table, const char *file_name, char termi
     vector<Value> record_values(field_num);
 
     while (parse_csv_line(fs, file_values, terminated, enclosed)) {
+      if (file_values.size() < static_cast<size_t>(field_num) && is_blank_csv_record(file_values)) {
+        continue;
+      }
       stringstream errmsg;
       rc = insert_record_from_file(table, file_values, record_values, errmsg);
       if (rc != RC::SUCCESS) {
