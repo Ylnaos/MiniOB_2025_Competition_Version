@@ -49,17 +49,12 @@ void strip(string &str)
 {
   size_t head = 0;
 
-  while (head < str.size() && isspace(static_cast<unsigned char>(str[head]))) {
+  while (isspace(str[head])) {
     ++head;
   }
 
-  if (head == str.size()) {
-    str.clear();
-    return;
-  }
-
   size_t tail = str.size() - 1;
-  while (tail > head && isspace(static_cast<unsigned char>(str[tail]))) {
+  while (isspace(str[tail]) && tail != head) {
     --tail;
   }
 

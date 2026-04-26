@@ -85,7 +85,7 @@ static unique_ptr<Expression> condition_operand_to_expr(const ConditionSqlNode &
 {
   const unique_ptr<Expression> &expr = left ? condition.left_expr : condition.right_expr;
   if (expr) {
-    return copy_expression_with_metadata(expr);
+    return expr->copy();
   }
 
   const int is_attr = left ? condition.left_is_attr : condition.right_is_attr;
@@ -140,33 +140,6 @@ static void apply_view_output_field_names(SelectStmt *select_stmt, const vector<
     output_exprs[i]->set_alias(view_field_names[i]);
     output_exprs[i]->set_name(view_field_names[i]);
   }
-}
-
-static RC prepare_view_select_node(
-    const View *view, ParsedSqlResult &parsed, unique_ptr<ParsedSqlNode> &cached_node, ParsedSqlNode *&node)
-{
-  if (view == nullptr) {
-    return RC::INVALID_ARGUMENT;
-  }
-
-  node = nullptr;
-  if (view->select_node() != nullptr) {
-    cached_node = copy_parsed_sql_node(*view->select_node());
-    node        = cached_node.get();
-  } else {
-    RC parse_rc = parse(view->select_sql(), &parsed);
-    if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
-      LOG_WARN("parse view select failed. view=%s, sql=%s", view->name(), view->select_sql());
-      return RC::SQL_SYNTAX;
-    }
-    node = parsed.sql_nodes()[0].get();
-  }
-
-  if (node == nullptr || node->flag != SCF_SELECT) {
-    LOG_WARN("view definition is not a SELECT. view=%s", view->name());
-    return RC::SQL_SYNTAX;
-  }
-  return RC::SUCCESS;
 }
 
 static bool relation_matches_star(const RelationSqlNode &rel, const char *star_tbl)
@@ -250,10 +223,12 @@ static void collect_star_columns(
     }
 
     ParsedSqlResult parsed;
-    unique_ptr<ParsedSqlNode> cached_node;
-    ParsedSqlNode *node = nullptr;
-    RC prepare_rc = prepare_view_select_node(view, parsed, cached_node, node);
-    if (OB_FAIL(prepare_rc)) {
+    RC parse_rc = parse(view->select_sql(), &parsed);
+    if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+      continue;
+    }
+    ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+    if (node->flag != SCF_SELECT) {
       continue;
     }
 
@@ -323,7 +298,7 @@ static vector<unique_ptr<Expression>> copy_view_output_expressions(
         output_index++;
       }
     } else {
-      unique_ptr<Expression> copied = copy_expression_with_metadata(expr);
+      unique_ptr<Expression> copied = expr->copy();
       string fallback;
       if (copied->alias() != nullptr && copied->alias()[0] != '\0') {
         fallback = copied->alias();
@@ -401,7 +376,7 @@ static void build_view_output_mapping(
         string key = label;
         common::str_to_lower(key);
         // 复制表达式用于后续重写
-        name_to_expr[key] = copy_expression_with_metadata(expr);
+        name_to_expr[key] = expr->copy();
       }
       output_index++;
     }
@@ -419,8 +394,7 @@ static void build_view_output_mapping(
 static RC rewrite_unqualified_fields(
     unique_ptr<Expression> &expr,
     const unordered_map<string, pair<string, string>> &name_to_relattr,
-    const unordered_map<string, unique_ptr<Expression>> &name_to_expr,
-    const vector<string> &view_qualifiers = {})
+    const unordered_map<string, unique_ptr<Expression>> &name_to_expr)
 {
   if (!expr) return RC::SUCCESS;
 
@@ -429,16 +403,7 @@ static RC rewrite_unqualified_fields(
       auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
       const char *tbl = uf->table_name();
       const char *col = uf->field_name();
-      bool matches_view_qualifier = false;
-      if (tbl != nullptr && tbl[0] != '\0') {
-        for (const string &qualifier : view_qualifiers) {
-          if (!qualifier.empty() && 0 == strcasecmp(tbl, qualifier.c_str())) {
-            matches_view_qualifier = true;
-            break;
-          }
-        }
-      }
-      if ((tbl == nullptr || tbl[0] == '\0' || matches_view_qualifier) && col != nullptr && col[0] != '\0') {
+      if ((tbl == nullptr || tbl[0] == '\0') && col != nullptr && col[0] != '\0') {
         string key = string(col);
         common::str_to_lower(key);
         string output_label = expr->alias() != nullptr ? string(expr->alias()) : string(col);
@@ -473,20 +438,20 @@ static RC rewrite_unqualified_fields(
 
     case ExprType::UNBOUND_AGGREGATION: {
       auto *agg = static_cast<UnboundAggregateExpr *>(expr.get());
-      RC rc = rewrite_unqualified_fields(agg->child(), name_to_relattr, name_to_expr, view_qualifiers);
+      RC rc = rewrite_unqualified_fields(agg->child(), name_to_relattr, name_to_expr);
       // 如果子表达式重写失败（如字段不存在），应该正确传递错误
       return rc;
     } break;
 
     case ExprType::ARITHMETIC: {
       auto *arith = static_cast<ArithmeticExpr *>(expr.get());
-      RC rc = rewrite_unqualified_fields(arith->left(), name_to_relattr, name_to_expr, view_qualifiers);
+      RC rc = rewrite_unqualified_fields(arith->left(), name_to_relattr, name_to_expr);
       if (OB_FAIL(rc)) {
         LOG_WARN("Failed to rewrite left expression of arithmetic");
         return rc;
       }
       if (arith->right()) {
-        rc = rewrite_unqualified_fields(arith->right(), name_to_relattr, name_to_expr, view_qualifiers);
+        rc = rewrite_unqualified_fields(arith->right(), name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) {
           LOG_WARN("Failed to rewrite right expression of arithmetic");
           return rc;
@@ -497,16 +462,16 @@ static RC rewrite_unqualified_fields(
 
     case ExprType::COMPARISON: {
       auto *cmp = static_cast<ComparisonExpr *>(expr.get());
-      RC rc = rewrite_unqualified_fields(cmp->left(), name_to_relattr, name_to_expr, view_qualifiers);
+      RC rc = rewrite_unqualified_fields(cmp->left(), name_to_relattr, name_to_expr);
       if (OB_FAIL(rc)) return rc;
-      rc = rewrite_unqualified_fields(cmp->right(), name_to_relattr, name_to_expr, view_qualifiers);
+      rc = rewrite_unqualified_fields(cmp->right(), name_to_relattr, name_to_expr);
       return rc;
     } break;
 
     case ExprType::CONJUNCTION: {
       auto *conj = static_cast<ConjunctionExpr *>(expr.get());
       for (auto &child : conj->children()) {
-        RC rc = rewrite_unqualified_fields(child, name_to_relattr, name_to_expr, view_qualifiers);
+        RC rc = rewrite_unqualified_fields(child, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) return rc;
       }
       return RC::SUCCESS;
@@ -514,19 +479,19 @@ static RC rewrite_unqualified_fields(
 
     case ExprType::CAST: {
       auto *c = static_cast<CastExpr *>(expr.get());
-      return rewrite_unqualified_fields(c->child(), name_to_relattr, name_to_expr, view_qualifiers);
+      return rewrite_unqualified_fields(c->child(), name_to_relattr, name_to_expr);
     } break;
 
     case ExprType::FUNCTION: {
       auto *fn = static_cast<ScalarFunctionExpr *>(expr.get());
-      return rewrite_unqualified_fields(fn->child(), name_to_relattr, name_to_expr, view_qualifiers);
+      return rewrite_unqualified_fields(fn->child(), name_to_relattr, name_to_expr);
     } break;
 
     case ExprType::IN_LIST: {
       auto *in = static_cast<InExpr *>(expr.get());
-      RC rc = rewrite_unqualified_fields(in->test_expr(), name_to_relattr, name_to_expr, view_qualifiers);
+      RC rc = rewrite_unqualified_fields(in->test_expr(), name_to_relattr, name_to_expr);
       if (OB_FAIL(rc)) return rc;
-      rc = rewrite_unqualified_fields(in->set_expr(), name_to_relattr, name_to_expr, view_qualifiers);
+      rc = rewrite_unqualified_fields(in->set_expr(), name_to_relattr, name_to_expr);
       return rc;
     } break;
 
@@ -562,17 +527,20 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   if (select_sql.relations.size() == 1) {
     const RelationSqlNode &rel = select_sql.relations[0];
     const char *rel_name = rel.relation_name.c_str();
-    string view_relation_name = rel.relation_name;
     string view_alias = rel.alias;  // 保存视图的别名（如果有）
-    if (view_alias.empty() && db->find_table(rel_name) == nullptr) {
+    if (db->find_table(rel_name) == nullptr) {
       View *view = db->find_view(rel_name);
-      if (view != nullptr) {
+      if (view != nullptr) {  // 移除 rel.alias.empty() 限制，支持带别名的视图展开
         ParsedSqlResult parsed;
-        unique_ptr<ParsedSqlNode> cached_node;
-        ParsedSqlNode *node = nullptr;
-        RC prepare_rc = prepare_view_select_node(view, parsed, cached_node, node);
-        if (OB_FAIL(prepare_rc)) {
-          return prepare_rc;
+        RC parse_rc = parse(view->select_sql(), &parsed);
+        if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+          LOG_WARN("parse view select failed. view=%s, sql=%s", view->name(), view->select_sql());
+          return RC::SQL_SYNTAX;
+        }
+        ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+        if (node->flag != SCF_SELECT) {
+          LOG_WARN("view definition is not a SELECT. view=%s", view->name());
+          return RC::SQL_SYNTAX;
         }
 
         // 检查视图定义中是否包含聚合函数或GROUP BY
@@ -612,7 +580,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           // 这是必需的，因为执行器需要明确的AggregateExpr类型
           vector<unique_ptr<Expression>> bound_exprs;
           for (auto &expr : select_sql.expressions) {
-            unique_ptr<Expression> copied = copy_expression_with_metadata(expr);
+            unique_ptr<Expression> copied = expr->copy();
             if (copied->type() == ExprType::STAR) {
               const auto &inner_exprs = inner_select->query_expressions();
               for (size_t inner_idx = 0; inner_idx < inner_exprs.size(); inner_idx++) {
@@ -738,8 +706,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           return RC::SUCCESS;
         }
 
-        if (!select_list_is_only_star(select_sql.expressions) &&
-            view_definition_can_flatten(db, node->selection)) {
+        if (!select_list_is_only_star(select_sql.expressions) && view_definition_can_flatten(db, node->selection)) {
           // 1) 展开 FROM。外层 WHERE/GROUP/ORDER 仍按视图输出列解析，需先重写，再并入视图自身条件。
           select_sql.relations.swap(node->selection.relations);
           // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
@@ -752,10 +719,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           unordered_map<string, pair<string, string>> name_to_relattr;
           unordered_map<string, unique_ptr<Expression>> name_to_expr;
           const vector<string> &view_fields = view->view_fields();
-          vector<string> view_qualifiers = {view_relation_name};
-          if (!view_alias.empty()) {
-            view_qualifiers.emplace_back(view_alias);
-          }
           build_view_output_mapping(
               db, select_sql.relations, node->selection.expressions, view_fields, name_to_relattr, name_to_expr);
 
@@ -763,15 +726,15 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           bool only_star = select_list_is_only_star(select_sql.expressions);
           if (only_star) {
             for (auto &gexpr : select_sql.group_by) {
-              RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr, view_qualifiers);
+              RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
               if (OB_FAIL(rc)) return rc;
             }
             for (auto &item : select_sql.order_by) {
-              RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr, view_qualifiers);
+              RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
               if (OB_FAIL(rc)) return rc;
             }
             if (select_sql.where_expr) {
-              RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr, view_qualifiers);
+              RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
               if (OB_FAIL(rc)) {
                 LOG_WARN("Failed to rewrite WHERE condition for view '%s'", view->name());
                 return rc;
@@ -789,21 +752,21 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           } else {
             // 3) 非 * 的情形：根据视图输出列名映射，重写外层未限定字段
             for (auto &outer_expr : select_sql.expressions) {
-              RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr, view_qualifiers);
+              RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
               if (OB_FAIL(rc)) return rc;
             }
             // group by / order by 同样做一次字段重写，出现未输出列一律报错
             for (auto &gexpr : select_sql.group_by) {
-              RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr, view_qualifiers);
+              RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
               if (OB_FAIL(rc)) return rc;
             }
             for (auto &item : select_sql.order_by) {
-              RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr, view_qualifiers);
+              RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
               if (OB_FAIL(rc)) return rc;
             }
             // 重写WHERE条件中的字段
             if (select_sql.where_expr) {
-              RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr, view_qualifiers);
+              RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
               if (OB_FAIL(rc)) {
                 LOG_WARN("Failed to rewrite WHERE condition for view '%s'", view->name());
                 return rc;
@@ -840,13 +803,9 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
 
     string nested_view_alias = select_sql.relations[0].alias;  // 保存别名以传递给内部表
-    string nested_view_name = select_sql.relations[0].relation_name;
     const char *rel_name = select_sql.relations[0].relation_name.c_str();
     // 如果是物理表，退出循环
     if (db->find_table(rel_name) != nullptr) {
-      break;
-    }
-    if (!nested_view_alias.empty()) {
       break;
     }
 
@@ -860,11 +819,15 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
 
     // 解析嵌套视图的SQL
     ParsedSqlResult parsed;
-    unique_ptr<ParsedSqlNode> cached_node;
-    ParsedSqlNode *node = nullptr;
-    RC prepare_rc = prepare_view_select_node(nested_view, parsed, cached_node, node);
-    if (OB_FAIL(prepare_rc)) {
-      return prepare_rc;
+    RC parse_rc = parse(nested_view->select_sql(), &parsed);
+    if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+      LOG_WARN("parse nested view select failed. view=%s, sql=%s", nested_view->name(), nested_view->select_sql());
+      return RC::SQL_SYNTAX;
+    }
+    ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+    if (node->flag != SCF_SELECT) {
+      LOG_WARN("nested view definition is not a SELECT. view=%s", nested_view->name());
+      return RC::SQL_SYNTAX;
     }
 
     // 检查嵌套视图是否包含聚合函数或GROUP BY
@@ -886,8 +849,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       break;
     }
 
-    if (select_list_is_only_star(select_sql.expressions) ||
-        !view_definition_can_flatten(db, node->selection)) {
+    if (select_list_is_only_star(select_sql.expressions) || !view_definition_can_flatten(db, node->selection)) {
       LOG_INFO("Nested view '%s' is not safe to flatten", nested_view->name());
       break;
     }
@@ -922,24 +884,20 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     unordered_map<string, pair<string, string>> name_to_relattr;
     unordered_map<string, unique_ptr<Expression>> name_to_expr;
     const vector<string> &nested_view_fields = nested_view->view_fields();
-    vector<string> nested_view_qualifiers = {nested_view_name};
-    if (!nested_view_alias.empty()) {
-      nested_view_qualifiers.emplace_back(nested_view_alias);
-    }
     build_view_output_mapping(db, select_sql.relations, node->selection.expressions,
                               nested_view_fields, name_to_relattr, name_to_expr);
     if (only_star) {
       // SELECT * 的情况：按嵌套视图输出列替换，显式列名列表需要按位置生效
       for (auto &gexpr : select_sql.group_by) {
-        RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr, nested_view_qualifiers);
+        RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) return rc;
       }
       for (auto &item : select_sql.order_by) {
-        RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr, nested_view_qualifiers);
+        RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) return rc;
       }
       if (select_sql.where_expr) {
-        RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr, nested_view_qualifiers);
+        RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) {
           LOG_WARN("Failed to rewrite WHERE condition for nested view '%s'", nested_view->name());
           return rc;
@@ -956,23 +914,23 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     } else {
       // 非 * 的情况：根据嵌套视图输出列名映射，重写外层未限定字段
       for (auto &outer_expr : select_sql.expressions) {
-        RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr, nested_view_qualifiers);
+        RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) {
           LOG_WARN("Failed to rewrite field for nested view '%s'", nested_view->name());
           return rc;
         }
       }
       for (auto &gexpr : select_sql.group_by) {
-        RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr, nested_view_qualifiers);
+        RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) return rc;
       }
       for (auto &item : select_sql.order_by) {
-        RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr, nested_view_qualifiers);
+        RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) return rc;
       }
       // 重写WHERE条件中的字段
       if (select_sql.where_expr) {
-        RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr, nested_view_qualifiers);
+        RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) {
           LOG_WARN("Failed to rewrite WHERE condition for nested view '%s'", nested_view->name());
           return rc;
@@ -1014,12 +972,17 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
         LOG_INFO("Found view '%s' in FROM clause, treating as derived table with alias '%s'",
                  table_name, r.alias.empty() ? table_name : r.alias.c_str());
 
+        // 解析视图的SQL
         ParsedSqlResult parsed;
-        unique_ptr<ParsedSqlNode> cached_node;
-        ParsedSqlNode *node = nullptr;
-        RC prepare_rc = prepare_view_select_node(view, parsed, cached_node, node);
-        if (OB_FAIL(prepare_rc)) {
-          return prepare_rc;
+        RC parse_rc = parse(view->select_sql(), &parsed);
+        if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+          LOG_WARN("parse view select failed. view=%s, sql=%s", view->name(), view->select_sql());
+          return RC::SQL_SYNTAX;
+        }
+        ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+        if (node->flag != SCF_SELECT) {
+          LOG_WARN("view definition is not a SELECT. view=%s", view->name());
+          return RC::SQL_SYNTAX;
         }
 
         // 递归创建视图的SelectStmt

@@ -10,7 +10,6 @@ See the Mulan PSL v2 for more details. */
 
 #pragma once
 
-#include "sql/parser/parse_defs.h"
 #include "sql/stmt/stmt.h"
 
 class Db;
@@ -32,11 +31,10 @@ public:
   const std::string &view_name() const { return view_name_; }
   const std::string &view_select_sql() const { return view_select_sql_; }
   const std::vector<std::string> &view_fields() const { return view_fields_; }
-  const ParsedSqlNode *select_node() const { return select_node_.get(); }
 
 private:
   std::string view_name_;
   std::string view_select_sql_;
   std::vector<std::string> view_fields_;
-  std::unique_ptr<ParsedSqlNode> select_node_;
 };
+

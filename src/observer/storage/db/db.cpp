@@ -1230,11 +1230,7 @@ RC Db::open_all_views()
   return RC::SUCCESS;
 }
 
-RC Db::create_view(
-    const char *view_name,
-    const char *select_sql,
-    const vector<string> &view_fields,
-    const ParsedSqlNode *select_node)
+RC Db::create_view(const char *view_name, const char *select_sql, const vector<string> &view_fields)
 {
   if (is_blank(view_name) || is_blank(select_sql)) return RC::INVALID_ARGUMENT;
   if (opened_tables_.count(view_name) > 0) return RC::SCHEMA_TABLE_EXIST;
@@ -1269,9 +1265,6 @@ RC Db::create_view(
   if (OB_FAIL(rc)) {
     delete view;
     return rc;
-  }
-  if (select_node != nullptr) {
-    view->set_select_node(copy_parsed_sql_node(*select_node));
   }
   opened_views_[view_name] = view;
   LOG_INFO("Create view success. name=%s", view_name);
