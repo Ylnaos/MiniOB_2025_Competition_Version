@@ -111,7 +111,18 @@ struct ViewStarColumn
 {
   string relation_name;
   string field_name;
+  string output_name;
 };
+
+static string view_output_label(const vector<string> &view_field_names, int output_index, const string &fallback)
+{
+  if (output_index >= 0 &&
+      output_index < static_cast<int>(view_field_names.size()) &&
+      !view_field_names[output_index].empty()) {
+    return view_field_names[output_index];
+  }
+  return fallback;
+}
 
 static bool relation_matches_star(const RelationSqlNode &rel, const char *star_tbl)
 {
@@ -120,6 +131,19 @@ static bool relation_matches_star(const RelationSqlNode &rel, const char *star_t
   }
   return (!rel.alias.empty() && 0 == strcasecmp(rel.alias.c_str(), star_tbl)) ||
          0 == strcasecmp(rel.relation_name.c_str(), star_tbl);
+}
+
+static unique_ptr<StarExpr> make_star_from_unbound_field(const Expression *expr)
+{
+  if (expr == nullptr || expr->type() != ExprType::UNBOUND_FIELD) {
+    return nullptr;
+  }
+  const auto *uf = static_cast<const UnboundFieldExpr *>(expr);
+  const char *field_name = uf->field_name();
+  if (field_name == nullptr || 0 != strcmp(field_name, "*")) {
+    return nullptr;
+  }
+  return make_unique<StarExpr>(uf->table_name());
 }
 
 static void collect_star_columns(
@@ -133,34 +157,71 @@ static void collect_star_columns(
     }
 
     Table *tbl = db->find_table(rel.relation_name.c_str());
-    if (tbl == nullptr) {
+    if (tbl != nullptr) {
+      const TableMeta &tm = tbl->table_meta();
+      const string     qn = rel.alias.empty() ? rel.relation_name : rel.alias;
+      for (int i = tm.sys_field_num(); i < tm.field_num(); ++i) {
+        const FieldMeta *fm = tm.field(i);
+        if (fm == nullptr) {
+          continue;
+        }
+        columns.push_back({qn, fm->name(), fm->name()});
+      }
+
+      if (star_tbl != nullptr && star_tbl[0] != '\0') {
+        break;
+      }
       continue;
     }
 
-    const TableMeta &tm = tbl->table_meta();
-    const string     qn = rel.alias.empty() ? rel.relation_name : rel.alias;
-    for (int i = tm.sys_field_num(); i < tm.field_num(); ++i) {
-      const FieldMeta *fm = tm.field(i);
-      if (fm == nullptr) {
+    View *view = db->find_view(rel.relation_name.c_str());
+    if (view == nullptr) {
+      continue;
+    }
+
+    ParsedSqlResult parsed;
+    RC parse_rc = parse(view->select_sql(), &parsed);
+    if (OB_FAIL(parse_rc) || parsed.sql_nodes().empty()) {
+      continue;
+    }
+    ParsedSqlNode *node = parsed.sql_nodes()[0].get();
+    if (node->flag != SCF_SELECT) {
+      continue;
+    }
+
+    const vector<string> &view_fields = view->view_fields();
+    int output_index = 0;
+    for (const auto &view_expr : node->selection.expressions) {
+      if (view_expr == nullptr) {
         continue;
       }
-      columns.push_back({qn, fm->name()});
+      unique_ptr<StarExpr> unbound_star = make_star_from_unbound_field(view_expr.get());
+      if (view_expr->type() == ExprType::STAR || unbound_star != nullptr) {
+        const StarExpr *star_expr = unbound_star != nullptr ?
+            unbound_star.get() : static_cast<const StarExpr *>(view_expr.get());
+        vector<ViewStarColumn> nested_columns;
+        collect_star_columns(db, node->selection.relations, star_expr, nested_columns);
+        for (const auto &column : nested_columns) {
+          string label = view_output_label(view_fields, output_index, column.output_name);
+          columns.push_back({column.relation_name, column.field_name, label});
+          output_index++;
+        }
+      } else if (view_expr->type() == ExprType::UNBOUND_FIELD) {
+        auto *uf = static_cast<UnboundFieldExpr *>(view_expr.get());
+        string fallback = view_expr->alias() && view_expr->alias()[0] != '\0' ?
+            string(view_expr->alias()) : string(uf->field_name());
+        string label = view_output_label(view_fields, output_index, fallback);
+        columns.push_back({uf->table_name(), uf->field_name(), label});
+        output_index++;
+      } else {
+        output_index++;
+      }
     }
 
     if (star_tbl != nullptr && star_tbl[0] != '\0') {
       break;
     }
   }
-}
-
-static string view_output_label(const vector<string> &view_field_names, int output_index, const string &fallback)
-{
-  if (output_index >= 0 &&
-      output_index < static_cast<int>(view_field_names.size()) &&
-      !view_field_names[output_index].empty()) {
-    return view_field_names[output_index];
-  }
-  return fallback;
 }
 
 static vector<unique_ptr<Expression>> copy_view_output_expressions(
@@ -177,11 +238,14 @@ static vector<unique_ptr<Expression>> copy_view_output_expressions(
       continue;
     }
 
-    if (expr->type() == ExprType::STAR) {
+    unique_ptr<StarExpr> unbound_star = make_star_from_unbound_field(expr.get());
+    if (expr->type() == ExprType::STAR || unbound_star != nullptr) {
+      const StarExpr *star_expr = unbound_star != nullptr ?
+          unbound_star.get() : static_cast<const StarExpr *>(expr.get());
       vector<ViewStarColumn> columns;
-      collect_star_columns(db, view_rels, static_cast<const StarExpr *>(expr.get()), columns);
+      collect_star_columns(db, view_rels, star_expr, columns);
       for (const auto &column : columns) {
-        string label = view_output_label(view_field_names, output_index, column.field_name);
+        string label = view_output_label(view_field_names, output_index, column.output_name);
         auto expanded = make_unique<UnboundFieldExpr>(column.relation_name, column.field_name);
         if (!label.empty()) {
           expanded->set_alias(label);
@@ -232,7 +296,20 @@ static void build_view_output_mapping(
     const auto &expr = view_exprs[i];
     if (expr == nullptr) continue;
 
-    if (expr->type() == ExprType::UNBOUND_FIELD) {
+    unique_ptr<StarExpr> unbound_star = make_star_from_unbound_field(expr.get());
+    if (expr->type() == ExprType::STAR || unbound_star != nullptr) {
+      const StarExpr *star_expr = unbound_star != nullptr ?
+          unbound_star.get() : static_cast<const StarExpr *>(expr.get());
+      vector<ViewStarColumn> columns;
+      collect_star_columns(db, view_rels, star_expr, columns);
+      for (const auto &column : columns) {
+        string label = view_output_label(view_field_names, output_index, column.output_name);
+        string key = label;
+        common::str_to_lower(key);
+        name_to_relattr[key] = {column.relation_name, column.field_name};
+        output_index++;
+      }
+    } else if (expr->type() == ExprType::UNBOUND_FIELD) {
       // 如果视图有定义列名，使用视图定义的列名；否则使用别名或字段名
       auto *uf = static_cast<UnboundFieldExpr *>(expr.get());
       string label = view_output_label(view_field_names,
@@ -242,16 +319,6 @@ static void build_view_output_mapping(
       common::str_to_lower(key);
       name_to_relattr[key] = {uf->table_name(), uf->field_name()};
       output_index++;
-    } else if (expr->type() == ExprType::STAR) {
-      vector<ViewStarColumn> columns;
-      collect_star_columns(db, view_rels, static_cast<const StarExpr *>(expr.get()), columns);
-      for (const auto &column : columns) {
-        string label = view_output_label(view_field_names, output_index, column.field_name);
-        string key = label;
-        common::str_to_lower(key);
-        name_to_relattr[key] = {column.relation_name, column.field_name};
-        output_index++;
-      }
     } else {
       // 复杂表达式：存储表达式副本,用于后续展开
       // 优先使用视图定义的列名，其次使用别名
@@ -773,9 +840,28 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     bool only_star = (select_sql.expressions.size() == 1) &&
                      (select_sql.expressions[0] != nullptr) &&
                      (select_sql.expressions[0]->type() == ExprType::STAR);
+    unordered_map<string, pair<string, string>> name_to_relattr;
+    unordered_map<string, unique_ptr<Expression>> name_to_expr;
+    const vector<string> &nested_view_fields = nested_view->view_fields();
+    build_view_output_mapping(db, select_sql.relations, node->selection.expressions,
+                              nested_view_fields, name_to_relattr, name_to_expr);
     if (only_star) {
       // SELECT * 的情况：按嵌套视图输出列替换，显式列名列表需要按位置生效
-      const vector<string> &nested_view_fields = nested_view->view_fields();
+      for (auto &gexpr : select_sql.group_by) {
+        RC rc = rewrite_unqualified_fields(gexpr, name_to_relattr, name_to_expr);
+        if (OB_FAIL(rc)) return rc;
+      }
+      for (auto &item : select_sql.order_by) {
+        RC rc = rewrite_unqualified_fields(item.expression, name_to_relattr, name_to_expr);
+        if (OB_FAIL(rc)) return rc;
+      }
+      if (select_sql.where_expr) {
+        RC rc = rewrite_unqualified_fields(select_sql.where_expr, name_to_relattr, name_to_expr);
+        if (OB_FAIL(rc)) {
+          LOG_WARN("Failed to rewrite WHERE condition for nested view '%s'", nested_view->name());
+          return rc;
+        }
+      }
       select_sql.expressions = copy_view_output_expressions(
           db, select_sql.relations, node->selection.expressions, nested_view_fields);
       if (!node->selection.group_by.empty() && select_sql.group_by.empty()) {
@@ -786,11 +872,6 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       }
     } else {
       // 非 * 的情况：根据嵌套视图输出列名映射，重写外层未限定字段
-      unordered_map<string, pair<string, string>> name_to_relattr;
-      unordered_map<string, unique_ptr<Expression>> name_to_expr;
-      const vector<string> &nested_view_fields = nested_view->view_fields();
-      build_view_output_mapping(db, select_sql.relations, node->selection.expressions,
-                                nested_view_fields, name_to_relattr, name_to_expr);
       for (auto &outer_expr : select_sql.expressions) {
         RC rc = rewrite_unqualified_fields(outer_expr, name_to_relattr, name_to_expr);
         if (OB_FAIL(rc)) {

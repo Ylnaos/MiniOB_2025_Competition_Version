@@ -24,6 +24,7 @@ See the Mulan PSL v2 for more details. */
 using namespace common;
 
 static constexpr int PAGE_HEADER_SIZE = (sizeof(PageHeader));
+static constexpr int PAX_PAGE_RECORD_CAPACITY_LIMIT = 2048;
 RecordPageHandler   *RecordPageHandler::create(StorageFormat format)
 {
   if (format == StorageFormat::ROW_FORMAT) {
@@ -336,6 +337,7 @@ RC RecordPageHandler::init_empty_page(DiskBufferPool &buffer_pool, LogHandler &l
   page_header_->record_size      = align8(record_size);
   page_header_->record_capacity  = page_record_capacity(
       BP_PAGE_DATA_SIZE, page_header_->record_size, column_num * sizeof(int) /* other fixed size*/);
+  page_header_->record_capacity = std::min(page_header_->record_capacity, PAX_PAGE_RECORD_CAPACITY_LIMIT);
   page_header_->col_idx_offset = align8(PAGE_HEADER_SIZE + page_bitmap_size(page_header_->record_capacity));
   page_header_->data_offset    = align8(PAGE_HEADER_SIZE + page_bitmap_size(page_header_->record_capacity)) +
                               column_num * sizeof(int) /* column index*/;
@@ -386,6 +388,7 @@ RC RecordPageHandler::init_empty_page(DiskBufferPool &buffer_pool, LogHandler &l
   page_header_->record_size      = align8(record_size);
   page_header_->record_capacity =
       page_record_capacity(BP_PAGE_DATA_SIZE, page_header_->record_size, page_header_->column_num * sizeof(int));
+  page_header_->record_capacity = std::min(page_header_->record_capacity, PAX_PAGE_RECORD_CAPACITY_LIMIT);
   page_header_->col_idx_offset = align8(PAGE_HEADER_SIZE + page_bitmap_size(page_header_->record_capacity));
   page_header_->data_offset    = align8(PAGE_HEADER_SIZE + page_bitmap_size(page_header_->record_capacity)) +
                               column_num * sizeof(int) /* column index*/;

@@ -111,6 +111,8 @@ RC AvgAggregator::accumulate(const Value &value)
     // AVG 需要浮点结果，但可由整型或浮点累加
     if (value.attr_type() == AttrType::INTS) {
       sum_.set_int(0);
+    } else if (value.attr_type() == AttrType::BIGINTS) {
+      sum_.set_bigint(0);
     } else if (value.attr_type() == AttrType::FLOATS) {
       sum_.set_float(0.0f);
     } else {
@@ -119,19 +121,15 @@ RC AvgAggregator::accumulate(const Value &value)
   }
 
   // 根据类型累加
-  if (value.attr_type() == AttrType::INTS && sum_.attr_type() == AttrType::INTS) {
+  if (sum_.attr_type() == AttrType::FLOATS || value.attr_type() == AttrType::FLOATS) {
+    float s = sum_.get_float();
+    sum_.set_float(s + value.get_float());
+  } else if (sum_.attr_type() == AttrType::BIGINTS || value.attr_type() == AttrType::BIGINTS) {
+    int64_t s = sum_.get_bigint();
+    sum_.set_bigint(s + value.get_bigint());
+  } else if (value.attr_type() == AttrType::INTS && sum_.attr_type() == AttrType::INTS) {
     int s = sum_.get_int();
     sum_.set_int(s + value.get_int());
-  } else if (value.attr_type() == AttrType::FLOATS && sum_.attr_type() == AttrType::FLOATS) {
-    float s = sum_.get_float();
-    sum_.set_float(s + value.get_float());
-  } else if (value.attr_type() == AttrType::INTS && sum_.attr_type() == AttrType::FLOATS) {
-    float s = sum_.get_float();
-    sum_.set_float(s + static_cast<float>(value.get_int()));
-  } else if (value.attr_type() == AttrType::FLOATS && sum_.attr_type() == AttrType::INTS) {
-    // 将整型 sum 升级为浮点，以避免精度损失
-    float s = static_cast<float>(sum_.get_int());
-    sum_.set_float(s + value.get_float());
   } else {
     return RC::INVALID_ARGUMENT;
   }
@@ -152,6 +150,8 @@ RC AvgAggregator::evaluate(Value &result)
   float s = 0.0f;
   if (sum_.attr_type() == AttrType::INTS) {
     s = static_cast<float>(sum_.get_int());
+  } else if (sum_.attr_type() == AttrType::BIGINTS) {
+    s = static_cast<float>(sum_.get_bigint());
   } else if (sum_.attr_type() == AttrType::FLOATS) {
     s = sum_.get_float();
   }
