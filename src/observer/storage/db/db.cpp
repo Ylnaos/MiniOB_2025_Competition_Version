@@ -549,6 +549,17 @@ RC Db::drop_table(const char *table_name)
   // 这里需要枚举所有可能的索引文件，但为了简化，我们只删除基本文件
   // 在实际实现中，应该查询表的元数据来获取所有索引信息
 
+  auto view_iter = opened_views_.find(table_name);
+  if (view_iter != opened_views_.end()) {
+    delete view_iter->second;
+    opened_views_.erase(view_iter);
+
+    string view_meta_file_path = view_meta_file(path_.c_str(), table_name);
+    if (unlink(view_meta_file_path.c_str()) != 0 && errno != ENOENT) {
+      LOG_WARN("Failed to remove paired view meta file: %s", view_meta_file_path.c_str());
+    }
+  }
+
   LOG_INFO("Drop table success. table name=%s", table_name);
   return RC::SUCCESS;
 }
@@ -1348,12 +1359,26 @@ RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
     attrs.emplace_back(std::move(attr));
   }
 
-  return create_table(view_name, attrs, {}, StorageFormat::ROW_FORMAT);
+  RC rc = create_table(view_name, attrs, {}, StorageFormat::ROW_FORMAT);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  View *view = new View();
+  rc = view->init(view_name, "");
+  if (OB_FAIL(rc)) {
+    delete view;
+    drop_table(view_name);
+    return rc;
+  }
+  opened_views_[view_name] = view;
+  return RC::SUCCESS;
 }
 
 RC Db::drop_view(const char *view_name)
 {
   if (is_blank(view_name)) return RC::INVALID_ARGUMENT;
+  const bool has_materialized_table = opened_tables_.count(view_name) > 0;
   auto it = opened_views_.find(view_name);
   if (it == opened_views_.end()) return RC::NOT_EXIST;
 
@@ -1361,8 +1386,15 @@ RC Db::drop_view(const char *view_name)
   opened_views_.erase(it);
 
   string file_path = view_meta_file(path_.c_str(), view_name);
-  if (unlink(file_path.c_str()) != 0) {
+  if (unlink(file_path.c_str()) != 0 && errno != ENOENT) {
     LOG_WARN("Failed to remove view meta file: %s", file_path.c_str());
+  }
+
+  if (has_materialized_table) {
+    RC rc = drop_table(view_name);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
   }
 
   LOG_INFO("Drop view success. name=%s", view_name);
