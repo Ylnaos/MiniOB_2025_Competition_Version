@@ -97,6 +97,31 @@ static bool file_exists(const std::string &path)
   return access(path.c_str(), F_OK) == 0;
 }
 
+static constexpr const char *MATERIALIZED_VIEW_META_MARKER = "__MINIOB_MATERIALIZED_VIEW__";
+
+static bool is_materialized_view_meta(const std::string &content)
+{
+  size_t first_newline = content.find('\n');
+  std::string first_line = first_newline == std::string::npos ? content : content.substr(0, first_newline);
+  return first_line == MATERIALIZED_VIEW_META_MARKER;
+}
+
+static RC write_materialized_view_meta(const std::string &db_path, const char *view_name)
+{
+  std::string file_path = view_meta_file(db_path.c_str(), view_name);
+  FILE       *fp        = fopen(file_path.c_str(), "wb");
+  if (fp == nullptr) {
+    LOG_WARN("create materialized view: open meta file failed %s", file_path.c_str());
+    return RC::IOERR_OPEN;
+  }
+
+  std::string content = MATERIALIZED_VIEW_META_MARKER;
+  content += "\n0";
+  size_t n = fwrite(content.c_str(), 1, content.size(), fp);
+  fclose(fp);
+  return n == content.size() ? RC::SUCCESS : RC::IOERR_WRITE;
+}
+
 static RC rewrite_table_meta(const std::string &meta_path, const std::string &table_name, int32_t table_id)
 {
   std::ifstream ifs(meta_path);
@@ -1184,7 +1209,7 @@ RC Db::open_all_views()
       view_name.erase(pos);
     }
 
-    if (opened_tables_.count(view_name) > 0) {
+    if (opened_tables_.count(view_name) > 0 && !is_materialized_view_meta(content)) {
       LOG_ERROR("view name conflicts with table name: %s", view_name.c_str());
       return RC::SCHEMA_TABLE_EXIST;
     }
@@ -1371,8 +1396,14 @@ RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
     return rc;
   }
 
+  rc = write_materialized_view_meta(path_, view_name);
+  if (OB_FAIL(rc)) {
+    drop_table(view_name);
+    return rc;
+  }
+
   View *view = new View();
-  rc = view->init(view_name, "");
+  rc = view->init(view_name, MATERIALIZED_VIEW_META_MARKER);
   if (OB_FAIL(rc)) {
     delete view;
     drop_table(view_name);
