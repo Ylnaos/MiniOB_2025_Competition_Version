@@ -34,7 +34,9 @@ RC CreateViewStmt::create(Db *db, const CreateViewSqlNode &create_view, Stmt *&s
   view_stmt->view_name_       = create_view.view_name;
   view_stmt->view_select_sql_ = create_view.view_select_sql;
   view_stmt->view_fields_     = create_view.view_fields;
+  if (create_view.select_node) {
+    view_stmt->select_node_ = copy_parsed_sql_node(*create_view.select_node);
+  }
   stmt                        = view_stmt;
   return RC::SUCCESS;
 }
-

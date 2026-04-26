@@ -11,7 +11,9 @@ See the Mulan PSL v2 for more details. */
 #pragma once
 
 #include "common/lang/string.h"
+#include "common/lang/memory.h"
 #include "common/sys/rc.h"
+#include "sql/parser/parse_defs.h"
 
 class View
 {
@@ -39,10 +41,12 @@ public:
   const char *name() const { return name_.c_str(); }
   const char *select_sql() const { return select_sql_.c_str(); }
   const vector<string> &view_fields() const { return view_fields_; }
+  const ParsedSqlNode *select_node() const { return select_node_.get(); }
+  void set_select_node(unique_ptr<ParsedSqlNode> select_node) { select_node_ = std::move(select_node); }
 
 private:
   string name_;
   string select_sql_;
   vector<string> view_fields_;  ///< 视图定义的列名（可能为空）
+  unique_ptr<ParsedSqlNode> select_node_;
 };
-

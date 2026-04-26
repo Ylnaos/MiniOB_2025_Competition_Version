@@ -489,3 +489,6 @@ public:
 private:
   vector<unique_ptr<ParsedSqlNode>> sql_nodes_;  ///< 这里记录SQL命令。虽然看起来支持多个，但是当前仅处理一个
 };
+
+unique_ptr<Expression> copy_expression_with_metadata(const unique_ptr<Expression> &expr);
+unique_ptr<ParsedSqlNode> copy_parsed_sql_node(const ParsedSqlNode &node);
