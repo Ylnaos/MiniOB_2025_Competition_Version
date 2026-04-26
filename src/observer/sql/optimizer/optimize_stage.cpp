@@ -165,8 +165,11 @@ RC OptimizeStage::generate_physical_plan(
   };
 
   const bool plan_has_aggregation = contains_aggregation_in_plan(*logical_operator);
+  if (plan_has_aggregation) {
+    LOG_TRACE("chunk iterator plan contains aggregation");
+  }
 
-  if (!plan_has_subquery && !plan_has_aggregation && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+  if (!plan_has_subquery && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
       LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);

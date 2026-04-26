@@ -238,8 +238,6 @@ RC LogicalPlanGenerator::create_single_select_plan(
   last_oper = &table_oper;
   unique_ptr<LogicalOperator> predicate_oper;
   unique_ptr<LogicalOperator> having_pred;
-  const vector<Table *> &tables = select_stmt->tables();
-
   RC rc = create_plan(select_stmt->filter_stmt(), predicate_oper);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to create predicate logical plan. rc=%s", strrc(rc));
@@ -299,7 +297,7 @@ RC LogicalPlanGenerator::create_single_select_plan(
     last_oper = &predicate_oper;
   }
 
-  if (tables.empty() && !predicate_oper && select_stmt->group_by().empty() && select_stmt->order_by().empty()) {
+  if (from_items.empty() && !predicate_oper && select_stmt->group_by().empty() && select_stmt->order_by().empty()) {
     logical_operator.reset(new CalcLogicalOperator(std::move(select_stmt->query_expressions())));
     return RC::SUCCESS;
   }
@@ -619,14 +617,23 @@ RC LogicalPlanGenerator::create_group_by_plan(SelectStmt *select_stmt, unique_pt
   for (unique_ptr<Expression> &expression : query_expressions) {
     bind_group_by_expr(expression);
   }
+  for (auto &item : select_stmt->order_by()) {
+    bind_group_by_expr(item.first);
+  }
 
   for (unique_ptr<Expression> &expression : query_expressions) {
     find_unbound_column(expression);
   }
+  for (auto &item : select_stmt->order_by()) {
+    find_unbound_column(item.first);
+  }
 
-  // collect all aggregate expressions（来自 SELECT 列与 HAVING 表达式）
+  // collect all aggregate expressions（来自 SELECT、ORDER BY 与 HAVING 表达式）
   for (size_t idx = 0; idx < query_expressions.size(); idx++) {
     collector(query_expressions[idx]);
+  }
+  for (auto &item : select_stmt->order_by()) {
+    collector(item.first);
   }
   if (select_stmt->having_expr()) {
     collector(select_stmt->having_expr());
