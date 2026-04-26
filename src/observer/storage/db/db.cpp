@@ -122,6 +122,38 @@ static RC write_materialized_view_meta(const std::string &db_path, const char *v
   return n == content.size() ? RC::SUCCESS : RC::IOERR_WRITE;
 }
 
+static bool select_uses_table_name(const SelectStmt *select_stmt, const char *table_name)
+{
+  if (select_stmt == nullptr || is_blank(table_name)) {
+    return false;
+  }
+
+  for (Table *table : select_stmt->tables()) {
+    if (table != nullptr && same_name(table->name(), table_name)) {
+      return true;
+    }
+  }
+
+  for (const SelectStmt::FromItem &item : select_stmt->from_items()) {
+    if (item.type == SelectStmt::FromItem::Type::DERIVED &&
+        select_uses_table_name(item.derived, table_name)) {
+      return true;
+    }
+  }
+
+  if (select_uses_table_name(select_stmt->inner_view_stmt(), table_name)) {
+    return true;
+  }
+
+  for (const SelectStmt::SetOperation &set_op : select_stmt->set_operations()) {
+    if (select_uses_table_name(set_op.stmt.get(), table_name)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static RC rewrite_table_meta(const std::string &meta_path, const std::string &table_name, int32_t table_id)
 {
   std::ifstream ifs(meta_path);
@@ -1315,7 +1347,7 @@ RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
 
   const bool table_exists = opened_tables_.count(view_name) > 0;
   const bool view_exists  = opened_views_.count(view_name) > 0;
-  if (table_exists && !view_exists) {
+  if (table_exists && !view_exists && select_uses_table_name(select_stmt, view_name)) {
     return RC::SCHEMA_TABLE_EXIST;
   }
   if (!table_exists && view_exists) {
