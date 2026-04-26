@@ -406,15 +406,15 @@ static RC rewrite_unqualified_fields(
       if ((tbl == nullptr || tbl[0] == '\0') && col != nullptr && col[0] != '\0') {
         string key = string(col);
         common::str_to_lower(key);
+        string output_label = expr->alias() != nullptr ? string(expr->alias()) : string(col);
 
         // 优先查找表达式映射(计算列)
         auto expr_it = name_to_expr.find(key);
         if (expr_it != name_to_expr.end()) {
           // 用视图中的计算表达式替换
           unique_ptr<Expression> replaced = expr_it->second->copy();
-          if (expr->alias() != nullptr) {
-            replaced->set_alias(expr->alias());
-          }
+          replaced->set_name(output_label);
+          replaced->set_alias(output_label);
           expr.swap(replaced);
           return RC::SUCCESS;
         }
@@ -424,14 +424,8 @@ static RC rewrite_unqualified_fields(
         if (field_it != name_to_relattr.end()) {
           // 用底层限定字段替换
           unique_ptr<Expression> replaced = make_unique<UnboundFieldExpr>(field_it->second.first, field_it->second.second);
-          // 继承展示名称(保持简单)：设置为 "table.field"
-          string display = field_it->second.first;
-          if (!display.empty()) display += ".";
-          display += field_it->second.second;
-          replaced->set_name(display);
-          if (expr->alias() != nullptr) {
-            replaced->set_alias(expr->alias());
-          }
+          replaced->set_name(output_label);
+          replaced->set_alias(output_label);
           expr.swap(replaced);
           return RC::SUCCESS;
         }
