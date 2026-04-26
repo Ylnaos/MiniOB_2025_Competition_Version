@@ -12,6 +12,11 @@ See the Mulan PSL v2 for more details. */
 
 #include <stdint.h>
 #include <cstddef>
+#include <iterator>
+#include <list>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
 
 namespace oceanbase {
 
@@ -48,7 +53,18 @@ public:
    * @param value A reference to store the value associated with the key.
    * @return `true` if the key is found and the value is retrieved; `false` otherwise.
    */
-  bool get(const KeyType &key, ValueType &value) { return false; }
+  bool get(const KeyType &key, ValueType &value)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        iter = cache_.find(key);
+    if (iter == cache_.end()) {
+      return false;
+    }
+
+    items_.splice(items_.begin(), items_, iter->second);
+    value = iter->second->second;
+    return true;
+  }
 
   /**
    * @brief Inserts a key-value pair into the cache.
@@ -60,7 +76,28 @@ public:
    * @param key The key to insert into the cache.
    * @param value The value to associate with the specified key.
    */
-  void put(const KeyType &key, const ValueType &value) {}
+  void put(const KeyType &key, const ValueType &value)
+  {
+    if (capacity_ == 0) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        iter = cache_.find(key);
+    if (iter != cache_.end()) {
+      iter->second->second = value;
+      items_.splice(items_.begin(), items_, iter->second);
+      return;
+    }
+
+    items_.emplace_front(key, value);
+    cache_[key] = items_.begin();
+    if (cache_.size() > capacity_) {
+      auto last = std::prev(items_.end());
+      cache_.erase(last->first);
+      items_.pop_back();
+    }
+  }
 
   /**
    * @brief Checks whether the specified key exists in the cache.
@@ -68,13 +105,22 @@ public:
    * @param key The key to check in the cache.
    * @return `true` if the key exists; `false` otherwise.
    */
-  bool contains(const KeyType &key) const { return false; }
+  bool contains(const KeyType &key) const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cache_.find(key) != cache_.end();
+  }
 
 private:
   /**
    * @brief The maximum number of elements the cache can hold.
    */
   size_t capacity_;
+  using ListType = std::list<std::pair<KeyType, ValueType>>;
+
+  mutable std::mutex mutex_;
+  ListType           items_;
+  std::unordered_map<KeyType, typename ListType::iterator> cache_;
 };
 
 /**
@@ -91,7 +137,7 @@ private:
 template <typename Key, typename Value>
 ObLRUCache<Key, Value> *new_lru_cache(uint32_t capacity)
 {
-  return nullptr;
+  return new ObLRUCache<Key, Value>(capacity);
 }
 
 }  // namespace oceanbase

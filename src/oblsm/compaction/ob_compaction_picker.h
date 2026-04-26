@@ -76,4 +76,14 @@ public:
 private:
 };
 
+class LeveledCompactionPicker : public ObCompactionPicker
+{
+public:
+  LeveledCompactionPicker(ObLsmOptions *options) : ObCompactionPicker(options) {}
+
+  ~LeveledCompactionPicker() = default;
+
+  unique_ptr<ObCompaction> pick(SSTablesPtr sstables) override;
+};
+
 }  // namespace oceanbase

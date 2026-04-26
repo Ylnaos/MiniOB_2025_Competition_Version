@@ -1,5 +1,7 @@
 file(GLOB_RECURSE OBLSM_SOURCES "*.cpp")
 file(GLOB CLIUTIL_SOURCES "client/cliutil/*.cpp")
+list(FILTER OBLSM_SOURCES EXCLUDE REGEX "/\\._[^/]*\\.cpp$")
+list(FILTER CLIUTIL_SOURCES EXCLUDE REGEX "/\\._[^/]*\\.cpp$")
 list(FILTER OBLSM_SOURCES EXCLUDE REGEX "client/.*")
 list(FILTER OBLSM_SOURCES EXCLUDE REGEX "benchmarks/.*")
 

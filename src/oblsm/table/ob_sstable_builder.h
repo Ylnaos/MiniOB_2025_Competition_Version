@@ -46,6 +46,7 @@ public:
    *
    */
   RC                    build(shared_ptr<ObMemTable> mem_table, const string &file_name, uint32_t sst_id);
+  RC                    build(ObLsmIterator *iter, const string &file_name, uint32_t sst_id);
   size_t                file_size() const { return file_size_; }
   shared_ptr<ObSSTable> get_built_table();
   void                  reset();

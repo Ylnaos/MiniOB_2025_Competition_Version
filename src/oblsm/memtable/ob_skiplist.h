@@ -38,6 +38,7 @@ See the Mulan PSL v2 for more details. */
 
 #include "common/math/random_generator.h"
 #include "common/lang/atomic.h"
+#include "common/lang/new.h"
 #include "common/lang/vector.h"
 #include "common/log/log.h"
 
@@ -177,7 +178,12 @@ thread_local common::RandomGenerator ObSkipList<Key, ObComparator>::rnd = common
 template <typename Key, class ObComparator>
 struct ObSkipList<Key, ObComparator>::Node
 {
-  explicit Node(const Key &k) : key(k) {}
+  explicit Node(const Key &k, int height) : key(k), next_{nullptr}
+  {
+    for (int i = 1; i < height; ++i) {
+      new (&next_[i]) atomic<Node *>(nullptr);
+    }
+  }
 
   Key const key;
 
@@ -225,7 +231,7 @@ template <typename Key, class ObComparator>
 typename ObSkipList<Key, ObComparator>::Node *ObSkipList<Key, ObComparator>::new_node(const Key &key, int height)
 {
   char *const node_memory = reinterpret_cast<char *>(malloc(sizeof(Node) + sizeof(atomic<Node *>) * (height - 1)));
-  return new (node_memory) Node(key);
+  return new (node_memory) Node(key, height);
 }
 
 template <typename Key, class ObComparator>
@@ -417,24 +423,15 @@ void ObSkipList<Key, ObComparator>::insert_concurrently(const Key &key)
   Node     *x      = new_node(key, height);
   Node     *prev[kMaxHeight];
 
+  int current_height = get_max_height();
+  while (height > current_height && !max_height_.compare_exchange_weak(current_height, height)) {
+  }
+
   while (true) {
     Node *next = find_greater_or_equal(key, prev);
     ASSERT(next == nullptr || !equal(key, next->key), "duplicate key");
 
-    int current_height = get_max_height();
-    while (height > current_height) {
-      for (int i = current_height; i < height; i++) {
-        prev[i] = head_;
-      }
-      if (max_height_.compare_exchange_weak(current_height, height)) {
-        break;
-      }
-    }
-
-    for (int i = 0; i < height; i++) {
-      x->nobarrier_set_next(i, prev[i]->next(i));
-    }
-
+    x->nobarrier_set_next(0, prev[0]->next(0));
     if (prev[0]->cas_next(0, x->nobarrier_next(0), x)) {
       break;
     }
@@ -442,12 +439,12 @@ void ObSkipList<Key, ObComparator>::insert_concurrently(const Key &key)
 
   for (int i = 1; i < height; i++) {
     while (true) {
-      Node *next = x->nobarrier_next(i);
+      find_greater_or_equal(key, prev);
+      Node *next = prev[i]->next(i);
+      x->nobarrier_set_next(i, next);
       if (prev[i]->cas_next(i, next, x)) {
         break;
       }
-      find_greater_or_equal(key, prev);
-      x->nobarrier_set_next(i, prev[i]->next(i));
     }
   }
 }

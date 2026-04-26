@@ -12,6 +12,32 @@ See the Mulan PSL v2 for more details. */
 #include "storage/common/codec.h"
 #include "storage/trx/lsm_mvcc_trx.h"
 
+namespace {
+
+RC decode_lsm_row_id(const string_view &key, uint64_t &row_id)
+{
+  bytes encoded_key(key.begin(), key.end());
+  span<byte_t> sp(encoded_key);
+  string table_prefix;
+  int64_t table_id = 0;
+  string row_prefix;
+  RC rc = OrderedCode::parse(sp, OrderedCode::increasing, table_prefix);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  rc = OrderedCode::parse(sp, OrderedCode::increasing, table_id);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  rc = OrderedCode::parse(sp, OrderedCode::increasing, row_prefix);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  return OrderedCode::parse(sp, OrderedCode::increasing, row_id);
+}
+
+}  // namespace
+
 RC LsmRecordScanner::open_scan()
 {
   RC rc = RC::SUCCESS;
@@ -58,7 +84,13 @@ RC LsmRecordScanner::next(Record &record)
       LOG_TRACE("table id not match, table id: %ld", table_->table_id());
       return RC::RECORD_EOF;
     }
+    uint64_t row_id = 0;
+    RC rc = decode_lsm_row_id(lsm_key, row_id);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
     record.set_key(string(lsm_key));
+    record.set_rid(0, static_cast<SlotNum>(row_id));
     record.copy_data((char *)lsm_value.data(), lsm_value.length());
     lsm_iter_->next();
     return RC::SUCCESS;

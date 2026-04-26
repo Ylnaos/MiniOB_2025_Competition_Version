@@ -18,15 +18,112 @@ See the Mulan PSL v2 for more details. */
 #include "storage/common/codec.h"
 #include "storage/trx/lsm_mvcc_trx.h"
 
+namespace {
+
+RC encode_lsm_key(int32_t table_id, uint64_t row_id, bytes &lsm_key)
+{
+  return Codec::encode(table_id, row_id, lsm_key);
+}
+
+uint64_t row_id_from_rid(const RID &rid)
+{
+  return static_cast<uint64_t>(static_cast<uint32_t>(rid.slot_num));
+}
+
+void set_rid_from_row_id(Record &record, uint64_t row_id)
+{
+  record.set_rid(0, static_cast<SlotNum>(row_id));
+}
+
+}  // namespace
+
 RC LsmTableEngine::insert_record(Record &record)
 {
   RC rc = RC::SUCCESS;
   // TODO: set auto increment id, and keep durability.
   // TODO: support set primary key as a part of lsm_key.
+  uint64_t row_id = inc_id_.fetch_add(1);
   bytes lsm_key;
-  Codec::encode(table_->table_id(), inc_id_.fetch_add(1), lsm_key);
+  Codec::encode(table_->table_id(), row_id, lsm_key);
   rc = lsm_->put(string_view((char *)lsm_key.data(), lsm_key.size()), string_view(record.data(), record.len()));
+  if (OB_SUCC(rc)) {
+    set_rid_from_row_id(record, row_id);
+    record.set_key(string(reinterpret_cast<char *>(lsm_key.data()), lsm_key.size()));
+  }
   return rc;
+}
+
+RC LsmTableEngine::delete_record(const Record &record)
+{
+  string key = record.key();
+  if (key.empty()) {
+    bytes lsm_key;
+    RC rc = encode_lsm_key(table_->table_id(), row_id_from_rid(record.rid()), lsm_key);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    key.assign(reinterpret_cast<char *>(lsm_key.data()), lsm_key.size());
+  }
+  return lsm_->remove(key);
+}
+
+RC LsmTableEngine::insert_record_with_trx(Record &record, Trx *trx)
+{
+  LsmMvccTrx *lsm_trx = dynamic_cast<LsmMvccTrx *>(trx);
+  if (lsm_trx == nullptr) {
+    return insert_record(record);
+  }
+
+  RC rc = lsm_trx->start_if_need();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  ObLsmTransaction *lsm_transaction = lsm_trx->get_trx();
+  if (lsm_transaction == nullptr) {
+    return RC::INTERNAL;
+  }
+
+  uint64_t row_id = inc_id_.fetch_add(1);
+  bytes lsm_key;
+  rc = encode_lsm_key(table_->table_id(), row_id, lsm_key);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  rc = lsm_transaction->put(
+      string_view(reinterpret_cast<char *>(lsm_key.data()), lsm_key.size()), string_view(record.data(), record.len()));
+  if (OB_SUCC(rc)) {
+    set_rid_from_row_id(record, row_id);
+    record.set_key(string(reinterpret_cast<char *>(lsm_key.data()), lsm_key.size()));
+  }
+  return rc;
+}
+
+RC LsmTableEngine::delete_record_with_trx(const Record &record, Trx *trx)
+{
+  LsmMvccTrx *lsm_trx = dynamic_cast<LsmMvccTrx *>(trx);
+  if (lsm_trx == nullptr) {
+    return delete_record(record);
+  }
+
+  RC rc = lsm_trx->start_if_need();
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  ObLsmTransaction *lsm_transaction = lsm_trx->get_trx();
+  if (lsm_transaction == nullptr) {
+    return RC::INTERNAL;
+  }
+
+  string key = record.key();
+  if (key.empty()) {
+    bytes lsm_key;
+    rc = encode_lsm_key(table_->table_id(), row_id_from_rid(record.rid()), lsm_key);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    key.assign(reinterpret_cast<char *>(lsm_key.data()), lsm_key.size());
+  }
+  return lsm_transaction->remove(key);
 }
 
 RC LsmTableEngine::get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWriteMode mode)
@@ -41,12 +138,28 @@ RC LsmTableEngine::get_record_scanner(RecordScanner *&scanner, Trx *trx, ReadWri
 
 RC LsmTableEngine::update_record_with_trx(const Record &old_record, const Record &new_record, Trx *trx)
 {
+  RC rc = RC::SUCCESS;
+
+  string old_lsm_key = old_record.key();
+  if (old_lsm_key.empty()) {
+    bytes encoded_key;
+    rc = encode_lsm_key(table_->table_id(), row_id_from_rid(old_record.rid()), encoded_key);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    old_lsm_key.assign(reinterpret_cast<char *>(encoded_key.data()), encoded_key.size());
+  }
+
   // 在LSM树中，更新操作通常是通过删除旧记录并插入新记录来实现的
   // 获取LSM事务
   LsmMvccTrx *lsm_trx = dynamic_cast<LsmMvccTrx *>(trx);
   if (lsm_trx == nullptr) {
-    LOG_ERROR("Invalid transaction type for LSM table engine");
-    return RC::INVALID_ARGUMENT;
+    return lsm_->put(old_lsm_key, string_view(new_record.data(), new_record.len()));
+  }
+
+  rc = lsm_trx->start_if_need();
+  if (OB_FAIL(rc)) {
+    return rc;
   }
 
   ObLsmTransaction *lsm_transaction = lsm_trx->get_trx();
@@ -55,24 +168,15 @@ RC LsmTableEngine::update_record_with_trx(const Record &old_record, const Record
     return RC::INVALID_ARGUMENT;
   }
 
-  // 构造旧记录和新记录的LSM键
-  bytes old_lsm_key;
-  bytes new_lsm_key;
-
-  // 使用记录的RID来构造键
-  // TODO: 这里应该使用实际的主键或者RID，当前简化处理
-  Codec::encode(table_->table_id(), old_record.rid().page_num * 10000 + old_record.rid().slot_num, old_lsm_key);
-  new_lsm_key = old_lsm_key; // 更新操作保持相同的键
-
   // 在事务中执行更新：删除旧值，插入新值
-  RC rc = lsm_transaction->remove(string_view((char *)old_lsm_key.data(), old_lsm_key.size()));
+  rc = lsm_transaction->remove(old_lsm_key);
   if (rc != RC::SUCCESS && rc != RC::RECORD_NOT_EXIST) {
     LOG_ERROR("Failed to remove old record in LSM update. rc=%s", strrc(rc));
     return rc;
   }
 
   rc = lsm_transaction->put(
-      string_view((char *)new_lsm_key.data(), new_lsm_key.size()),
+      string_view(old_lsm_key.data(), old_lsm_key.size()),
       string_view(new_record.data(), new_record.len()));
 
   if (rc != RC::SUCCESS) {
@@ -86,5 +190,27 @@ RC LsmTableEngine::update_record_with_trx(const Record &old_record, const Record
 
 RC LsmTableEngine::open()
 {
-  return RC::UNIMPLEMENTED;
+  return lsm_ == nullptr ? RC::INTERNAL : RC::SUCCESS;
+}
+
+RC LsmTableEngine::get_record(const RID &rid, Record &record)
+{
+  bytes lsm_key;
+  RC rc = encode_lsm_key(table_->table_id(), row_id_from_rid(rid), lsm_key);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  string value;
+  string key(reinterpret_cast<char *>(lsm_key.data()), lsm_key.size());
+  rc = lsm_->get(key, &value);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+  rc = record.copy_data(value.data(), static_cast<int>(value.size()));
+  if (OB_SUCC(rc)) {
+    record.set_rid(rid);
+    record.set_key(key);
+  }
+  return rc;
 }

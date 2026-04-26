@@ -74,7 +74,7 @@ ENDIF(WIN32)
 
 # This is for clangd plugin for vscode
 # mute sign-compare error in lex/yacc
-SET(CMAKE_COMMON_FLAGS "${CMAKE_COMMON_FLAGS} -Wall -Werror -Wno-error=sign-compare")
+SET(CMAKE_COMMON_FLAGS "${CMAKE_COMMON_FLAGS} -Wall -Werror -Wno-error=sign-compare -Wno-error=unused-variable")
 IF ("${CMAKE_BUILD_TYPE_LOWER}" STREQUAL "debug")
     SET(CMAKE_COMMON_FLAGS "${CMAKE_COMMON_FLAGS} -DDEBUG -g -O0")
 ELSEIF ("${CMAKE_BUILD_TYPE_LOWER}" STREQUAL "release")
