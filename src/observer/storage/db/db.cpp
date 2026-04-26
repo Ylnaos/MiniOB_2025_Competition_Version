@@ -1347,11 +1347,14 @@ RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
 
   const bool table_exists = opened_tables_.count(view_name) > 0;
   const bool view_exists  = opened_views_.count(view_name) > 0;
-  if (table_exists && !view_exists && select_uses_table_name(select_stmt, view_name)) {
+  if ((table_exists || view_exists) && select_uses_table_name(select_stmt, view_name)) {
     return RC::SCHEMA_TABLE_EXIST;
   }
   if (!table_exists && view_exists) {
-    return RC::EXIST;
+    RC rc = drop_view(view_name);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
   }
   if (table_exists) {
     RC rc = drop_table(view_name);
