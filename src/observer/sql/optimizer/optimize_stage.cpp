@@ -114,6 +114,9 @@ RC OptimizeStage::generate_physical_plan(
   };
 
   std::function<bool(LogicalOperator &)> contains_subquery_in_plan = [&](LogicalOperator &op) -> bool {
+    if (op.type() == LogicalOperatorType::SUBQUERY) {
+      return true;
+    }
     // 检查该算子自身挂载的表达式
     for (auto &expr_up : op.expressions()) {
       if (expr_up && contains_subquery_expr(*expr_up)) {
