@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/logical_plan_generator.h"
 
 #include "common/log/log.h"
+#include "common/type/data_type.h"
 
 #include "sql/operator/calc_logical_operator.h"
 #include "sql/operator/delete_logical_operator.h"
@@ -43,6 +44,36 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression_iterator.h"
 
 using namespace std;
+
+namespace {
+
+RC validate_literal_cast(Expression &expr, AttrType target_type)
+{
+  if (expr.type() != ExprType::VALUE) {
+    return RC::SUCCESS;
+  }
+
+  Value value;
+  RC    rc = expr.try_get_value(value);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  if (value.attr_type() != AttrType::CHARS || (target_type != AttrType::INTS && target_type != AttrType::FLOATS)) {
+    return RC::SUCCESS;
+  }
+
+  Value parsed;
+  rc = DataType::type_instance(target_type)->set_value_from_str(parsed, value.get_string());
+  if (OB_FAIL(rc)) {
+    LOG_WARN("invalid literal cast from CHARS to %s. value=%s",
+        attr_type_to_string(target_type), value.get_string().c_str());
+    return rc;
+  }
+  return RC::SUCCESS;
+}
+
+}  // namespace
 using namespace common;
 
 RC LogicalPlanGenerator::create(Stmt *stmt, unique_ptr<LogicalOperator> &logical_operator)
@@ -363,6 +394,9 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
       auto right_to_left_cost = implicit_cast_cost(right->value_type(), left->value_type());
       if (left_to_right_cost <= right_to_left_cost && left_to_right_cost != INT32_MAX) {
         ExprType left_type = left->type();
+        if (left_type == ExprType::VALUE && OB_FAIL(rc = validate_literal_cast(*left, right->value_type()))) {
+          return rc;
+        }
         auto cast_expr = make_unique<CastExpr>(std::move(left), right->value_type());
         if (left_type == ExprType::VALUE) {
           Value left_val;
@@ -377,6 +411,9 @@ RC LogicalPlanGenerator::create_plan(FilterStmt *filter_stmt, unique_ptr<Logical
         }
       } else if (right_to_left_cost < left_to_right_cost && right_to_left_cost != INT32_MAX) {
         ExprType right_type = right->type();
+        if (right_type == ExprType::VALUE && OB_FAIL(rc = validate_literal_cast(*right, left->value_type()))) {
+          return rc;
+        }
         auto cast_expr = make_unique<CastExpr>(std::move(right), left->value_type());
         if (right_type == ExprType::VALUE) {
           Value right_val;

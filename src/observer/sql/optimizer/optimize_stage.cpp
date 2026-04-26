@@ -157,8 +157,27 @@ RC OptimizeStage::generate_physical_plan(
 
   const bool plan_has_aggregation = contains_aggregation_in_plan(*logical_operator);
 
+  std::function<bool(LogicalOperator &)> can_generate_vectorized_plan = [&](LogicalOperator &op) -> bool {
+    switch (op.type()) {
+      case LogicalOperatorType::TABLE_GET:
+      case LogicalOperatorType::PROJECTION:
+      case LogicalOperatorType::GROUP_BY:
+      case LogicalOperatorType::EXPLAIN:
+        break;
+      default:
+        return false;
+    }
+
+    for (auto &child : op.children()) {
+      if (child && !can_generate_vectorized_plan(*child)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   if (!plan_has_subquery && !plan_has_aggregation && session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
-      LogicalOperator::can_generate_vectorized_operator(logical_operator->type())) {
+      can_generate_vectorized_plan(*logical_operator)) {
     LOG_TRACE("use chunk iterator");
     session->set_used_chunk_mode(true);
     rc    = physical_plan_generator_.create_vec(*logical_operator, physical_operator, session);

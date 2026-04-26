@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details. */
 //
 
 #include "common/log/log.h"
+#include "catalog/catalog.h"
 #include "sql/expr/expression.h"
 #include "session/session.h"
 #include "sql/operator/aggregate_vec_physical_operator.h"
@@ -55,7 +56,95 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/vector_index_scan_physical_operator.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
+#include <algorithm>
+
 using namespace std;
+
+namespace {
+
+bool estimate_cardinality(LogicalOperator &logical_operator, double &cardinality)
+{
+  switch (logical_operator.type()) {
+    case LogicalOperatorType::TABLE_GET: {
+      auto &table_get = static_cast<TableGetLogicalOperator &>(logical_operator);
+      if (table_get.table() == nullptr) {
+        return false;
+      }
+
+      int row_nums = Catalog::get_instance().get_table_stats(table_get.table()->table_id()).row_nums;
+      if (row_nums <= 0) {
+        return false;
+      }
+      cardinality = row_nums;
+      return true;
+    }
+
+    case LogicalOperatorType::JOIN: {
+      auto &children = logical_operator.children();
+      if (children.size() != 2) {
+        return false;
+      }
+
+      double left_card  = 0;
+      double right_card = 0;
+      if (!estimate_cardinality(*children[0], left_card) || !estimate_cardinality(*children[1], right_card)) {
+        return false;
+      }
+
+      cardinality = left_card * right_card;
+      auto &join  = static_cast<JoinLogicalOperator &>(logical_operator);
+      for (auto &predicate : join.get_join_predicates()) {
+        if (predicate->type() != ExprType::COMPARISON) {
+          continue;
+        }
+        auto *comparison = static_cast<ComparisonExpr *>(predicate.get());
+        if (comparison->comp() == EQUAL_TO && comparison->left()->type() == ExprType::FIELD &&
+            comparison->right()->type() == ExprType::FIELD) {
+          cardinality /= std::max(std::max(left_card, right_card), 1.0);
+          break;
+        }
+      }
+      return true;
+    }
+
+    default: {
+      auto &children = logical_operator.children();
+      if (children.size() != 1) {
+        return false;
+      }
+      return estimate_cardinality(*children[0], cardinality);
+    }
+  }
+}
+
+bool cascade_prefers_hash_join(JoinLogicalOperator &join_oper)
+{
+  auto &children = join_oper.children();
+  if (children.size() != 2) {
+    return false;
+  }
+
+  double left_card  = 0;
+  double right_card = 0;
+  if (!estimate_cardinality(*children[0], left_card) || !estimate_cardinality(*children[1], right_card)) {
+    return false;
+  }
+
+  double output_card = 0;
+  if (!estimate_cardinality(join_oper, output_card)) {
+    return false;
+  }
+
+  constexpr double CPU_OP     = 0.00002;
+  constexpr double HASH_COST  = 0.00002;
+  constexpr double HASH_PROBE = 0.00001;
+
+  const double nested_loop_cost = left_card * right_card * CPU_OP + output_card * CPU_OP;
+  const double hash_join_cost   = left_card * HASH_COST + right_card * HASH_PROBE + output_card * CPU_OP;
+  return hash_join_cost < nested_loop_cost;
+}
+
+}  // namespace
 
 RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<PhysicalOperator> &oper, Session* session)
 {
@@ -397,7 +486,10 @@ RC PhysicalPlanGenerator::create_plan(JoinLogicalOperator &join_oper, unique_ptr
     LOG_WARN("join operator should have 2 children, but have %d", child_opers.size());
     return RC::INTERNAL;
   }
-  if (session->hash_join_on() && can_use_hash_join(join_oper)) {
+  const bool use_hash_join =
+      can_use_hash_join(join_oper) && (session->hash_join_on() ||
+          (session->use_cascade() && cascade_prefers_hash_join(join_oper)));
+  if (use_hash_join) {
     auto &join_predicates = join_oper.get_join_predicates();
     auto *comparison = static_cast<ComparisonExpr *>(join_predicates.front().get());
     unique_ptr<PhysicalOperator> join_physical_oper(
