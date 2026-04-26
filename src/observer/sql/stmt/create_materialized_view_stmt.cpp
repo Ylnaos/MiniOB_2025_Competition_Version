@@ -24,8 +24,9 @@ RC CreateMaterializedViewStmt::create(Db *db, const CreateMaterializedViewSqlNod
     return RC::INVALID_ARGUMENT;
   }
 
-  // 检测名称冲突：不允许与已有表同名
-  if (db->find_table(create_view.view_name.c_str()) != nullptr) {
+  // 普通表不允许被物化视图覆盖；已有物化视图会在执行阶段重建。
+  if (db->find_table(create_view.view_name.c_str()) != nullptr &&
+      db->find_view(create_view.view_name.c_str()) == nullptr) {
     LOG_WARN("materialized view name conflicts with existing table: %s", create_view.view_name.c_str());
     return RC::SCHEMA_TABLE_EXIST;
   }

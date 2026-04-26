@@ -1288,12 +1288,19 @@ RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
     return RC::INVALID_ARGUMENT;
   }
 
-  // 检查名称冲突
-  if (opened_tables_.count(view_name) > 0) {
+  const bool table_exists = opened_tables_.count(view_name) > 0;
+  const bool view_exists  = opened_views_.count(view_name) > 0;
+  if (table_exists && !view_exists) {
     return RC::SCHEMA_TABLE_EXIST;
   }
-  if (opened_views_.count(view_name) > 0) {
+  if (!table_exists && view_exists) {
     return RC::EXIST;
+  }
+  if (table_exists) {
+    RC rc = drop_table(view_name);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
   }
 
   vector<AttrInfoSqlNode> attrs;
