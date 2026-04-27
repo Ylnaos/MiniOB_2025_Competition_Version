@@ -17,11 +17,36 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/select_stmt.h"
 #include "sql/optimizer/logical_plan_generator.h"
 #include "sql/optimizer/physical_plan_generator.h"
+#include "sql/operator/logical_operator.h"
 #include "sql/operator/physical_operator.h"
 #include "sql/expr/tuple.h"
+#include "storage/common/chunk.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
 #include "storage/trx/trx.h"
+
+namespace {
+
+bool can_materialize_with_chunk(LogicalOperator &oper)
+{
+  switch (oper.type()) {
+    case LogicalOperatorType::TABLE_GET:
+    case LogicalOperatorType::PREDICATE:
+    case LogicalOperatorType::PROJECTION:
+      break;
+    default:
+      return false;
+  }
+
+  for (const auto &child : oper.children()) {
+    if (child == nullptr || !can_materialize_with_chunk(*child)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
 
 RC CreateMaterializedViewExecutor::execute(SQLStageEvent *sql_event)
 {
@@ -56,7 +81,10 @@ RC CreateMaterializedViewExecutor::execute(SQLStageEvent *sql_event)
 
   std::unique_ptr<PhysicalOperator> physical_oper;
   PhysicalPlanGenerator             physical_gen;
-  rc = physical_gen.create(*logical_oper, physical_oper, session);
+  const bool use_chunk = session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+                         can_materialize_with_chunk(*logical_oper);
+  rc = use_chunk ? physical_gen.create_vec(*logical_oper, physical_oper, session)
+                 : physical_gen.create(*logical_oper, physical_oper, session);
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to create physical plan for materialized view. rc=%s", strrc(rc));
     db->drop_table(view_name);
@@ -74,38 +102,67 @@ RC CreateMaterializedViewExecutor::execute(SQLStageEvent *sql_event)
   }
 
   vector<RID> inserted_rids;
-  while (RC::SUCCESS == (rc = physical_oper->next())) {
-    Tuple *tuple = physical_oper->current_tuple();
-    if (tuple == nullptr) {
-      rc = RC::INTERNAL;
-      break;
-    }
-
-    const int cols = tuple->cell_num();
-    vector<Value> values(cols);
-    for (int i = 0; i < cols; ++i) {
-      rc = tuple->cell_at(i, values[i]);
-      if (OB_FAIL(rc)) {
-        break;
-      }
-    }
-    if (OB_FAIL(rc)) {
-      break;
-    }
-
+  auto insert_values = [&](int cols, Value *values) -> RC {
     Record record;
-    rc = table->make_record(cols, values.data(), record);
+    RC rc = table->make_record(cols, values, record);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to make materialized view record. rc=%s", strrc(rc));
-      break;
+      return rc;
     }
 
     rc = trx->insert_record(table, record);
     if (OB_FAIL(rc)) {
       LOG_WARN("failed to insert materialized view record. rc=%s", strrc(rc));
-      break;
+      return rc;
     }
     inserted_rids.push_back(record.rid());
+    return RC::SUCCESS;
+  };
+
+  if (use_chunk) {
+    Chunk chunk;
+    while (RC::SUCCESS == (rc = physical_oper->next(chunk))) {
+      const int rows = chunk.rows();
+      const int cols = chunk.column_num();
+      vector<Value> values(cols);
+      for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < cols; ++col) {
+          values[col] = chunk.get_value(col, row);
+        }
+        rc = insert_values(cols, values.data());
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      }
+      if (OB_FAIL(rc)) {
+        break;
+      }
+    }
+  } else {
+    while (RC::SUCCESS == (rc = physical_oper->next())) {
+      Tuple *tuple = physical_oper->current_tuple();
+      if (tuple == nullptr) {
+        rc = RC::INTERNAL;
+        break;
+      }
+
+      const int cols = tuple->cell_num();
+      vector<Value> values(cols);
+      for (int i = 0; i < cols; ++i) {
+        rc = tuple->cell_at(i, values[i]);
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      }
+      if (OB_FAIL(rc)) {
+        break;
+      }
+
+      rc = insert_values(cols, values.data());
+      if (OB_FAIL(rc)) {
+        break;
+      }
+    }
   }
 
   if (rc == RC::RECORD_EOF) {
