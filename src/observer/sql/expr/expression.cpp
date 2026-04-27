@@ -1453,6 +1453,41 @@ RC ConjunctionExpr::get_value(const Tuple &tuple, Value &value) const
   return rc;
 }
 
+RC ConjunctionExpr::eval(Chunk &chunk, vector<uint8_t> &select)
+{
+  if (children_.empty()) {
+    return RC::SUCCESS;
+  }
+
+  if (conjunction_type_ == Type::AND) {
+    for (unique_ptr<Expression> &expr : children_) {
+      RC rc = expr->eval(chunk, select);
+      if (OB_FAIL(rc)) {
+        return rc;
+      }
+    }
+    return RC::SUCCESS;
+  }
+
+  vector<uint8_t> input_select = select;
+  vector<uint8_t> result(select.size(), 0);
+  for (unique_ptr<Expression> &expr : children_) {
+    vector<uint8_t> child_select = input_select;
+    RC rc = expr->eval(chunk, child_select);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+    for (size_t i = 0; i < result.size(); ++i) {
+      result[i] = static_cast<uint8_t>(result[i] || child_select[i]);
+    }
+  }
+
+  for (size_t i = 0; i < select.size(); ++i) {
+    select[i] = static_cast<uint8_t>(select[i] && result[i]);
+  }
+  return RC::SUCCESS;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 ArithmeticExpr::ArithmeticExpr(ArithmeticExpr::Type type, Expression *left, Expression *right)

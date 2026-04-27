@@ -706,7 +706,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
           return RC::SUCCESS;
         }
 
-        if (!select_list_is_only_star(select_sql.expressions) && view_definition_can_flatten(db, node->selection)) {
+        if (view_definition_can_flatten(db, node->selection)) {
           // 1) 展开 FROM。外层 WHERE/GROUP/ORDER 仍按视图输出列解析，需先重写，再并入视图自身条件。
           select_sql.relations.swap(node->selection.relations);
           // 如果外层视图有别名，且视图内部只有一个表，将别名赋给这个表
@@ -849,7 +849,7 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
       break;
     }
 
-    if (select_list_is_only_star(select_sql.expressions) || !view_definition_can_flatten(db, node->selection)) {
+    if (!view_definition_can_flatten(db, node->selection)) {
       LOG_INFO("Nested view '%s' is not safe to flatten", nested_view->name());
       break;
     }

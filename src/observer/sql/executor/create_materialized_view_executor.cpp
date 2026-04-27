@@ -19,8 +19,10 @@ See the Mulan PSL v2 for more details. */
 #include "sql/optimizer/physical_plan_generator.h"
 #include "sql/operator/logical_operator.h"
 #include "sql/operator/physical_operator.h"
+#include "sql/expr/expression_iterator.h"
 #include "sql/expr/tuple.h"
 #include "common/lang/string.h"
+#include "storage/common/chunk.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
@@ -96,6 +98,49 @@ bool select_uses_table_name(const SelectStmt *select_stmt, const char *table_nam
   return false;
 }
 
+bool expression_contains_subquery(Expression &expr)
+{
+  if (expr.type() == ExprType::SUBQUERY || expr.type() == ExprType::EXISTS) {
+    return true;
+  }
+
+  bool found = false;
+  (void)ExpressionIterator::iterate_child_expr(expr, [&](std::unique_ptr<Expression> &child) -> RC {
+    if (child != nullptr && expression_contains_subquery(*child)) {
+      found = true;
+    }
+    return RC::SUCCESS;
+  });
+  return found;
+}
+
+bool logical_plan_can_create_vec(LogicalOperator &oper)
+{
+  switch (oper.type()) {
+    case LogicalOperatorType::TABLE_GET:
+    case LogicalOperatorType::PREDICATE:
+    case LogicalOperatorType::PROJECTION:
+    case LogicalOperatorType::GROUP_BY:
+    case LogicalOperatorType::ORDER_BY:
+      break;
+    default:
+      return false;
+  }
+
+  for (const auto &expr : oper.expressions()) {
+    if (expr != nullptr && expression_contains_subquery(*expr)) {
+      return false;
+    }
+  }
+
+  for (const auto &child : oper.children()) {
+    if (child == nullptr || !logical_plan_can_create_vec(*child)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 RC CreateMaterializedViewExecutor::execute(SQLStageEvent *sql_event)
@@ -168,7 +213,18 @@ RC CreateMaterializedViewExecutor::execute(SQLStageEvent *sql_event)
 
   std::unique_ptr<PhysicalOperator> physical_oper;
   PhysicalPlanGenerator             physical_gen;
-  rc = physical_gen.create(*logical_oper, physical_oper, session);
+  bool use_chunk_iterator = session->get_execution_mode() == ExecutionMode::CHUNK_ITERATOR &&
+                            logical_plan_can_create_vec(*logical_oper);
+  if (use_chunk_iterator) {
+    rc = physical_gen.create_vec(*logical_oper, physical_oper, session);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to create vectorized physical plan for materialized view. rc=%s", strrc(rc));
+      cleanup_temp_object();
+      return rc;
+    }
+  } else {
+    rc = physical_gen.create(*logical_oper, physical_oper, session);
+  }
   if (OB_FAIL(rc)) {
     LOG_WARN("failed to create physical plan for materialized view. rc=%s", strrc(rc));
     cleanup_temp_object();
@@ -204,28 +260,49 @@ RC CreateMaterializedViewExecutor::execute(SQLStageEvent *sql_event)
     return RC::SUCCESS;
   };
 
-  while (RC::SUCCESS == (rc = physical_oper->next())) {
-    Tuple *tuple = physical_oper->current_tuple();
-    if (tuple == nullptr) {
-      rc = RC::INTERNAL;
-      break;
-    }
-
-    const int cols = tuple->cell_num();
-    vector<Value> values(cols);
-    for (int i = 0; i < cols; ++i) {
-      rc = tuple->cell_at(i, values[i]);
+  if (use_chunk_iterator) {
+    Chunk chunk;
+    while (RC::SUCCESS == (rc = physical_oper->next(chunk))) {
+      const int cols = chunk.column_num();
+      vector<Value> values(cols);
+      for (int row = 0; row < chunk.rows(); ++row) {
+        for (int col = 0; col < cols; ++col) {
+          values[col] = chunk.get_value(col, row);
+        }
+        rc = insert_values(cols, values.data());
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      }
       if (OB_FAIL(rc)) {
         break;
       }
+      chunk.reset();
     }
-    if (OB_FAIL(rc)) {
-      break;
-    }
+  } else {
+    while (RC::SUCCESS == (rc = physical_oper->next())) {
+      Tuple *tuple = physical_oper->current_tuple();
+      if (tuple == nullptr) {
+        rc = RC::INTERNAL;
+        break;
+      }
 
-    rc = insert_values(cols, values.data());
-    if (OB_FAIL(rc)) {
-      break;
+      const int cols = tuple->cell_num();
+      vector<Value> values(cols);
+      for (int i = 0; i < cols; ++i) {
+        rc = tuple->cell_at(i, values[i]);
+        if (OB_FAIL(rc)) {
+          break;
+        }
+      }
+      if (OB_FAIL(rc)) {
+        break;
+      }
+
+      rc = insert_values(cols, values.data());
+      if (OB_FAIL(rc)) {
+        break;
+      }
     }
   }
 

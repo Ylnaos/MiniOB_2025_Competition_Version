@@ -447,6 +447,7 @@ public:
   ExprType type() const override { return ExprType::CONJUNCTION; }
   AttrType value_type() const override { return AttrType::BOOLEANS; }
   RC       get_value(const Tuple &tuple, Value &value) const override;
+  RC       eval(Chunk &chunk, vector<uint8_t> &select) override;
 
   Type conjunction_type() const { return conjunction_type_; }
 
