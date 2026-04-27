@@ -1453,20 +1453,28 @@ RC Db::finalize_materialized_view(const char *temp_name, const char *view_name)
   if (is_blank(temp_name) || is_blank(view_name)) {
     return RC::INVALID_ARGUMENT;
   }
-  if (find_table(temp_name) == nullptr) {
+  Table *temp_table = find_table(temp_name);
+  if (temp_table == nullptr) {
     return RC::SCHEMA_TABLE_NOT_EXIST;
   }
   if (same_name(temp_name, view_name)) {
     return RC::SUCCESS;
   }
 
+  RC rc = temp_table->sync();
+  if (OB_FAIL(rc)) {
+    LOG_WARN("failed to sync temporary materialized view table before rename. table=%s rc=%s",
+        temp_name, strrc(rc));
+    return rc;
+  }
+
   if (opened_tables_.count(view_name) > 0) {
-    RC rc = drop_table(view_name);
+    rc = drop_table(view_name);
     if (OB_FAIL(rc)) {
       return rc;
     }
   } else if (opened_views_.count(view_name) > 0) {
-    RC rc = drop_view(view_name);
+    rc = drop_view(view_name);
     if (OB_FAIL(rc)) {
       return rc;
     }
@@ -1479,7 +1487,7 @@ RC Db::finalize_materialized_view(const char *temp_name, const char *view_name)
       "",
       "",
       view_name);
-  RC rc = alter_table(rename_stmt);
+  rc = alter_table(rename_stmt);
   if (OB_FAIL(rc)) {
     return rc;
   }
