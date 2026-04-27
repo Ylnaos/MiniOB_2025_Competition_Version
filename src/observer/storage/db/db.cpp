@@ -1461,9 +1461,19 @@ RC Db::finalize_materialized_view(const char *temp_name, const char *view_name)
     return RC::SUCCESS;
   }
 
+  const TableMeta &temp_meta = temp_table->table_meta();
+  vector<AttrInfoSqlNode> attrs;
+  attrs.reserve(temp_meta.visible_field_num());
+  for (int i = temp_meta.sys_field_num(); i < temp_meta.field_num(); ++i) {
+    const FieldMeta *field = temp_meta.field(i);
+    if (field != nullptr) {
+      attrs.emplace_back(attr_from_field(*field, field->name()));
+    }
+  }
+
   RC rc = temp_table->sync();
   if (OB_FAIL(rc)) {
-    LOG_WARN("failed to sync temporary materialized view table before rename. table=%s rc=%s",
+    LOG_WARN("failed to sync temporary materialized view table before final copy. table=%s rc=%s",
         temp_name, strrc(rc));
     return rc;
   }
@@ -1480,26 +1490,69 @@ RC Db::finalize_materialized_view(const char *temp_name, const char *view_name)
     }
   }
 
-  AttrInfoSqlNode dummy_attr;
-  AlterTableStmt  rename_stmt(temp_name,
-      AlterTableStmt::AlterType::RENAME_TABLE,
-      dummy_attr,
-      "",
-      "",
-      view_name);
-  rc = alter_table(rename_stmt);
+  rc = create_table(view_name, attrs, {}, temp_meta.storage_format());
   if (OB_FAIL(rc)) {
     return rc;
   }
 
-  auto temp_view_iter = opened_views_.find(temp_name);
-  if (temp_view_iter != opened_views_.end()) {
-    delete temp_view_iter->second;
-    opened_views_.erase(temp_view_iter);
+  Table *final_table = find_table(view_name);
+  if (final_table == nullptr) {
+    drop_table(view_name);
+    return RC::INTERNAL;
   }
-  string temp_view_file = view_meta_file(path_.c_str(), temp_name);
-  if (unlink(temp_view_file.c_str()) != 0 && errno != ENOENT) {
-    LOG_WARN("Failed to remove temporary materialized view meta file: %s", temp_view_file.c_str());
+
+  RecordScanner *scanner = nullptr;
+  rc = temp_table->get_record_scanner(scanner, nullptr, ReadWriteMode::READ_ONLY);
+  if (OB_FAIL(rc)) {
+    drop_table(view_name);
+    return rc;
+  }
+
+  Record record;
+  while (RC::SUCCESS == (rc = scanner->next(record))) {
+    vector<Value> values;
+    values.reserve(attrs.size());
+    for (int i = temp_meta.sys_field_num(); i < temp_meta.field_num(); ++i) {
+      const FieldMeta *field = temp_meta.field(i);
+      if (field == nullptr) {
+        continue;
+      }
+      Value value;
+      rc = fetch_field_value(*temp_table, *field, record, value);
+      if (OB_FAIL(rc)) {
+        break;
+      }
+      values.emplace_back(std::move(value));
+    }
+    if (OB_FAIL(rc)) {
+      break;
+    }
+
+    Record final_record;
+    rc = final_table->make_record(static_cast<int>(values.size()), values.data(), final_record);
+    if (OB_FAIL(rc)) {
+      break;
+    }
+    rc = final_table->insert_record(final_record);
+    if (OB_FAIL(rc)) {
+      break;
+    }
+  }
+
+  if (scanner != nullptr) {
+    scanner->close_scan();
+    delete scanner;
+    scanner = nullptr;
+  }
+
+  if (rc != RC::RECORD_EOF && OB_FAIL(rc)) {
+    drop_table(view_name);
+    return rc;
+  }
+  rc = final_table->sync();
+  if (OB_FAIL(rc)) {
+    drop_table(view_name);
+    return rc;
   }
 
   rc = write_materialized_view_meta(path_, view_name);
@@ -1516,6 +1569,12 @@ RC Db::finalize_materialized_view(const char *temp_name, const char *view_name)
     return rc;
   }
   opened_views_[view_name] = view;
+
+  rc = drop_table(temp_name);
+  if (OB_FAIL(rc)) {
+    drop_table(view_name);
+    return rc;
+  }
   return RC::SUCCESS;
 }
 
