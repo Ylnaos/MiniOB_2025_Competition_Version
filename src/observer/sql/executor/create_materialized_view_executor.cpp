@@ -21,21 +21,79 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/physical_operator.h"
 #include "sql/expr/tuple.h"
 #include "common/lang/string.h"
+#include "storage/common/meta_util.h"
 #include "storage/db/db.h"
 #include "storage/table/table.h"
 #include "storage/trx/trx.h"
 
+#include <strings.h>
+#include <unistd.h>
+
 namespace {
+
+bool file_exists(const string &path)
+{
+  return access(path.c_str(), F_OK) == 0;
+}
+
+bool materialized_view_temp_name_available(Db *db, const string &temp_name)
+{
+  if (db->find_table(temp_name.c_str()) != nullptr || db->find_view(temp_name.c_str()) != nullptr) {
+    return false;
+  }
+
+  const string db_path = db->path();
+  return !file_exists(table_meta_file(db_path.c_str(), temp_name.c_str())) &&
+         !file_exists(table_data_file(db_path.c_str(), temp_name.c_str())) &&
+         !file_exists(table_lob_file(db_path.c_str(), temp_name.c_str())) &&
+         !file_exists(view_meta_file(db_path.c_str(), temp_name.c_str()));
+}
 
 string make_temp_materialized_view_name(Db *db, const char *view_name)
 {
   for (int i = 0; i < 1024; ++i) {
     string temp_name = "__mv_tmp_" + string(view_name) + "_" + to_string(i);
-    if (db->find_table(temp_name.c_str()) == nullptr && db->find_view(temp_name.c_str()) == nullptr) {
+    if (materialized_view_temp_name_available(db, temp_name)) {
       return temp_name;
     }
   }
   return "";
+}
+
+bool same_name(const string &lhs, const char *rhs)
+{
+  return rhs != nullptr && 0 == strcasecmp(lhs.c_str(), rhs);
+}
+
+bool select_uses_table_name(const SelectStmt *select_stmt, const char *table_name)
+{
+  if (select_stmt == nullptr || table_name == nullptr || table_name[0] == '\0') {
+    return false;
+  }
+
+  for (Table *table : select_stmt->tables()) {
+    if (table != nullptr && same_name(table->name(), table_name)) {
+      return true;
+    }
+  }
+
+  for (const SelectStmt::FromItem &item : select_stmt->from_items()) {
+    if (item.type == SelectStmt::FromItem::Type::DERIVED && select_uses_table_name(item.derived, table_name)) {
+      return true;
+    }
+  }
+
+  if (select_uses_table_name(select_stmt->inner_view_stmt(), table_name)) {
+    return true;
+  }
+
+  for (const SelectStmt::SetOperation &set_op : select_stmt->set_operations()) {
+    if (select_uses_table_name(set_op.stmt.get(), table_name)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 } // namespace
@@ -51,13 +109,31 @@ RC CreateMaterializedViewExecutor::execute(SQLStageEvent *sql_event)
   }
 
   const char *view_name = stmt->view_name().c_str();
+  if (select_uses_table_name(stmt->select_stmt(), view_name)) {
+    LOG_WARN("materialized view definition references itself. view=%s", view_name);
+    return RC::SCHEMA_TABLE_EXIST;
+  }
+
+  RC rc = RC::SUCCESS;
+  if (db->find_table(view_name) != nullptr) {
+    rc = db->drop_table(view_name);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  } else if (db->find_view(view_name) != nullptr) {
+    rc = db->drop_view(view_name);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
   string      temp_name = make_temp_materialized_view_name(db, view_name);
   if (temp_name.empty()) {
     LOG_WARN("failed to generate temporary materialized view name. view=%s", view_name);
     return RC::EXIST;
   }
 
-  RC rc = db->create_materialized_view(temp_name.c_str(), stmt->select_stmt());
+  rc = db->create_materialized_view(temp_name.c_str(), stmt->select_stmt());
   if (OB_FAIL(rc)) {
     return rc;
   }

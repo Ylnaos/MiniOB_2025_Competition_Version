@@ -209,6 +209,11 @@ static RC fetch_field_value(const Table &table, const FieldMeta &field, const Re
       memcpy(&v, data, sizeof(int32_t));
       value.set_int(v);
     } break;
+    case AttrType::BIGINTS: {
+      int64_t v = 0;
+      memcpy(&v, data, sizeof(int64_t));
+      value.set_bigint(v);
+    } break;
     case AttrType::FLOATS: {
       float v = 0;
       memcpy(&v, data, sizeof(float));
