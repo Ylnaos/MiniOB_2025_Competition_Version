@@ -96,6 +96,8 @@ public:
   View *find_view(const char *view_name) const;
   /// @brief 创建物化视图
   RC create_materialized_view(const char *view_name, class SelectStmt *select_stmt);
+  /// @brief 将已构建好的临时物化视图替换为最终名称
+  RC finalize_materialized_view(const char *temp_name, const char *view_name);
 
   /// @brief 当前数据库的名称
   const char *name() const;

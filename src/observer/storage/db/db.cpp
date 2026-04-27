@@ -1448,6 +1448,69 @@ RC Db::create_materialized_view(const char *view_name, SelectStmt *select_stmt)
   return RC::SUCCESS;
 }
 
+RC Db::finalize_materialized_view(const char *temp_name, const char *view_name)
+{
+  if (is_blank(temp_name) || is_blank(view_name)) {
+    return RC::INVALID_ARGUMENT;
+  }
+  if (find_table(temp_name) == nullptr) {
+    return RC::SCHEMA_TABLE_NOT_EXIST;
+  }
+  if (same_name(temp_name, view_name)) {
+    return RC::SUCCESS;
+  }
+
+  if (opened_tables_.count(view_name) > 0) {
+    RC rc = drop_table(view_name);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  } else if (opened_views_.count(view_name) > 0) {
+    RC rc = drop_view(view_name);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+  }
+
+  AttrInfoSqlNode dummy_attr;
+  AlterTableStmt  rename_stmt(temp_name,
+      AlterTableStmt::AlterType::RENAME_TABLE,
+      dummy_attr,
+      "",
+      "",
+      view_name);
+  RC rc = alter_table(rename_stmt);
+  if (OB_FAIL(rc)) {
+    return rc;
+  }
+
+  auto temp_view_iter = opened_views_.find(temp_name);
+  if (temp_view_iter != opened_views_.end()) {
+    delete temp_view_iter->second;
+    opened_views_.erase(temp_view_iter);
+  }
+  string temp_view_file = view_meta_file(path_.c_str(), temp_name);
+  if (unlink(temp_view_file.c_str()) != 0 && errno != ENOENT) {
+    LOG_WARN("Failed to remove temporary materialized view meta file: %s", temp_view_file.c_str());
+  }
+
+  rc = write_materialized_view_meta(path_, view_name);
+  if (OB_FAIL(rc)) {
+    drop_table(view_name);
+    return rc;
+  }
+
+  View *view = new View();
+  rc = view->init(view_name, MATERIALIZED_VIEW_META_MARKER);
+  if (OB_FAIL(rc)) {
+    delete view;
+    drop_table(view_name);
+    return rc;
+  }
+  opened_views_[view_name] = view;
+  return RC::SUCCESS;
+}
+
 RC Db::drop_view(const char *view_name)
 {
   if (is_blank(view_name)) return RC::INVALID_ARGUMENT;
